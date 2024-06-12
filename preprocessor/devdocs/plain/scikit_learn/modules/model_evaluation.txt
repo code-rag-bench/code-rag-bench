@@ -1,0 +1,2076 @@
+# 3.3. Metrics and scoring: quantifying the quality of predictions
+
+There are 3 different APIs for evaluating the quality of a model’s
+predictions:
+
+  * Estimator score method: Estimators have a `score` method providing a default evaluation criterion for the problem they are designed to solve. This is not discussed on this page, but in each estimator’s documentation.
+  * Scoring parameter: Model-evaluation tools using cross-validation (such as `model_selection.cross_val_score` and `model_selection.GridSearchCV`) rely on an internal scoring strategy. This is discussed in the section The scoring parameter: defining model evaluation rules.
+  * Metric functions: The `sklearn.metrics` module implements functions assessing prediction error for specific purposes. These metrics are detailed in sections on Classification metrics, Multilabel ranking metrics, Regression metrics and Clustering metrics.
+
+Finally, Dummy estimators are useful to get a baseline value of those metrics
+for random predictions.
+
+See also
+
+For “pairwise” metrics, between samples and not estimators or predictions, see
+the Pairwise metrics, Affinities and Kernels section.
+
+##  3.3.1. The `scoring` parameter: defining model evaluation rules
+
+Model selection and evaluation using tools, such as
+`model_selection.GridSearchCV` and `model_selection.cross_val_score`, take a
+`scoring` parameter that controls what metric they apply to the estimators
+evaluated.
+
+###  3.3.1.1. Common cases: predefined values
+
+For the most common use cases, you can designate a scorer object with the
+`scoring` parameter; the table below shows all possible values. All scorer
+objects follow the convention that higher return values are better than lower
+return values. Thus metrics which measure the distance between the model and
+the data, like `metrics.mean_squared_error`, are available as
+neg_mean_squared_error which return the negated value of the metric.
+
+Scoring | Function | Comment  
+---|---|---  
+Classification |  |   
+‘accuracy’ | `metrics.accuracy_score` |   
+‘balanced_accuracy’ | `metrics.balanced_accuracy_score` |   
+‘top_k_accuracy’ | `metrics.top_k_accuracy_score` |   
+‘average_precision’ | `metrics.average_precision_score` |   
+‘neg_brier_score’ | `metrics.brier_score_loss` |   
+‘f1’ | `metrics.f1_score` | for binary targets  
+‘f1_micro’ | `metrics.f1_score` | micro-averaged  
+‘f1_macro’ | `metrics.f1_score` | macro-averaged  
+‘f1_weighted’ | `metrics.f1_score` | weighted average  
+‘f1_samples’ | `metrics.f1_score` | by multilabel sample  
+‘neg_log_loss’ | `metrics.log_loss` | requires `predict_proba` support  
+‘precision’ etc. | `metrics.precision_score` | suffixes apply as with ‘f1’  
+‘recall’ etc. | `metrics.recall_score` | suffixes apply as with ‘f1’  
+‘jaccard’ etc. | `metrics.jaccard_score` | suffixes apply as with ‘f1’  
+‘roc_auc’ | `metrics.roc_auc_score` |   
+‘roc_auc_ovr’ | `metrics.roc_auc_score` |   
+‘roc_auc_ovo’ | `metrics.roc_auc_score` |   
+‘roc_auc_ovr_weighted’ | `metrics.roc_auc_score` |   
+‘roc_auc_ovo_weighted’ | `metrics.roc_auc_score` |   
+Clustering |  |   
+‘adjusted_mutual_info_score’ | `metrics.adjusted_mutual_info_score` |   
+‘adjusted_rand_score’ | `metrics.adjusted_rand_score` |   
+‘completeness_score’ | `metrics.completeness_score` |   
+‘fowlkes_mallows_score’ | `metrics.fowlkes_mallows_score` |   
+‘homogeneity_score’ | `metrics.homogeneity_score` |   
+‘mutual_info_score’ | `metrics.mutual_info_score` |   
+‘normalized_mutual_info_score’ | `metrics.normalized_mutual_info_score` |   
+‘rand_score’ | `metrics.rand_score` |   
+‘v_measure_score’ | `metrics.v_measure_score` |   
+Regression |  |   
+‘explained_variance’ | `metrics.explained_variance_score` |   
+‘max_error’ | `metrics.max_error` |   
+‘neg_mean_absolute_error’ | `metrics.mean_absolute_error` |   
+‘neg_mean_squared_error’ | `metrics.mean_squared_error` |   
+‘neg_root_mean_squared_error’ | `metrics.mean_squared_error` |   
+‘neg_mean_squared_log_error’ | `metrics.mean_squared_log_error` |   
+‘neg_median_absolute_error’ | `metrics.median_absolute_error` |   
+‘r2’ | `metrics.r2_score` |   
+‘neg_mean_poisson_deviance’ | `metrics.mean_poisson_deviance` |   
+‘neg_mean_gamma_deviance’ | `metrics.mean_gamma_deviance` |   
+‘neg_mean_absolute_percentage_error’ | `metrics.mean_absolute_percentage_error` |   
+Usage examples:
+
+    
+    >>> from sklearn import svm, datasets
+    >>> from sklearn.model_selection import cross_val_score
+    >>> X, y = datasets.load_iris(return_X_y=True)
+    >>> clf = svm.SVC(random_state=0)
+    >>> cross_val_score(clf, X, y, cv=5, scoring='recall_macro')
+    array([0.96..., 0.96..., 0.96..., 0.93..., 1.        ])
+    >>> model = svm.SVC()
+    >>> cross_val_score(model, X, y, cv=5, scoring='wrong_choice')
+    Traceback (most recent call last):
+    ValueError: 'wrong_choice' is not a valid scoring value. Use sorted(sklearn.metrics.SCORERS.keys()) to get valid options.
+    
+Note
+
+The values listed by the `ValueError` exception correspond to the functions
+measuring prediction accuracy described in the following sections. The scorer
+objects for those functions are stored in the dictionary
+`sklearn.metrics.SCORERS`.
+
+###  3.3.1.2. Defining your scoring strategy from metric functions
+
+The module `sklearn.metrics` also exposes a set of simple functions measuring
+a prediction error given ground truth and prediction:
+
+  * functions ending with `_score` return a value to maximize, the higher the better.
+  * functions ending with `_error` or `_loss` return a value to minimize, the lower the better. When converting into a scorer object using `make_scorer`, set the `greater_is_better` parameter to `False` (`True` by default; see the parameter description below).
+
+Metrics available for various machine learning tasks are detailed in sections
+below.
+
+Many metrics are not given names to be used as `scoring` values, sometimes
+because they require additional parameters, such as `fbeta_score`. In such
+cases, you need to generate an appropriate scoring object. The simplest way to
+generate a callable object for scoring is by using `make_scorer`. That
+function converts metrics into callables that can be used for model
+evaluation.
+
+One typical use case is to wrap an existing metric function from the library
+with non-default values for its parameters, such as the `beta` parameter for
+the `fbeta_score` function:
+
+    
+    >>> from sklearn.metrics import fbeta_score, make_scorer
+    >>> ftwo_scorer = make_scorer(fbeta_score, beta=2)
+    >>> from sklearn.model_selection import GridSearchCV
+    >>> from sklearn.svm import LinearSVC
+    >>> grid = GridSearchCV(LinearSVC(), param_grid={'C': [1, 10]},
+    ...                     scoring=ftwo_scorer, cv=5)
+    
+The second use case is to build a completely custom scorer object from a
+simple python function using `make_scorer`, which can take several parameters:
+
+  * the python function you want to use (`my_custom_loss_func` in the example below)
+  * whether the python function returns a score (`greater_is_better=True`, the default) or a loss (`greater_is_better=False`). If a loss, the output of the python function is negated by the scorer object, conforming to the cross validation convention that scorers return higher values for better models.
+  * for classification metrics only: whether the python function you provided requires continuous decision certainties (`needs_threshold=True`). The default value is False.
+  * any additional parameters, such as `beta` or `labels` in `f1_score`.
+
+Here is an example of building custom scorers, and of using the
+`greater_is_better` parameter:
+
+    
+    >>> import numpy as np
+    >>> def my_custom_loss_func(y_true, y_pred):
+    ...     diff = np.abs(y_true - y_pred).max()
+    ...     return np.log1p(diff)
+    ...
+    >>> # score will negate the return value of my_custom_loss_func,
+    >>> # which will be np.log(2), 0.693, given the values for X
+    >>> # and y defined below.
+    >>> score = make_scorer(my_custom_loss_func, greater_is_better=False)
+    >>> X = [[1], [1]]
+    >>> y = [0, 1]
+    >>> from sklearn.dummy import DummyClassifier
+    >>> clf = DummyClassifier(strategy='most_frequent', random_state=0)
+    >>> clf = clf.fit(X, y)
+    >>> my_custom_loss_func(y, clf.predict(X))
+    0.69...
+    >>> score(clf, X, y)
+    -0.69...
+    
+###  3.3.1.3. Implementing your own scoring object
+
+You can generate even more flexible model scorers by constructing your own
+scoring object from scratch, without using the `make_scorer` factory. For a
+callable to be a scorer, it needs to meet the protocol specified by the
+following two rules:
+
+  * It can be called with parameters `(estimator, X, y)`, where `estimator` is the model that should be evaluated, `X` is validation data, and `y` is the ground truth target for `X` (in the supervised case) or `None` (in the unsupervised case).
+  * It returns a floating point number that quantifies the `estimator` prediction quality on `X`, with reference to `y`. Again, by convention higher numbers are better, so if your scorer returns loss, that value should be negated.
+
+Note
+
+Using custom scorers in functions where n_jobs > 1
+
+While defining the custom scoring function alongside the calling function
+should work out of the box with the default joblib backend (loky), importing
+it from another module will be a more robust approach and work independently
+of the joblib backend.
+
+For example, to use `n_jobs` greater than 1 in the example below,
+`custom_scoring_function` function is saved in a user-created module
+(`custom_scorer_module.py`) and imported:
+
+    
+    >>> from custom_scorer_module import custom_scoring_function 
+    >>> cross_val_score(model,
+    ...  X_train,
+    ...  y_train,
+    ...  scoring=make_scorer(custom_scoring_function, greater_is_better=False),
+    ...  cv=5,
+    ...  n_jobs=-1) 
+    
+###  3.3.1.4. Using multiple metric evaluation
+
+Scikit-learn also permits evaluation of multiple metrics in `GridSearchCV`,
+`RandomizedSearchCV` and `cross_validate`.
+
+There are three ways to specify multiple scoring metrics for the `scoring`
+parameter:
+
+  * As an iterable of string metrics::
+    
+        >>> scoring = ['accuracy', 'precision']
+    
+  * `As a dict mapping the scorer name to the scoring function::`
+    
+        >>> from sklearn.metrics import accuracy_score
+    >>> from sklearn.metrics import make_scorer
+    >>> scoring = {'accuracy': make_scorer(accuracy_score),
+    ...            'prec': 'precision'}
+    
+Note that the dict values can either be scorer functions or one of the
+predefined metric strings.
+
+  * As a callable that returns a dictionary of scores:
+        >>> from sklearn.model_selection import cross_validate
+    >>> from sklearn.metrics import confusion_matrix
+    >>> # A sample toy binary classification dataset
+    >>> X, y = datasets.make_classification(n_classes=2, random_state=0)
+    >>> svm = LinearSVC(random_state=0)
+    >>> def confusion_matrix_scorer(clf, X, y):
+    ...      y_pred = clf.predict(X)
+    ...      cm = confusion_matrix(y, y_pred)
+    ...      return {'tn': cm[0, 0], 'fp': cm[0, 1],
+    ...              'fn': cm[1, 0], 'tp': cm[1, 1]}
+    >>> cv_results = cross_validate(svm, X, y, cv=5,
+    ...                             scoring=confusion_matrix_scorer)
+    >>> # Getting the test set true positive scores
+    >>> print(cv_results['test_tp'])
+    [10  9  8  7  8]
+    >>> # Getting the test set false negative scores
+    >>> print(cv_results['test_fn'])
+    [0 1 2 3 2]
+    
+
+##  3.3.2. Classification metrics
+
+The `sklearn.metrics` module implements several loss, score, and utility
+functions to measure classification performance. Some metrics might require
+probability estimates of the positive class, confidence values, or binary
+decisions values. Most implementations allow each sample to provide a weighted
+contribution to the overall score, through the `sample_weight` parameter.
+
+Some of these are restricted to the binary classification case:
+
+`precision_recall_curve`(y_true, probas_pred, *) | Compute precision-recall pairs for different probability thresholds.  
+---|---  
+`roc_curve`(y_true, y_score, *[, pos_label, …]) | Compute Receiver operating characteristic (ROC).  
+`det_curve`(y_true, y_score[, pos_label, …]) | Compute error rates for different probability thresholds.  
+Others also work in the multiclass case:
+
+`balanced_accuracy_score`(y_true, y_pred, *[, …]) | Compute the balanced accuracy.  
+---|---  
+`cohen_kappa_score`(y1, y2, *[, labels, …]) | Cohen’s kappa: a statistic that measures inter-annotator agreement.  
+`confusion_matrix`(y_true, y_pred, *[, …]) | Compute confusion matrix to evaluate the accuracy of a classification.  
+`hinge_loss`(y_true, pred_decision, *[, …]) | Average hinge loss (non-regularized).  
+`matthews_corrcoef`(y_true, y_pred, *[, …]) | Compute the Matthews correlation coefficient (MCC).  
+`roc_auc_score`(y_true, y_score, *[, average, …]) | Compute Area Under the Receiver Operating Characteristic Curve (ROC AUC) from prediction scores.  
+`top_k_accuracy_score`(y_true, y_score, *[, …]) | Top-k Accuracy classification score.  
+Some also work in the multilabel case:
+
+`accuracy_score`(y_true, y_pred, *[, …]) | Accuracy classification score.  
+---|---  
+`classification_report`(y_true, y_pred, *[, …]) | Build a text report showing the main classification metrics.  
+`f1_score`(y_true, y_pred, *[, labels, …]) | Compute the F1 score, also known as balanced F-score or F-measure.  
+`fbeta_score`(y_true, y_pred, *, beta[, …]) | Compute the F-beta score.  
+`hamming_loss`(y_true, y_pred, *[, sample_weight]) | Compute the average Hamming loss.  
+`jaccard_score`(y_true, y_pred, *[, labels, …]) | Jaccard similarity coefficient score.  
+`log_loss`(y_true, y_pred, *[, eps, …]) | Log loss, aka logistic loss or cross-entropy loss.  
+`multilabel_confusion_matrix`(y_true, y_pred, *) | Compute a confusion matrix for each class or sample.  
+`precision_recall_fscore_support`(y_true, …) | Compute precision, recall, F-measure and support for each class.  
+`precision_score`(y_true, y_pred, *[, labels, …]) | Compute the precision.  
+`recall_score`(y_true, y_pred, *[, labels, …]) | Compute the recall.  
+`roc_auc_score`(y_true, y_score, *[, average, …]) | Compute Area Under the Receiver Operating Characteristic Curve (ROC AUC) from prediction scores.  
+`zero_one_loss`(y_true, y_pred, *[, …]) | Zero-one classification loss.  
+And some work with binary and multilabel (but not multiclass) problems:
+
+`average_precision_score`(y_true, y_score, *) | Compute average precision (AP) from prediction scores.  
+---|---  
+In the following sub-sections, we will describe each of those functions,
+preceded by some notes on common API and metric definition.
+
+###  3.3.2.1. From binary to multiclass and multilabel
+
+Some metrics are essentially defined for binary classification tasks (e.g.
+`f1_score`, `roc_auc_score`). In these cases, by default only the positive
+label is evaluated, assuming by default that the positive class is labelled
+`1` (though this may be configurable through the `pos_label` parameter).
+
+In extending a binary metric to multiclass or multilabel problems, the data is
+treated as a collection of binary problems, one for each class. There are then
+a number of ways to average binary metric calculations across the set of
+classes, each of which may be useful in some scenario. Where available, you
+should select among these using the `average` parameter.
+
+  * `"macro"` simply calculates the mean of the binary metrics, giving equal weight to each class. In problems where infrequent classes are nonetheless important, macro-averaging may be a means of highlighting their performance. On the other hand, the assumption that all classes are equally important is often untrue, such that macro-averaging will over-emphasize the typically low performance on an infrequent class.
+  * `"weighted"` accounts for class imbalance by computing the average of binary metrics in which each class’s score is weighted by its presence in the true data sample.
+  * `"micro"` gives each sample-class pair an equal contribution to the overall metric (except as a result of sample-weight). Rather than summing the metric per class, this sums the dividends and divisors that make up the per-class metrics to calculate an overall quotient. Micro-averaging may be preferred in multilabel settings, including multiclass classification where a majority class is to be ignored.
+  * `"samples"` applies only to multilabel problems. It does not calculate a per-class measure, instead calculating the metric over the true and predicted classes for each sample in the evaluation data, and returning their (`sample_weight`-weighted) average.
+  * Selecting `average=None` will return an array with the score for each class.
+
+While multiclass data is provided to the metric, like binary targets, as an
+array of class labels, multilabel data is specified as an indicator matrix, in
+which cell `[i, j]` has value 1 if sample `i` has label `j` and value 0
+otherwise.
+
+###  3.3.2.2. Accuracy score
+
+The `accuracy_score` function computes the accuracy, either the fraction
+(default) or the count (normalize=False) of correct predictions.
+
+In multilabel classification, the function returns the subset accuracy. If the
+entire set of predicted labels for a sample strictly match with the true set
+of labels, then the subset accuracy is 1.0; otherwise it is 0.0.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample and
+\\(y_i\\) is the corresponding true value, then the fraction of correct
+predictions over \\(n_\text{samples}\\) is defined as
+
+\\[\texttt{accuracy}(y, \hat{y}) = \frac{1}{n_\text{samples}}
+\sum_{i=0}^{n_\text{samples}-1} 1(\hat{y}_i = y_i)\\]
+
+where \\(1(x)\\) is the indicator function.
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import accuracy_score
+    >>> y_pred = [0, 2, 1, 3]
+    >>> y_true = [0, 1, 2, 3]
+    >>> accuracy_score(y_true, y_pred)
+    0.5
+    >>> accuracy_score(y_true, y_pred, normalize=False)
+    2
+    
+In the multilabel case with binary label indicators:
+
+    
+    >>> accuracy_score(np.array([[0, 1], [1, 1]]), np.ones((2, 2)))
+    0.5
+    
+Example:
+
+  * See Test with permutations the significance of a classification score for an example of accuracy score usage using permutations of the dataset.
+
+###  3.3.2.3. Top-k accuracy score
+
+The `top_k_accuracy_score` function is a generalization of `accuracy_score`.
+The difference is that a prediction is considered correct as long as the true
+label is associated with one of the `k` highest predicted scores.
+`accuracy_score` is the special case of `k = 1`.
+
+The function covers the binary and multiclass classification cases but not the
+multilabel case.
+
+If \\(\hat{f}_{i,j}\\) is the predicted class for the \\(i\\)-th sample
+corresponding to the \\(j\\)-th largest predicted score and \\(y_i\\) is the
+corresponding true value, then the fraction of correct predictions over
+\\(n_\text{samples}\\) is defined as
+
+\\[\texttt{top-k accuracy}(y, \hat{f}) = \frac{1}{n_\text{samples}}
+\sum_{i=0}^{n_\text{samples}-1} \sum_{j=1}^{k} 1(\hat{f}_{i,j} = y_i)\\]
+
+where \\(k\\) is the number of guesses allowed and \\(1(x)\\) is the indicator
+function.
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import top_k_accuracy_score
+    >>> y_true = np.array([0, 1, 2, 2])
+    >>> y_score = np.array([[0.5, 0.2, 0.2],
+    ...                     [0.3, 0.4, 0.2],
+    ...                     [0.2, 0.4, 0.3],
+    ...                     [0.7, 0.2, 0.1]])
+    >>> top_k_accuracy_score(y_true, y_score, k=2)
+    0.75
+    >>> # Not normalizing gives the number of "correctly" classified samples
+    >>> top_k_accuracy_score(y_true, y_score, k=2, normalize=False)
+    3
+    
+###  3.3.2.4. Balanced accuracy score
+
+The `balanced_accuracy_score` function computes the balanced accuracy, which
+avoids inflated performance estimates on imbalanced datasets. It is the macro-
+average of recall scores per class or, equivalently, raw accuracy where each
+sample is weighted according to the inverse prevalence of its true class. Thus
+for balanced datasets, the score is equal to accuracy.
+
+In the binary case, balanced accuracy is equal to the arithmetic mean of
+sensitivity (true positive rate) and specificity (true negative rate), or the
+area under the ROC curve with binary predictions rather than scores:
+
+\\[\texttt{balanced-accuracy} = \frac{1}{2}\left( \frac{TP}{TP + FN} +
+\frac{TN}{TN + FP}\right )\\]
+
+If the classifier performs equally well on either class, this term reduces to
+the conventional accuracy (i.e., the number of correct predictions divided by
+the total number of predictions).
+
+In contrast, if the conventional accuracy is above chance only because the
+classifier takes advantage of an imbalanced test set, then the balanced
+accuracy, as appropriate, will drop to \\(\frac{1}{n\\_classes}\\).
+
+The score ranges from 0 to 1, or when `adjusted=True` is used, it rescaled to
+the range \\(\frac{1}{1 - n\\_classes}\\) to 1, inclusive, with performance at
+random scoring 0.
+
+If \\(y_i\\) is the true value of the \\(i\\)-th sample, and \\(w_i\\) is the
+corresponding sample weight, then we adjust the sample weight to:
+
+\\[\hat{w}_i = \frac{w_i}{\sum_j{1(y_j = y_i) w_j}}\\]
+
+where \\(1(x)\\) is the indicator function. Given predicted \\(\hat{y}_i\\)
+for sample \\(i\\), balanced accuracy is defined as:
+
+\\[\texttt{balanced-accuracy}(y, \hat{y}, w) = \frac{1}{\sum{\hat{w}_i}}
+\sum_i 1(\hat{y}_i = y_i) \hat{w}_i\\]
+
+With `adjusted=True`, balanced accuracy reports the relative increase from
+\\(\texttt{balanced-accuracy}(y, \mathbf{0}, w) = \frac{1}{n\\_classes}\\). In
+the binary case, this is also known as *Youden’s J statistic*, or
+informedness.
+
+Note
+
+The multiclass definition here seems the most reasonable extension of the
+metric used in binary classification, though there is no certain consensus in
+the literature:
+
+  * Our definition: [Mosley2013], [Kelleher2015] and [Guyon2015], where [Guyon2015] adopt the adjusted version to ensure that random predictions have a score of \\(0\\) and perfect predictions have a score of \\(1\\)..
+  * Class balanced accuracy as described in [Mosley2013]: the minimum between the precision and the recall for each class is computed. Those values are then averaged over the total number of classes to get the balanced accuracy.
+  * Balanced Accuracy as described in [Urbanowicz2015]: the average of sensitivity and specificity is computed for each class and then averaged over total number of classes.
+
+References:
+
+`Guyon2015(1,2)`
+
+    
+I. Guyon, K. Bennett, G. Cawley, H.J. Escalante, S. Escalera, T.K. Ho, N.
+Macià, B. Ray, M. Saeed, A.R. Statnikov, E. Viegas, Design of the 2015
+ChaLearn AutoML Challenge, IJCNN 2015.
+
+`Mosley2013(1,2)`
+
+    
+L. Mosley, A balanced approach to the multi-class imbalance problem, IJCV
+2010.
+
+`Kelleher2015`
+
+    
+John. D. Kelleher, Brian Mac Namee, Aoife D’Arcy, Fundamentals of Machine
+Learning for Predictive Data Analytics: Algorithms, Worked Examples, and Case
+Studies, 2015.
+
+`Urbanowicz2015`
+
+    
+Urbanowicz R.J., Moore, J.H. ExSTraCS 2.0: description and evaluation of a
+scalable learning classifier system, Evol. Intel. (2015) 8: 89.
+
+###  3.3.2.5. Cohen’s kappa
+
+The function `cohen_kappa_score` computes Cohen’s kappa statistic. This
+measure is intended to compare labelings by different human annotators, not a
+classifier versus a ground truth.
+
+The kappa score (see docstring) is a number between -1 and 1. Scores above .8
+are generally considered good agreement; zero or lower means no agreement
+(practically random labels).
+
+Kappa scores can be computed for binary or multiclass problems, but not for
+multilabel problems (except by manually computing a per-label score) and not
+for more than two annotators.
+
+    
+    >>> from sklearn.metrics import cohen_kappa_score
+    >>> y_true = [2, 0, 2, 2, 0, 1]
+    >>> y_pred = [0, 0, 2, 2, 0, 2]
+    >>> cohen_kappa_score(y_true, y_pred)
+    0.4285714285714286
+    
+###  3.3.2.6. Confusion matrix
+
+The `confusion_matrix` function evaluates classification accuracy by computing
+the confusion matrix with each row corresponding to the true class (Wikipedia
+and other references may use different convention for axes).
+
+By definition, entry \\(i, j\\) in a confusion matrix is the number of
+observations actually in group \\(i\\), but predicted to be in group \\(j\\).
+Here is an example:
+
+    
+    >>> from sklearn.metrics import confusion_matrix
+    >>> y_true = [2, 0, 2, 2, 0, 1]
+    >>> y_pred = [0, 0, 2, 2, 0, 2]
+    >>> confusion_matrix(y_true, y_pred)
+    array([[2, 0, 0],
+           [0, 0, 1],
+           [1, 0, 2]])
+    
+`plot_confusion_matrix` can be used to visually represent a confusion matrix
+as shown in the Confusion matrix example, which creates the following figure:
+
+![../_images/sphx_glr_plot_confusion_matrix_0011.png](data:image/png;base64,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)
+
+The parameter `normalize` allows to report ratios instead of counts. The
+confusion matrix can be normalized in 3 different ways: `'pred'`, `'true'`,
+and `'all'` which will divide the counts by the sum of each columns, rows, or
+the entire matrix, respectively.
+
+    
+    >>> y_true = [0, 0, 0, 1, 1, 1, 1, 1]
+    >>> y_pred = [0, 1, 0, 1, 0, 1, 0, 1]
+    >>> confusion_matrix(y_true, y_pred, normalize='all')
+    array([[0.25 , 0.125],
+           [0.25 , 0.375]])
+    
+For binary problems, we can get counts of true negatives, false positives,
+false negatives and true positives as follows:
+
+    
+    >>> y_true = [0, 0, 0, 1, 1, 1, 1, 1]
+    >>> y_pred = [0, 1, 0, 1, 0, 1, 0, 1]
+    >>> tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    >>> tn, fp, fn, tp
+    (2, 1, 2, 3)
+    
+Example:
+
+  * See Confusion matrix for an example of using a confusion matrix to evaluate classifier output quality.
+  * See Recognizing hand-written digits for an example of using a confusion matrix to classify hand-written digits.
+  * See Classification of text documents using sparse features for an example of using a confusion matrix to classify text documents.
+
+###  3.3.2.7. Classification report
+
+The `classification_report` function builds a text report showing the main
+classification metrics. Here is a small example with custom `target_names` and
+inferred labels:
+
+    
+    >>> from sklearn.metrics import classification_report
+    >>> y_true = [0, 1, 2, 2, 0]
+    >>> y_pred = [0, 0, 2, 1, 0]
+    >>> target_names = ['class 0', 'class 1', 'class 2']
+    >>> print(classification_report(y_true, y_pred, target_names=target_names))
+                  precision    recall  f1-score   support
+    
+         class 0       0.67      1.00      0.80         2
+         class 1       0.00      0.00      0.00         1
+         class 2       1.00      0.50      0.67         2
+    
+        accuracy                           0.60         5
+       macro avg       0.56      0.50      0.49         5
+    weighted avg       0.67      0.60      0.59         5
+    
+Example:
+
+  * See Recognizing hand-written digits for an example of classification report usage for hand-written digits.
+  * See Classification of text documents using sparse features for an example of classification report usage for text documents.
+  * See Parameter estimation using grid search with cross-validation for an example of classification report usage for grid search with nested cross-validation.
+
+###  3.3.2.8. Hamming loss
+
+The `hamming_loss` computes the average Hamming loss or Hamming distance
+between two sets of samples.
+
+If \\(\hat{y}_j\\) is the predicted value for the \\(j\\)-th label of a given
+sample, \\(y_j\\) is the corresponding true value, and \\(n_\text{labels}\\)
+is the number of classes or labels, then the Hamming loss \\(L_{Hamming}\\)
+between two samples is defined as:
+
+\\[L_{Hamming}(y, \hat{y}) = \frac{1}{n_\text{labels}}
+\sum_{j=0}^{n_\text{labels} - 1} 1(\hat{y}_j \not= y_j)\\]
+
+where \\(1(x)\\) is the indicator function.
+
+    
+    >>> from sklearn.metrics import hamming_loss
+    >>> y_pred = [1, 2, 3, 4]
+    >>> y_true = [2, 2, 3, 4]
+    >>> hamming_loss(y_true, y_pred)
+    0.25
+    
+In the multilabel case with binary label indicators:
+
+    
+    >>> hamming_loss(np.array([[0, 1], [1, 1]]), np.zeros((2, 2)))
+    0.75
+    
+Note
+
+In multiclass classification, the Hamming loss corresponds to the Hamming
+distance between `y_true` and `y_pred` which is similar to the Zero one loss
+function. However, while zero-one loss penalizes prediction sets that do not
+strictly match true sets, the Hamming loss penalizes individual labels. Thus
+the Hamming loss, upper bounded by the zero-one loss, is always between zero
+and one, inclusive; and predicting a proper subset or superset of the true
+labels will give a Hamming loss between zero and one, exclusive.
+
+###  3.3.2.9. Precision, recall and F-measures
+
+Intuitively, precision is the ability of the classifier not to label as
+positive a sample that is negative, and recall is the ability of the
+classifier to find all the positive samples.
+
+The F-measure (\\(F_\beta\\) and \\(F_1\\) measures) can be interpreted as a
+weighted harmonic mean of the precision and recall. A \\(F_\beta\\) measure
+reaches its best value at 1 and its worst score at 0. With \\(\beta = 1\\),
+\\(F_\beta\\) and \\(F_1\\) are equivalent, and the recall and the precision
+are equally important.
+
+The `precision_recall_curve` computes a precision-recall curve from the ground
+truth label and a score given by the classifier by varying a decision
+threshold.
+
+The `average_precision_score` function computes the average precision (AP)
+from prediction scores. The value is between 0 and 1 and higher is better. AP
+is defined as
+
+\\[\text{AP} = \sum_n (R_n - R_{n-1}) P_n\\]
+
+where \\(P_n\\) and \\(R_n\\) are the precision and recall at the nth
+threshold. With random predictions, the AP is the fraction of positive
+samples.
+
+References [Manning2008] and [Everingham2010] present alternative variants of
+AP that interpolate the precision-recall curve. Currently,
+`average_precision_score` does not implement any interpolated variant.
+References [Davis2006] and [Flach2015] describe why a linear interpolation of
+points on the precision-recall curve provides an overly-optimistic measure of
+classifier performance. This linear interpolation is used when computing area
+under the curve with the trapezoidal rule in `auc`.
+
+Several functions allow you to analyze the precision, recall and F-measures
+score:
+
+`average_precision_score`(y_true, y_score, *) | Compute average precision (AP) from prediction scores.  
+---|---  
+`f1_score`(y_true, y_pred, *[, labels, …]) | Compute the F1 score, also known as balanced F-score or F-measure.  
+`fbeta_score`(y_true, y_pred, *, beta[, …]) | Compute the F-beta score.  
+`precision_recall_curve`(y_true, probas_pred, *) | Compute precision-recall pairs for different probability thresholds.  
+`precision_recall_fscore_support`(y_true, …) | Compute precision, recall, F-measure and support for each class.  
+`precision_score`(y_true, y_pred, *[, labels, …]) | Compute the precision.  
+`recall_score`(y_true, y_pred, *[, labels, …]) | Compute the recall.  
+Note that the `precision_recall_curve` function is restricted to the binary
+case. The `average_precision_score` function works only in binary
+classification and multilabel indicator format. The
+`plot_precision_recall_curve` function plots the precision recall as follows.
+
+![../_images/sphx_glr_plot_precision_recall_0011.png](data:image/png;base64,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)
+
+Examples:
+
+  * See Classification of text documents using sparse features for an example of `f1_score` usage to classify text documents.
+  * See Parameter estimation using grid search with cross-validation for an example of `precision_score` and `recall_score` usage to estimate parameters using grid search with nested cross-validation.
+  * See Precision-Recall for an example of `precision_recall_curve` usage to evaluate classifier output quality.
+
+References:
+
+`Manning2008`
+
+    
+C.D. Manning, P. Raghavan, H. Schütze, Introduction to Information Retrieval,
+2008.
+
+`Everingham2010`
+
+    
+M. Everingham, L. Van Gool, C.K.I. Williams, J. Winn, A. Zisserman, The Pascal
+Visual Object Classes (VOC) Challenge, IJCV 2010.
+
+`Davis2006`
+
+    
+J. Davis, M. Goadrich, The Relationship Between Precision-Recall and ROC
+Curves, ICML 2006.
+
+`Flach2015`
+
+    
+P.A. Flach, M. Kull, Precision-Recall-Gain Curves: PR Analysis Done Right,
+NIPS 2015.
+
+####  3.3.2.9.1. Binary classification
+
+In a binary classification task, the terms ‘’positive’’ and ‘’negative’’ refer
+to the classifier’s prediction, and the terms ‘’true’’ and ‘’false’’ refer to
+whether that prediction corresponds to the external judgment (sometimes known
+as the ‘’observation’’). Given these definitions, we can formulate the
+following table:
+
+| Actual class (observation)  
+---|---  
+Predicted class (expectation) | tp (true positive) Correct result | fp (false positive) Unexpected result  
+fn (false negative) Missing result | tn (true negative) Correct absence of result  
+In this context, we can define the notions of precision, recall and F-measure:
+
+\\[\text{precision} = \frac{tp}{tp + fp},\\]
+
+\\[\text{recall} = \frac{tp}{tp + fn},\\]
+
+\\[F_\beta = (1 + \beta^2) \frac{\text{precision} \times
+\text{recall}}{\beta^2 \text{precision} + \text{recall}}.\\]
+
+Here are some small examples in binary classification:
+
+    
+    >>> from sklearn import metrics
+    >>> y_pred = [0, 1, 0, 0]
+    >>> y_true = [0, 1, 0, 1]
+    >>> metrics.precision_score(y_true, y_pred)
+    1.0
+    >>> metrics.recall_score(y_true, y_pred)
+    0.5
+    >>> metrics.f1_score(y_true, y_pred)
+    0.66...
+    >>> metrics.fbeta_score(y_true, y_pred, beta=0.5)
+    0.83...
+    >>> metrics.fbeta_score(y_true, y_pred, beta=1)
+    0.66...
+    >>> metrics.fbeta_score(y_true, y_pred, beta=2)
+    0.55...
+    >>> metrics.precision_recall_fscore_support(y_true, y_pred, beta=0.5)
+    (array([0.66..., 1.        ]), array([1. , 0.5]), array([0.71..., 0.83...]), array([2, 2]))
+    
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import precision_recall_curve
+    >>> from sklearn.metrics import average_precision_score
+    >>> y_true = np.array([0, 0, 1, 1])
+    >>> y_scores = np.array([0.1, 0.4, 0.35, 0.8])
+    >>> precision, recall, threshold = precision_recall_curve(y_true, y_scores)
+    >>> precision
+    array([0.66..., 0.5       , 1.        , 1.        ])
+    >>> recall
+    array([1. , 0.5, 0.5, 0. ])
+    >>> threshold
+    array([0.35, 0.4 , 0.8 ])
+    >>> average_precision_score(y_true, y_scores)
+    0.83...
+    
+####  3.3.2.9.2. Multiclass and multilabel classification
+
+In multiclass and multilabel classification task, the notions of precision,
+recall, and F-measures can be applied to each label independently. There are a
+few ways to combine results across labels, specified by the `average` argument
+to the `average_precision_score` (multilabel only), `f1_score`, `fbeta_score`,
+`precision_recall_fscore_support`, `precision_score` and `recall_score`
+functions, as described above. Note that if all labels are included,
+“micro”-averaging in a multiclass setting will produce precision, recall and
+\\(F\\) that are all identical to accuracy. Also note that “weighted”
+averaging may produce an F-score that is not between precision and recall.
+
+To make this more explicit, consider the following notation:
+
+  * \\(y\\) the set of predicted \\((sample, label)\\) pairs
+  * \\(\hat{y}\\) the set of true \\((sample, label)\\) pairs
+  * \\(L\\) the set of labels
+  * \\(S\\) the set of samples
+  * \\(y_s\\) the subset of \\(y\\) with sample \\(s\\), i.e. \\(y_s := \left\\{(s', l) \in y | s' = s\right\\}\\)
+  * \\(y_l\\) the subset of \\(y\\) with label \\(l\\)
+  * similarly, \\(\hat{y}_s\\) and \\(\hat{y}_l\\) are subsets of \\(\hat{y}\\)
+  * \\(P(A, B) := \frac{\left| A \cap B \right|}{\left|A\right|}\\) for some sets \\(A\\) and \\(B\\)
+  * \\(R(A, B) := \frac{\left| A \cap B \right|}{\left|B\right|}\\) (Conventions vary on handling \\(B = \emptyset\\); this implementation uses \\(R(A, B):=0\\), and similar for \\(P\\).)
+  * \\(F_\beta(A, B) := \left(1 + \beta^2\right) \frac{P(A, B) \times R(A, B)}{\beta^2 P(A, B) + R(A, B)}\\)
+
+Then the metrics are defined as:
+
+`average` | Precision | Recall | F_beta  
+---|---|---|---  
+`"micro"` | \\(P(y, \hat{y})\\) | \\(R(y, \hat{y})\\) | \\(F_\beta(y, \hat{y})\\)  
+`"samples"` | \\(\frac{1}{\left|S\right|} \sum_{s \in S} P(y_s, \hat{y}_s)\\) | \\(\frac{1}{\left|S\right|} \sum_{s \in S} R(y_s, \hat{y}_s)\\) | \\(\frac{1}{\left|S\right|} \sum_{s \in S} F_\beta(y_s, \hat{y}_s)\\)  
+`"macro"` | \\(\frac{1}{\left|L\right|} \sum_{l \in L} P(y_l, \hat{y}_l)\\) | \\(\frac{1}{\left|L\right|} \sum_{l \in L} R(y_l, \hat{y}_l)\\) | \\(\frac{1}{\left|L\right|} \sum_{l \in L} F_\beta(y_l, \hat{y}_l)\\)  
+`"weighted"` | \\(\frac{1}{\sum_{l \in L} \left|\hat{y}_l\right|} \sum_{l \in L} \left|\hat{y}_l\right| P(y_l, \hat{y}_l)\\) | \\(\frac{1}{\sum_{l \in L} \left|\hat{y}_l\right|} \sum_{l \in L} \left|\hat{y}_l\right| R(y_l, \hat{y}_l)\\) | \\(\frac{1}{\sum_{l \in L} \left|\hat{y}_l\right|} \sum_{l \in L} \left|\hat{y}_l\right| F_\beta(y_l, \hat{y}_l)\\)  
+`None` | \\(\langle P(y_l, \hat{y}_l) | l \in L \rangle\\) | \\(\langle R(y_l, \hat{y}_l) | l \in L \rangle\\) | \\(\langle F_\beta(y_l, \hat{y}_l) | l \in L \rangle\\)  
+    
+    >>> from sklearn import metrics
+    >>> y_true = [0, 1, 2, 0, 1, 2]
+    >>> y_pred = [0, 2, 1, 0, 0, 1]
+    >>> metrics.precision_score(y_true, y_pred, average='macro')
+    0.22...
+    >>> metrics.recall_score(y_true, y_pred, average='micro')
+    0.33...
+    >>> metrics.f1_score(y_true, y_pred, average='weighted')
+    0.26...
+    >>> metrics.fbeta_score(y_true, y_pred, average='macro', beta=0.5)
+    0.23...
+    >>> metrics.precision_recall_fscore_support(y_true, y_pred, beta=0.5, average=None)
+    (array([0.66..., 0.        , 0.        ]), array([1., 0., 0.]), array([0.71..., 0.        , 0.        ]), array([2, 2, 2]...))
+    
+For multiclass classification with a “negative class”, it is possible to
+exclude some labels:
+
+    
+    >>> metrics.recall_score(y_true, y_pred, labels=[1, 2], average='micro')
+    ... # excluding 0, no labels were correctly recalled
+    0.0
+    
+Similarly, labels not present in the data sample may be accounted for in
+macro-averaging.
+
+    
+    >>> metrics.precision_score(y_true, y_pred, labels=[0, 1, 2, 3], average='macro')
+    0.166...
+    
+###  3.3.2.10. Jaccard similarity coefficient score
+
+The `jaccard_score` function computes the average of Jaccard similarity
+coefficients, also called the Jaccard index, between pairs of label sets.
+
+The Jaccard similarity coefficient of the \\(i\\)-th samples, with a ground
+truth label set \\(y_i\\) and predicted label set \\(\hat{y}_i\\), is defined
+as
+
+\\[J(y_i, \hat{y}_i) = \frac{|y_i \cap \hat{y}_i|}{|y_i \cup \hat{y}_i|}.\\]
+
+`jaccard_score` works like `precision_recall_fscore_support` as a naively set-
+wise measure applying natively to binary targets, and extended to apply to
+multilabel and multiclass through the use of `average` (see above).
+
+In the binary case:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import jaccard_score
+    >>> y_true = np.array([[0, 1, 1],
+    ...                    [1, 1, 0]])
+    >>> y_pred = np.array([[1, 1, 1],
+    ...                    [1, 0, 0]])
+    >>> jaccard_score(y_true[0], y_pred[0])
+    0.6666...
+    
+In the multilabel case with binary label indicators:
+
+    
+    >>> jaccard_score(y_true, y_pred, average='samples')
+    0.5833...
+    >>> jaccard_score(y_true, y_pred, average='macro')
+    0.6666...
+    >>> jaccard_score(y_true, y_pred, average=None)
+    array([0.5, 0.5, 1. ])
+    
+Multiclass problems are binarized and treated like the corresponding
+multilabel problem:
+
+    
+    >>> y_pred = [0, 2, 1, 2]
+    >>> y_true = [0, 1, 2, 2]
+    >>> jaccard_score(y_true, y_pred, average=None)
+    array([1. , 0. , 0.33...])
+    >>> jaccard_score(y_true, y_pred, average='macro')
+    0.44...
+    >>> jaccard_score(y_true, y_pred, average='micro')
+    0.33...
+    
+###  3.3.2.11. Hinge loss
+
+The `hinge_loss` function computes the average distance between the model and
+the data using hinge loss, a one-sided metric that considers only prediction
+errors. (Hinge loss is used in maximal margin classifiers such as support
+vector machines.)
+
+If the labels are encoded with +1 and -1, \\(y\\): is the true value, and
+\\(w\\) is the predicted decisions as output by `decision_function`, then the
+hinge loss is defined as:
+
+\\[L_\text{Hinge}(y, w) = \max\left\\{1 - wy, 0\right\\} = \left|1 -
+wy\right|_+\\]
+
+If there are more than two labels, `hinge_loss` uses a multiclass variant due
+to Crammer & Singer. Here is the paper describing it.
+
+If \\(y_w\\) is the predicted decision for true label and \\(y_t\\) is the
+maximum of the predicted decisions for all other labels, where predicted
+decisions are output by decision function, then multiclass hinge loss is
+defined by:
+
+\\[L_\text{Hinge}(y_w, y_t) = \max\left\\{1 + y_t - y_w, 0\right\\}\\]
+
+Here a small example demonstrating the use of the `hinge_loss` function with a
+svm classifier in a binary class problem:
+
+    
+    >>> from sklearn import svm
+    >>> from sklearn.metrics import hinge_loss
+    >>> X = [[0], [1]]
+    >>> y = [-1, 1]
+    >>> est = svm.LinearSVC(random_state=0)
+    >>> est.fit(X, y)
+    LinearSVC(random_state=0)
+    >>> pred_decision = est.decision_function([[-2], [3], [0.5]])
+    >>> pred_decision
+    array([-2.18...,  2.36...,  0.09...])
+    >>> hinge_loss([-1, 1, 1], pred_decision)
+    0.3...
+    
+Here is an example demonstrating the use of the `hinge_loss` function with a
+svm classifier in a multiclass problem:
+
+    
+    >>> X = np.array([[0], [1], [2], [3]])
+    >>> Y = np.array([0, 1, 2, 3])
+    >>> labels = np.array([0, 1, 2, 3])
+    >>> est = svm.LinearSVC()
+    >>> est.fit(X, Y)
+    LinearSVC()
+    >>> pred_decision = est.decision_function([[-1], [2], [3]])
+    >>> y_true = [0, 2, 3]
+    >>> hinge_loss(y_true, pred_decision, labels)
+    0.56...
+    
+###  3.3.2.12. Log loss
+
+Log loss, also called logistic regression loss or cross-entropy loss, is
+defined on probability estimates. It is commonly used in (multinomial)
+logistic regression and neural networks, as well as in some variants of
+expectation-maximization, and can be used to evaluate the probability outputs
+(`predict_proba`) of a classifier instead of its discrete predictions.
+
+For binary classification with a true label \\(y \in \\{0,1\\}\\) and a
+probability estimate \\(p = \operatorname{Pr}(y = 1)\\), the log loss per
+sample is the negative log-likelihood of the classifier given the true label:
+
+\\[L_{\log}(y, p) = -\log \operatorname{Pr}(y|p) = -(y \log (p) + (1 - y) \log
+(1 - p))\\]
+
+This extends to the multiclass case as follows. Let the true labels for a set
+of samples be encoded as a 1-of-K binary indicator matrix \\(Y\\), i.e.,
+\\(y_{i,k} = 1\\) if sample \\(i\\) has label \\(k\\) taken from a set of
+\\(K\\) labels. Let \\(P\\) be a matrix of probability estimates, with
+\\(p_{i,k} = \operatorname{Pr}(y_{i,k} = 1)\\). Then the log loss of the whole
+set is
+
+\\[L_{\log}(Y, P) = -\log \operatorname{Pr}(Y|P) = - \frac{1}{N}
+\sum_{i=0}^{N-1} \sum_{k=0}^{K-1} y_{i,k} \log p_{i,k}\\]
+
+To see how this generalizes the binary log loss given above, note that in the
+binary case, \\(p_{i,0} = 1 - p_{i,1}\\) and \\(y_{i,0} = 1 - y_{i,1}\\), so
+expanding the inner sum over \\(y_{i,k} \in \\{0,1\\}\\) gives the binary log
+loss.
+
+The `log_loss` function computes log loss given a list of ground-truth labels
+and a probability matrix, as returned by an estimator’s `predict_proba`
+method.
+
+    
+    >>> from sklearn.metrics import log_loss
+    >>> y_true = [0, 0, 1, 1]
+    >>> y_pred = [[.9, .1], [.8, .2], [.3, .7], [.01, .99]]
+    >>> log_loss(y_true, y_pred)
+    0.1738...
+    
+The first `[.9, .1]` in `y_pred` denotes 90% probability that the first sample
+has label 0. The log loss is non-negative.
+
+###  3.3.2.13. Matthews correlation coefficient
+
+The `matthews_corrcoef` function computes the Matthew’s correlation
+coefficient (MCC) for binary classes. Quoting Wikipedia:
+
+“The Matthews correlation coefficient is used in machine learning as a measure
+of the quality of binary (two-class) classifications. It takes into account
+true and false positives and negatives and is generally regarded as a balanced
+measure which can be used even if the classes are of very different sizes. The
+MCC is in essence a correlation coefficient value between -1 and +1. A
+coefficient of +1 represents a perfect prediction, 0 an average random
+prediction and -1 an inverse prediction. The statistic is also known as the
+phi coefficient.”
+
+In the binary (two-class) case, \\(tp\\), \\(tn\\), \\(fp\\) and \\(fn\\) are
+respectively the number of true positives, true negatives, false positives and
+false negatives, the MCC is defined as
+
+\\[MCC = \frac{tp \times tn - fp \times fn}{\sqrt{(tp + fp)(tp + fn)(tn +
+fp)(tn + fn)}}.\\]
+
+In the multiclass case, the Matthews correlation coefficient can be defined in
+terms of a `confusion_matrix` \\(C\\) for \\(K\\) classes. To simplify the
+definition consider the following intermediate variables:
+
+  * \\(t_k=\sum_{i}^{K} C_{ik}\\) the number of times class \\(k\\) truly occurred,
+  * \\(p_k=\sum_{i}^{K} C_{ki}\\) the number of times class \\(k\\) was predicted,
+  * \\(c=\sum_{k}^{K} C_{kk}\\) the total number of samples correctly predicted,
+  * \\(s=\sum_{i}^{K} \sum_{j}^{K} C_{ij}\\) the total number of samples.
+
+Then the multiclass MCC is defined as:
+
+\\[MCC = \frac{ c \times s - \sum_{k}^{K} p_k \times t_k }{\sqrt{ (s^2 -
+\sum_{k}^{K} p_k^2) \times (s^2 - \sum_{k}^{K} t_k^2) }}\\]
+
+When there are more than two labels, the value of the MCC will no longer range
+between -1 and +1. Instead the minimum value will be somewhere between -1 and
+0 depending on the number and distribution of ground true labels. The maximum
+value is always +1.
+
+Here is a small example illustrating the usage of the `matthews_corrcoef`
+function:
+
+    
+    >>> from sklearn.metrics import matthews_corrcoef
+    >>> y_true = [+1, +1, +1, -1]
+    >>> y_pred = [+1, -1, +1, +1]
+    >>> matthews_corrcoef(y_true, y_pred)
+    -0.33...
+    
+###  3.3.2.14. Multi-label confusion matrix
+
+The `multilabel_confusion_matrix` function computes class-wise (default) or
+sample-wise (samplewise=True) multilabel confusion matrix to evaluate the
+accuracy of a classification. multilabel_confusion_matrix also treats
+multiclass data as if it were multilabel, as this is a transformation commonly
+applied to evaluate multiclass problems with binary classification metrics
+(such as precision, recall, etc.).
+
+When calculating class-wise multilabel confusion matrix \\(C\\), the count of
+true negatives for class \\(i\\) is \\(C_{i,0,0}\\), false negatives is
+\\(C_{i,1,0}\\), true positives is \\(C_{i,1,1}\\) and false positives is
+\\(C_{i,0,1}\\).
+
+Here is an example demonstrating the use of the `multilabel_confusion_matrix`
+function with multilabel indicator matrix input:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import multilabel_confusion_matrix
+    >>> y_true = np.array([[1, 0, 1],
+    ...                    [0, 1, 0]])
+    >>> y_pred = np.array([[1, 0, 0],
+    ...                    [0, 1, 1]])
+    >>> multilabel_confusion_matrix(y_true, y_pred)
+    array([[[1, 0],
+            [0, 1]],
+    
+           [[1, 0],
+            [0, 1]],
+    
+           [[0, 1],
+            [1, 0]]])
+    
+Or a confusion matrix can be constructed for each sample’s labels:
+
+    
+    >>> multilabel_confusion_matrix(y_true, y_pred, samplewise=True)
+    array([[[1, 0],
+            [1, 1]],
+    
+           [[1, 1],
+            [0, 1]]])
+    
+Here is an example demonstrating the use of the `multilabel_confusion_matrix`
+function with multiclass input:
+
+    
+    >>> y_true = ["cat", "ant", "cat", "cat", "ant", "bird"]
+    >>> y_pred = ["ant", "ant", "cat", "cat", "ant", "cat"]
+    >>> multilabel_confusion_matrix(y_true, y_pred,
+    ...                             labels=["ant", "bird", "cat"])
+    array([[[3, 1],
+            [0, 2]],
+    
+           [[5, 0],
+            [1, 0]],
+    
+           [[2, 1],
+            [1, 2]]])
+    
+Here are some examples demonstrating the use of the
+`multilabel_confusion_matrix` function to calculate recall (or sensitivity),
+specificity, fall out and miss rate for each class in a problem with
+multilabel indicator matrix input.
+
+Calculating recall (also called the true positive rate or the sensitivity) for
+each class:
+
+    
+    >>> y_true = np.array([[0, 0, 1],
+    ...                    [0, 1, 0],
+    ...                    [1, 1, 0]])
+    >>> y_pred = np.array([[0, 1, 0],
+    ...                    [0, 0, 1],
+    ...                    [1, 1, 0]])
+    >>> mcm = multilabel_confusion_matrix(y_true, y_pred)
+    >>> tn = mcm[:, 0, 0]
+    >>> tp = mcm[:, 1, 1]
+    >>> fn = mcm[:, 1, 0]
+    >>> fp = mcm[:, 0, 1]
+    >>> tp / (tp + fn)
+    array([1. , 0.5, 0. ])
+    
+Calculating specificity (also called the true negative rate) for each class:
+
+    
+    >>> tn / (tn + fp)
+    array([1. , 0. , 0.5])
+    
+Calculating fall out (also called the false positive rate) for each class:
+
+    
+    >>> fp / (fp + tn)
+    array([0. , 1. , 0.5])
+    
+Calculating miss rate (also called the false negative rate) for each class:
+
+    
+    >>> fn / (fn + tp)
+    array([0. , 0.5, 1. ])
+    
+###  3.3.2.15. Receiver operating characteristic (ROC)
+
+The function `roc_curve` computes the receiver operating characteristic curve,
+or ROC curve. Quoting Wikipedia :
+
+“A receiver operating characteristic (ROC), or simply ROC curve, is a
+graphical plot which illustrates the performance of a binary classifier system
+as its discrimination threshold is varied. It is created by plotting the
+fraction of true positives out of the positives (TPR = true positive rate) vs.
+the fraction of false positives out of the negatives (FPR = false positive
+rate), at various threshold settings. TPR is also known as sensitivity, and
+FPR is one minus the specificity or true negative rate.”
+
+This function requires the true binary value and the target scores, which can
+either be probability estimates of the positive class, confidence values, or
+binary decisions. Here is a small example of how to use the `roc_curve`
+function:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import roc_curve
+    >>> y = np.array([1, 1, 2, 2])
+    >>> scores = np.array([0.1, 0.4, 0.35, 0.8])
+    >>> fpr, tpr, thresholds = roc_curve(y, scores, pos_label=2)
+    >>> fpr
+    array([0. , 0. , 0.5, 0.5, 1. ])
+    >>> tpr
+    array([0. , 0.5, 0.5, 1. , 1. ])
+    >>> thresholds
+    array([1.8 , 0.8 , 0.4 , 0.35, 0.1 ])
+    
+This figure shows an example of such an ROC curve:
+
+![../_images/sphx_glr_plot_roc_0011.png](data:image/png;base64,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)
+
+The `roc_auc_score` function computes the area under the receiver operating
+characteristic (ROC) curve, which is also denoted by AUC or AUROC. By
+computing the area under the roc curve, the curve information is summarized in
+one number. For more information see the Wikipedia article on AUC.
+
+Compared to metrics such as the subset accuracy, the Hamming loss, or the F1
+score, ROC doesn’t require optimizing a threshold for each label.
+
+####  3.3.2.15.1. Binary case
+
+In the binary case, you can either provide the probability estimates, using
+the `classifier.predict_proba()` method, or the non-thresholded decision
+values given by the `classifier.decision_function()` method. In the case of
+providing the probability estimates, the probability of the class with the
+“greater label” should be provided. The “greater label” corresponds to
+`classifier.classes_[1]` and thus `classifier.predict_proba(X)[:, 1]`.
+Therefore, the `y_score` parameter is of size (n_samples,).
+
+    
+    >>> from sklearn.datasets import load_breast_cancer
+    >>> from sklearn.linear_model import LogisticRegression
+    >>> from sklearn.metrics import roc_auc_score
+    >>> X, y = load_breast_cancer(return_X_y=True)
+    >>> clf = LogisticRegression(solver="liblinear").fit(X, y)
+    >>> clf.classes_
+    array([0, 1])
+    
+We can use the probability estimates corresponding to `clf.classes_[1]`.
+
+    
+    >>> y_score = clf.predict_proba(X)[:, 1]
+    >>> roc_auc_score(y, y_score)
+    0.99...
+    
+Otherwise, we can use the non-thresholded decision values
+
+    
+    >>> roc_auc_score(y, clf.decision_function(X))
+    0.99...
+    
+####  3.3.2.15.2. Multi-class case
+
+The `roc_auc_score` function can also be used in multi-class classification.
+Two averaging strategies are currently supported: the one-vs-one algorithm
+computes the average of the pairwise ROC AUC scores, and the one-vs-rest
+algorithm computes the average of the ROC AUC scores for each class against
+all other classes. In both cases, the predicted labels are provided in an
+array with values from 0 to `n_classes`, and the scores correspond to the
+probability estimates that a sample belongs to a particular class. The OvO and
+OvR algorithms support weighting uniformly (`average='macro'`) and by
+prevalence (`average='weighted'`).
+
+One-vs-one Algorithm: Computes the average AUC of all possible pairwise
+combinations of classes. [HT2001] defines a multiclass AUC metric weighted
+uniformly:
+
+\\[\frac{1}{c(c-1)}\sum_{j=1}^{c}\sum_{k > j}^c (\text{AUC}(j | k) + \text{AUC}(k | j))\\]
+where \\(c\\) is the number of classes and \\(\text{AUC}(j | k)\\) is the AUC with class \\(j\\) as the positive class and class \\(k\\) as the negative class. In general, \\(\text{AUC}(j | k) \neq \text{AUC}(k | j))\\) in the multiclass case. This algorithm is used by setting the keyword argument `multiclass` to `'ovo'` and `average` to `'macro'`.
+The [HT2001] multiclass AUC metric can be extended to be weighted by the
+prevalence:
+
+\\[\frac{1}{c(c-1)}\sum_{j=1}^{c}\sum_{k > j}^c p(j \cup k)( \text{AUC}(j | k) + \text{AUC}(k | j))\\]
+where \\(c\\) is the number of classes. This algorithm is used by setting the
+keyword argument `multiclass` to `'ovo'` and `average` to `'weighted'`. The
+`'weighted'` option returns a prevalence-weighted average as described in
+[FC2009].
+
+One-vs-rest Algorithm: Computes the AUC of each class against the rest
+[PD2000]. The algorithm is functionally the same as the multilabel case. To
+enable this algorithm set the keyword argument `multiclass` to `'ovr'`. Like
+OvO, OvR supports two types of averaging: `'macro'` [F2006] and `'weighted'`
+[F2001].
+
+In applications where a high false positive rate is not tolerable the
+parameter `max_fpr` of `roc_auc_score` can be used to summarize the ROC curve
+up to the given limit.
+
+![../_images/sphx_glr_plot_roc_0021.png](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAoAAAAHgCAMAAAACDyzWAAAACXBIWXMAAA9hAAAPYQGoP6dpAAAAOXRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjMuMiwgaHR0cHM6Ly9tYXRwbG90bGliLm9yZy8vihELAAACZFBMVEX///90oO7/FJNkle3/mBsb///W1tbx8fEAAAD39/f/jAAAAIAA////SKpcoO4KCgr+/v4ICAgeHh7c3Ny/v78FBQXh4eH9/f0/Pz9/f38SEhIoKCheXl4DAwOfn58BAQEaGhoMDAz7+/tQUFDIyMgWFhYvLy8lJSUODg42NjbLy8vp6enj4+Nvb2+4uLi8vLyKioqWlpb19fXPz89aWlorKytqamr29vdMTEwgICDw8PAyMjJycnLm5uZDQ0OwsLCNjY2urq5VVVXd3d2cnJz5+flhYWGQkJB5eXm0tLRyldbGxsaFhYVHR0dkZGTu7u6Tk5N8fHzCwsKpqana2tqlpaU6OjpnZ2fv7/fT09OZmZltbW2tra3V1dVJSUn/weJ2dnb/nij/Z7mioqLr6+t8pvA8PDzf39/t7e04OJyHh4dRUKinp6c+Pj6rq6v/gREFBYJrjMpZne0p///R0dEXFov/vOD/XrVCQqFahOF0iOTNzeYPDIb/8/r/2av/2e3ExMTp6fSLi8WCgoLz8/P/fML/GJUvMZn/jsuTk8n/UrD/l8/M3Pn/IJjj4/FeX6//h8fExOJparVvb7fc3O6Zmcz/rtrV1eqAgMD/5/T/LJ64uNv/otT/b72qqtUgIJAoKJT/O6X/0Ol3d7ur//8b5/SxsdigoM+8vN6EhIQA4/H/y+d0lNNxmux0keiMGZAV8vlijOSjo9GmptL/dcDnfwv9kBfbPaJrKJanp9NhCoj/ozMuA4PtEpFVf9rWEJCxDY27dr15V6xWpe87TW8z2/ktO1W2M3kA8PDWjBgInv8b1vHehMloAAAgAElEQVR42uxY21LiShfuK22vMJlEIJwCEgLoJKLggCBgBJVidBQEauOhrMIadlGMVz7AVOHLzFvu7s6BRGV0/3u7/5v1XUACKyur1/p6HRohAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB4C8l1XlQylX+qZjsovC3Eh9+pbedHGh+bl5gg3u+9+UgQf4Bzfga/0a9A4H3igcLf0t47foebFpuw6PHfun8/uLPIWx/iwTfRilWnwrQi/1M99zj4Dl59eqe2lNpq71sENNrtXgG/ycDN9gd4ZwuP6dfNzYcQsMi/w02LTVj0+G8JmMXRRd76/xDwh5qgX/7/hIDvRmTXucT0cox//MME/b+JWtF/LxYScPXL+wn45dU98Df4+x4C/mc15E0UMs6lfyskKuFN5sh2n+OjqFXmChr96zKviKHzuT9zKS5tHCI0xfTHYEwb00qJwy5JAfdO5Hh1ie7ooiLKt5tWbVmjEnU/ZdVWveTLzPfiH8U0lyL+iTJlbgIiJUQ+lislUf78RE09JwZkauRqmvH5Tncs963zbCNlyi4TyWI6fc6wtNUyXLzaZuI76/F0fgO5dYR9j9V4BmlFmVMH91SIQmD1z23tUBVDvfA8/j2iINWgr8p+50oTYsRKJZWWmIFkAbmQmEPBjBQvN1Zd4gFrmc1ZSJSOqCV88TrF3TE3+Wcqly4ce0xAK7MQJwV+Wmy3Hv9zVxZLJyvzTeCNnWkmIxfRK7CHgh6yadU0F/pqyUyrChe6oz4+NGRRqRK36AGJ49e3P4iAZ/gq2TQvB/hKGyo8cXxACjW0Ip4Vpq0MR0rhTbow0ioxJ8ediRWtF1KIzwZiFumxC7Si4bN2+5NLUsClfGvKkwT7JJW7ne5gySTghqwMtStKqzEundZqBWnP0roUV0etPN5CG21ad90E3IsUSWpKSXX9OF0lQQzHzmraV9IDfY0dtQ76vhvTfTWsUz10V8xNDEj8udCxmIJPa92y2KHi/J1W95Wbbh1hsTTRNZSb1DqjVKiJNq/wQbu9bBHQsXaIjVZP5R0CXuD1B61+QV+lDvVdPCIGH40E4ocRXYCc6gl/oKOGrs+4mUv8pq+0yTL9p76Z3pALJPPxcikqZJmbJpGgrh0HPSYkApFKq3YyNd9qPb6S8tW1i8itQ8BnsfMScDmKL9rtTTcBG7FAT8/tWjKz45YwLFG2h9RR57oioDFXrQm98LcPIuD9d4zF/uSJxo2GOolP6ObKkp0Vofbv0GieysvkryvOMqKN67SNIHsVrZRLS0og4ZTguaSAqU+6uE2yfs1VA05wklztxi5JSAsJWhMsh6I8t0Y+b317dtqzCJhoXhbjxKBJjHygB9xCHXxh/rkWuSKfT4phui+h5MntnXjvNjHAWGnmeLngp+J9Kl5hhOy5dYSd+rSaWKNWW/XPJKBtrV+hVWNNtAl4GMnbwWdrK5yad4nEWZkuIG3Hzp+YSasucbOGTvE1oopzxD+RS9tNxZS3BFMTRrjxsgQPcZdJaY4N3th5CWiX4DkBn9LfV70leDXRwY8koNaM84B3PrYIZyeGhEv3KEctJ8Qn3g2wmUQmcUJNEqiVyFWCoEVCb+742Aa9z9A4XKY5Zd/pAV2SAh6ybDRFe1Iod+MQMMP6pCTx95hyHa3giWWIwnZxl7rSTUAKkb65n6K6n2J3hMTWhNLAWfqboVjuq3B7KCEbHhMDkqNriaRXxv5tIk5Xm4icuXWEMd0+aGMgx8hLJ88IaFu7xMiNAjYBh9jO1gGFbSTaLnT7PqKCowtYZ//p1TRdyYZL3GRQPt2k76cbgC87bprFdrXlZwTMc/6XBDR8lD8b+M62wRu73xDQT1+LNGe+YzKHeYWufYpWVbm+Q9/3ScxEDz+4EWxWiP0zTNs/VFXtZpovWiVwE1sY2WXbRIm5gaUSi4AuSQE/sOmBrPeRMFwONk0PqFU2heFftKtiL7ArOyEDQYc6xE1AI9seSnGSGlRL9xE6i1ib9pf1U8xy3w1hPdsnLhNdk0HHXAFdadBcrbLu1hH2sUSVUs6FbJLa5SGgbW3HDJlhE/AXXvMMITTk19g4aGePsNPEJiPV7s/sBdE3FzcZVLXeT/zC3zoETNTLsUg16zGhWnplCKHxcpyHXsTuNwSk7SVPikDHRcAnudToZA+o0PhIwdIV2QSdog+Xjj+WgXukXrozoHcR25GjLMO9KX0S+8luH1kOyohJh4AuSRcBSVbf+UwTijsDDl8QcEEGpJedWJE+aeoezzPgED+Yv9kFhKQ8Q054THQR8NUM6NJhEvCR2Xy5kIC/yYAOAddLdIvk5wSscCus/Ru/zICS+fol2+P2OeC3B1XafjsDxs0MeLKAgAOWlXdfIeA+8483A9YwPc7VrVbkchYZsGYimXcapX8b+1ZXd0b8esV6kYuXi6immp7jWdZ2MDxy4WaZJ03OslkD5pIeAhKkDbsHzDo9oJeAedq3oOKLHpAFlUTtl+/QyWRWDziObHkPEXK4w514TXQR0C+nVp/1gCO3DpuA1NkVatc5XnpJwOc94DgSfklAWob34y4CxoljvvCETXPxdcUcjJLOOUnRexB9jG/cJjzrAc3Hh/iAFWp9AQEnMTKINVWbgI+01/T2gD9W3QSku8NwopbK2Bnq7qOOYW5zgl6X4yRVDGKf7Sn42SJupExUqNWdw/iB764l9HZz6ClUeEKHadrl8CGN5Ka55JyArduhrg1oSzifgmO76AUByRTcY1PwKwRc46roqSzXda1hJOkUPKhpE9Jif40MDoRuJWi7dI+T8aXHRM/hXA/f1roZZwo+jtP9MtdhErCp8j1tV8VslB+0s8vPCGhPwaX5FGxc6+dBNwGjeFePquqcgDo2tGlZpenMEQ/iXDKLErfSTNOj4QMPAYsnD51RiW+6TUgExDutFZw6W44+vpKK1/WgeIsWEPBQDLSuAyWbgNtcX8jue6ZgXJ0KQ2sKvpdSB628SqL2+P1c0y9iJyhnRIWW4Qw5/za6eTUu8uEldg6oilJ+85VFkH5AFpX+L+epaMbHqeEsytPDCzInkQ5BL3P0HNCRnBNwKa9y6UwUOeeAkhja8r8kID0HFFNR9BoB0R1pVZ4uQmK6UCE72n9cENN9OpnUAmmON3RnT+dx32ui93S4luF81Z8setliPG6eAzo6TAKipWpcMtaYXSdkHBGeE5CeA6rR9bKjdZTh4uWom4BoUuJCjeCcgCga4kqTBquntvg3Ix2js3s9xcVDg0sPAet9SeTPxh4T0EqQRKhqV3Dr8T8HcoR3nwM+i10rxZXOnR4QTUPis3PA1l/snf1TE9cax4+LykLYslgxVkQxCIrQ+oIaXsR3rFRrlakVr3pTIki5sZqRRpgBKzBCQGrCSwL4xkvpIB0644xO1faHe+9Me/+vu+csu0kgIfuWZDd5vj9k8iRhs+R85pzznPOc59mcnX1o39IveO6b7KIL5VyrlZ7Jy95R/LkFnSvckLNl8zHYtNZWn9BN6i7wVdEF+BVBCQGw5tr1jTeLc67CrwhKCIBfVRTl7v5yJ/yIIBAIBAKBQCAQCJRUMpdVpYNSR1VlZn0BKMa2gFJEZfoCsIoug24hhVRGV+kLwHQ+PhOUItJdewOAACDcEAgABAGAcEMgABAEAAKAIAAQBAACgCAAEAQAAoAgQ7d3fUUBOdhMtLE6p3I/AAgAxlF1l66LAJ7K/nT96dw7AKDR9WpsdHR0TDQnOWvUj2z2RWz1cMaHD+8ZhiFvjghmX8LaWwTwW5xO4koJAGgQWcR8KQuODve0yyeYDhMnp/i5aWw6bP3UfWz5sGV6TVEUeXOQmP+hqMeJB/AWzg1zIp//tzJIeI5eAPylbZ2u9L+/Pkqs7mFFMu+lfaFEf/+dYAB3nUc4qw+frohPDasXANuy9KW/0pJO/z6UqPYOD6C+esB1WVm66gE/SkuLcyd3L7oZsL747Te53Z93B51wAEOGYH3NAddlrdPV9GtN2pqYXLd2RHzaSyZnofO6afHdLmx6BauTfPaV+Ke/Z/7u7OKeMFhDM05ODoZ69oziHA8ftpyvBSfEjy3Te+b9brrgGDghKQ2gecHb5ewRXVkCVadgerHVtcyxECyfa6a1w7EgeidrM9eSJxRWH/8i036fopjI336ssCkR7f2ovJw+Xr4Jnd2Kl2GO6HUZJhUAXHBhqAYFc4oAKEI1Skx2yWK9HY7RuTeRLhUOwAFLJAAtx5sS194bl+p7bMXp5zZW5+p0IToVAOTXR1pFHok5L5h/eMcmB1+FHJtkkRwAEeIAtIf5cMst+iSrz2U3ADC2APp6xxxulzjKtgbP+lgPx9v8Qo/8q9pnZ+9m3g0LYL9t5ccv76ZpUv8CAEwNAGt9omPxnBA3JZj8mvCg2ntjKEoAkHdChDcW7Sv5qzqIU+XXIwAwNQD0ul1BzusEIa5XMHucJtdYJ6shgFFVv4Hj72AVAgBTBEDivHYIlpUAGNi07X1uQar5QwOPpQJYe2k7Te++rMP2BgBjBGBH6GqeK2QxRZWeEpGnkgG8znV/t1oQAJhCQzAJExB9WbfJ1eroXf6hHxvXRte7u0TvBJs3l55mZr6TcjdsYf6vFgQAJjuAloArO0kGXdH2hC0j3JipXo3Rbop8c9NOnbY3AKglgP6uSQG0t27HWO+UdfXPr83MjNoB3r0buQfk1PhjlHvaW3BMz+0NACL0U/OayEqTAWADN9Obfisj856wjLyaHnL6eZaiXggvDOElP7vEb8j4dju9pQYA1DWAzatHLzVLvtCcKSRwQBsA8cjeTi0DMNw6czitr8bFOQFAXpJiTbPiDyDu5SKr+Sep1/E5CYDPNQPQZmeGyXILXmW+L7w6zjB2afyx+3NoOve4GYZgXhJjTduM4uguF7+/0YG0AtDWT1HtKu6ntILr/vLK9T3ixfOGpMWatv1iVADRCN7jndAMQDulCsDuIo6/a1YEAOrVwdUcQMROTY8izQBkMIADim9m0266qE73c34AUNuIq9oGbQFcLbA0mm7/sxQBgCkGoDzFCkDzP0hzsggABACVA9j+jJOSSWDNUVxQPOHtDQDqE8CgDeBMaeuAMnViC+d9lAOAAGB4NcrayZWtRxc4/Ao+gx4wpQD0eeSMu4EN4PA7udzU78mTx8ruZM8ujr/CJgQAphKAbIdzrkE6gNHGXUqx92E5n0/T2adZBACmFIDzJpPJ5bckHsDbXPdX8rVO2hsAjBeAlunQIx9qAXwpJ94ltCv+cvulWgQA6hfAcKFXaWoBXCDRp64GLQGUGu8SEAGvpl4/7Q0AhlGzyoirsDJbcQIXv2ZzwAHJ8S5B6q7cq7P2BgDDDrdpaiKuIslrMrnNmgGoQPjYW0ETAGgAADULPJiYdFuDvJAFlEAAPy7Bx97KAMBVg06zkghAz+h0cKoDi2sSJQ5AdtsOmg499payALbpK9Y0VgCyPabQg74BByTqUUvN99++O8l1f7t26m7ES8gNrRp0Gv9Y09gNwW5y7jeM49uo5iSlzc4wjMwQwHMFHH8XHiEAUC/zvJgB2PCHVxzm+HO//nAjbLSjlpFPUuIgfOqJbXHxoYy7+jqb3nJHj3N+AFBTAD29HU6TSUysi3PlOh0L2k7x7NSSZG2DnD5ahgDApAeQTyM5J5hmt3eqQWsfwzbO6Yn0bRD25gH8aEYAYPIDaCHZwmdi7eSSM8ASt0FKK+jDCW5vADDGAHoCszySvd7kiTGA+AywxG2QOnzs7SoAmMwAvu0yhSaznx6JMYCSZb3G4Rfx2BsAmAwA1uKE9WKC+h5nR+8Ei3QCYDkudxT52BsAqC+JQTByIl987tDFZqukv4oLgObjuTSdc5FFAKAxAGxWEvkyTyZ9XRZ5XyULQJv9pfD0Aed7DA+/kPZ3l7nur/iGDtobAJQ68qYpiHwZIwSOxA5AW39gxe+BnAVAy2b6SAYCAA0EoNSR1+ybmhT8Dksr1wG+QbED0E4pAJD0yJv26qO9AUBtARxxO4MTrHm6ZiZQDAFkOOIsA8EARl+B3pPXraP2BgA1AVA8RtG57HBHpxXFGMDZdiYIwKgr0PjYW2U6AJhEAFr9HS7R07XKzXEqH8AXpKjRAwFAcdR9IGUFuuUWPva2CQBMGgAbel0hG2wzIWUEYwHgMBlqVwIoyfnF1d4kHXsDAA0CoIdPqyuOtGS/zcXGCcCXuDN8KfXKIdXeAMAkGYJHQ6tF+x2T8z4zihOAsrSnMrjaGwCYJADytXtfBb/EIl0CeDUnuNobAGhoANlASSNu0HWPjSi9sM0uBi8P4/G0XQTwMRMUXc8+FI1gJ0SeLgZXewMADQyg1T8TyGXf2bGgvMuz9VMigDiQj3omAojjSilxfrfIGePj4zZlX8PewdserAUBgEkAoGeuK3jWp0p2SgaAijM+f3eSPqLT9gYA5QM4qH6tTxTDAShsZUgBUFHGob342NsNANAoAEbLP9RAYuudPcqu/pRM4cYDAP4sbGVIALBfwRCMq73RW65DD2gYAKPmHxqVk0xtBYCEpKEAgLPCuLqaE4KwE6Ig4xBC64txtbcyBAAaBsAI+YcCnsYEh5/7jbL9BDYUwIGhFRM7TQNSI1d7AwB1DGCYNT923h1wOxzeEcWObyiA6MWKiZ2mAN6MWO0NADQSgBx+wbH1KjoUdiWAyyZ2mgJYW0IfPoAAQKMDOBa636ZEOGtL3wonBN1fMbHTDEDSSX9cp+/2BgAlATi/LJeVAv5w1hZJlRO0ArC8eo8B2hsAlARgbZfaLpBkbYkjgPjYW96B5AJwf2VOtRDLc7k4p+hMU3ID2OMPJI304jPlfhVbWSRyj4obgDVH8bG3lqQC8Hbu6fWfZvPBtPXbPz9Vf6gwiQFseONwBqXve64Ov3gDSKq9qTr2pkMAS65wD3lnyfN9ldzDxYLkBfBNV2iUlSXish/xKUSndpGYi4I5REwyBM/Oxg1Avtrb3lj+RgkAsDb/BPd47XtidOfWsaXfX0leAOcIf6aO6J8mPVuf6NQS875g9knu9zQEsFxStTfDAVhDd3OP53fx1p0d+XTFUqeQkZ6eXpZsQ/DIjMQNX/0BuCdfSrU3AwJ4jnv8NY8YNwr2/fDZoTP8O5/QWMnmhFhxJ+juNCCA6F9Sqr0Zewg+eBJ7InRN8vaAnBsyOulbhbrZWbsOAazDo5KlFiUhgKjkcMAJKcQAnlsC0IBzwHARV8tDr6zRuj1GjhMSFwCrDtKX4gND4pZhWtDZrQhty99/qru6xLBOSPiIK+kJsFREJ8cQwO5Kmt6+PmkBRPs35OKF6K2b8RLMoZyCg2WGBTBsxJWM0m+PFUcnxw5AXO1Nu2NvegQwLjcULwAjnTP3OwYjxro8JRIA7LfpCkC+2lsLAgCNDCDecWv1RR94+5RFJ8cOQPnV3gBAPQJIyhc5e83xn/mpBHCb7GpvAKB+ADSLDi+fXS1SJ/hEvwBmFNNnHiEA0IAAmue9rkD5IhcBcCY8gEMxdD1UAMjih6t3jNneKQ/gRGtIdjVcuXxuJMIQPBRD10M5gOu/uWrg9k51ACf47GrvGYYh0aIjfg9C7Xj1eFj4LDkQyeDNjfEYuh5KAcTH3oozAEC1NyQWSs+KL4AsXz/rNa5yKr77DA+17SKAxPd4EbefUhaApRX42FsLAKj2htriWxU9MAR7SODfnwYFkFR7O3wAAYBqbyhQKD0uVdGDnJBBk8n14b+GBFBVtTcAMAFTvxAAbWRu99DcOmd9SRkRwB9UVXsDAOMP4P/Zu/enJpI8AOAtWDA6lSKDvAzkQSLyEOV4SHijQIKUCiuCIpw8Am7kwm7xg0hwOR9cXF+3rOgqnrq4W1aplAUUt1e15ZX3qPvLbnomhGASkkB65ttJf39IGUVrIB+7p6f7+/1unoHBB16eS7A+4ixz3OJUs5myFmoRAgzgbeNuur0xgMoD9D8Ds+4DCC0in4LPHb5M6+edmAC9Z2BW1mdm/n3vA9UAM/Cur20fYgDpArjHu+zAWb4UA/R0cn+i+/NOZIBDDjnl8n/yIoRCgCWFHKfvYQDpBDj0fdKatN+7gGBGOIC42xv5tDcGkBRAXKRllp99YQP187s5sncj9m8PUO721kP5552AABddSxJAXCPjv2t3YP340Mh+vxjZ5gtj1u2NAVQU4KJLnHR9AKPNlFRi3t3vGwJHbob+OkPMur0xgEoClCptTK5DBhjZw7+K3Fh1e2MAlQT4Xlr3zmCAf5aCVoCopDcuPu9EA2ie8gGkc+krRk9TT/x83gl3D7jmm4IpBag1pHHFNgaQVoCaz5P//NcNegFebcFpb04GkC6AWl9yx8+//56URC9AqdtbpwcxgFQBtLqkdDffKaxkSgHK3d6+jafPOyEAzt/j+U9oyymsKzQCJNPtjQEkDXABr3wnv/OvRBS+6hBEgGVEur0xgIQByk1V+an50JWI1I5IN4AbSHR7gw7QXNafiho99AJEz2SAC3ABRrABfFqL7wErUMIBdOam6VvR0Ys03wM+9RbZEAFC3PyIYAPYOsB9BfP/DnGAlipbfivKKKQZoNnNu3CnmT3JN5QoKhTjpa8Ylcc5TmhNTIC6FCQCdAo0A0R9cp01SgHibm/qpb2pDvAyBthdQDVAb9AJUO72dhmhxATY0ikC9DTZ6QNoe2ENALj6mDqAxLu9AQfYWJirL9blHqEO4J1x3pX9JcA91AE0EO/2Bhwgshqqq9usiDaAi2/Epe+LYAAdVAFMrSXd7Q04wG6p3LW5mzKAi3KF06VAgOQLS8Z2Cr6tctqb2gCN0uQ7ZqQM4JJc43lKHrpvJSX9+vz5kAjwtQOgvxAAnTVZCHwoBLAnn7Yp+BOuePpmUX7zUS5rD3YnJCjA3iIux5zoAC0W46DFYqmpPUvmgnz1UH0Rs8KoS5P8+EbOJYUA66pw2psz0QHa7cYWu91+8cwYmQvyq4ca88KoS27f0kkG6KAIIO72BiPtTe0p+KCH5AVt1kP1xS4Lo85vLtg3b94lgN8PUQNQ0W5v0B/DILIAY7rv0ffMzb/ffHv/ZzHuixJxaUlx9UELwB5Fu71BB/htS3G9GBQAtLrwwsO9+RuaLxoa0QKwWdFub8ABtudXZ15sKjpFwwh4T3r0cod6gOiikt3egAPM7cWHEc5V0wBwTgL4gGqAlfjOtcKDGEBvCE5UUIl6dHABmjeWHdp5ucEgxQD3DRvbEFVBHGBtCarvR8fAAvzp7dSc742b5+/NzfvePvxBjIcUAcRpb2lOBtA/Og+icqGpyA4T4G9ufNre97zl04vF7b4aOEDc7Q1e2pvaALPF1dj5gXYbTIBuadKNtMYubIByt7dKhBjAIFEKE6B85uBH4AD9si6DB87FVK3bGw0AGwcEmABt0qmr2b6APxhyaDTTUABuyboMHiMG1bq9gQbYVaUztWefE+p7IQH8tHnQ9CnPT7peBdw2DX0vrn9fQgHon3UZPEZujpnU6vYGGmC1qeG4cTAng9QF7QjgK78hb/GXuWBlxnEFfEgAI6h6WlauRQzgl5FehlqNR8ld0I4AjvP8M9+b4J9a8PrPQAE2VjUiaoMwQL34oxEuxfyCdtUWfV562Lz9VilNAE/quLNaBjB44PPQ+a0xv6BdtUWXOry9W9r2ax5PT1MC0NOJ096yGMAQAActFv1ZixgxvaBdtUWXn/3N7+C7AQgQd3uDnfamLkC7L2IMcOdPX/omt2740gwQRLc30ACDR3mtUL+Rp7nvVHpmbZuCANH8A3EMnIsHgDC6vdEHcCKzLeVomve2paa4zHnotpIAxbjzbD4eAJ4H0e2NPoDFuFhgrnxE9VjRVYWn4F0EuCk4D0K3N+oA2vQnxdeBb6Q31U3DpsIG74m8fampqaUJBzDsTm/QsrvSxJvahRjAqKORwzPuGblk5Vmh5lBHuneJcpDDQQrgvOsnkAAj2OkNKLtrO2ecQHERqgA8Lb4u50pvmoQ6hP5otJIfAZdm+XEzRIDhd3oDyu4eKOa4olIGMKIYvWByovbmEFNwHh4IU7ge0veAfT/ygdWuQsb1lz84bt26pRTAvdH9Ba0hn6K0N7UBluuWhVZkyPFfhFRvLkL6BQ9CzUYrYYB9csLbZIRHT18nJQUrhQoDoNzt7RBCDGAkkXsS78Vd0gU8hnGiU3kIeUwtl7sLO0mvgh/Ixa78k35pBZgBrdsbcICCEwPs2XIgtTw9Ez+IzsPDYkqTYGqwkgb47smTmfWZmfU9kcXKDRyrX/52MgCABnDd3qCPgM0YYHtsKyPsYBHi1+dtF3FFdYCNOmjd3oADNJgm0iaW0ybUBigOXythxj086K2urnhHwNUgX06kRVyUU3AHZWlvqq+C+9ONRlMbUh9guOnzb0nB7/xIR8QAj9jHUNyFEs8Bx47E+oJIAnRABdhRwFm0DGC0cfAAgQsiCFD5GuSRAbQO4LS3LAYw2jhuLP5K7RHQ+l4bCUCNXAUwxhFRUm/YwN3e6Ex7U30KvnSqNnOwt0I9gNa5Kf7VNgDvPhTjLrHvfyT6nd6AAN3tDf49ILpdXZCvFkDbHM49H9eGBqghu/SIJKk33KMX0N3eKABY2WAS1AJolTvOvFIR4N7d/hMG0N3eoANsXc7V57TVqQXQuws3TjNAbQvkbm/AARYbD/+hNNYXFA1AeQikFqC07u0aQwzgDuPUJQIXFNUiRBwCxz9scw/o+FUMB0yA5jP6ZhTXQWebhqgA2lwftCrW9tsNQJz2pmtkAHccDR7U4A31AMpBI8DeojhIe1MVYE4XyvGG0gAXP+DXv17Z5ijVI/zkWQMWoNztrRshBpDCKdj8y+Tf0dZDWAFHqe4GrUAEBWB3OiXd3oZgyHYAACAASURBVIADtEv/vkfp0hzvxJXvHN6ASw59lAo0wFFqur0BB+htWK1XGKCUg/TEvO2dH2iAWUW0dHsDDTC1znggNTW1a9SkLEDzrFT72UYvQHQ+TtLe1AVo9IZ+WVmAr6Ttj6cba98hh+bRxh99lJYeHwEvQq4O1KGECcIAMzKMJzMyMk43IoUBjsv9P2SAuOS477jLdWncuw73MUyGictjAGMWTq0qq2BchG0q2wsQlxynBaBtGKe9lTKAMYlr2eiaN5QGiD/LjcfPeLf3H/epAJhSz3HxlfamKkBxCbxxF6gCQOQP0HfcADJAKru9QQYozr9ObygO8C5eYawGAtxchIADSGe3N+D3gEQuKBKAD7G6G4EAlY4oAPZT2e0NOEBDB0LDRRecagJUNaIAqB2ksdsbcICFZei00F9jYQDDTL/SyxHEAMY4hCw0nLe1OhZxgNIZmFVcXyhZSYDBEzAjyrrMPiGUoYQM4gALKtHhUXQgTSGAz8UFxtoM4XJCIWJkp1mXUtqbaYwBJBFV9Z1pY6j5uEIAH4nz7mcR4PoKwXJCISfb/TvKusTd3uI37U1tgF3VNccQOrisHMD/8DPJM7wL9HLDP+Rubwk6A8fdYxgR4JoE8D0tAKnv9gYdYNeJzs4TdaQBDjk0170AP2OAk32UABylvtsbcIAlOpPFYtKVkAWIz7u89i5C1mZFgG5ECcCefNq7vQEH+LXdjJA572uyAPF5l9e+ZxoryTO/0QIQGeI87U1tgEIKfr1MuDYM3mx7tHHeBR9BsFEAsG7YgxI+yD8HPIZfjxWQB7i526tSDnCUALvTuYsMIHGAA6aJrNIJ01EGcGvYzuG0t0YGkDRA20Cm0Sgc3ccAbl17FHNcYqS9qQ0QoYpr1ypifEEBAG9JQQ1ArSEtfrq9gQZYUW0qqBqL+QWFOYwAHWB8dXsDDbAhrXNA16IcwIV5GgC2x1W3N9AAaycQOqQ3KwXQ/GbybR98gOaceOr2BhpgJs7vErKUAojL8c7OWSED7MIvpaVMnjIApcow+a0KAfQWJP8EF6C2PL+boVMS4KDFYtGfFV8IAnw8LcZj8RcvJH/3ssECxGlvtXVMnXIA7b4gCND3EPCp3JEB7D1gRwFOe7MydcoBJHRBIQCiRRfPu7VAAcrd3jqYuTgGiNCCewHoKjhuu70xgAF55xAB9uJub+VaJi4OAU6/FGMaOMBLQrx2e2MAA2K3AMN2WN1J39XyBE17YwCjjwg6rEaTAez5C6OnIsDRCyYnam+mCWD4DqvR9F0tKeQaGDTVAJbrloVWZMihC+DemH3/5jN6jstni1/VAOaexFtxxGvDfOd+cAciQOc3HJfYaW9qAxScGGAPqaSk+xqNlIv0lud59wMrNICJ0O0N+gjYjAG21xMC+H/2zvWpjesK4Dd0LK2KqbSyBHpYT5AQAoRkIYEsxEsIiTFPe8GRSYAYjGweHk+QEz9nsKGp3dbU1B0304mbdOoktTNO3PpLp9Ok0/5lvfdqV1ohMHqs0Mq754NGu3v37mX145z7Ouc8q6n57NGjXyu+rK391U83D84LVxEAhZHtjecAGs1r8rUX8rXyAYhmoW9DBfgTZzGxuALQLYhsb3wfBV9QmkzmoeyBSYAMZvTCpsFeKoAXkQW++ba8cBUB0NoihGxvfAcQgKU9Y8A19ZCkXc7sUj0dGCsVwM/mv72CAORq/YMLAPGO+7Do9sYHAPdKC/LH1sfoo8EpbQkAwkFI3cV5+GXn/t95BKDCmH80HBHAskqAlsyZiGEAfs6u033EoDUNoEwqlbYVPQ9Y4tiXtf7281IBRG5vetHriBcARqG4O3UrmTMhYhN+jjbjA8pGgTSAWgJJhQD8qLCoum8TlRn+GcMigDwywZPDbADPwM8XetxND3oAKEkD3lZwBCB7/e3wqLpvkVS2N9HtjVcAhi37m+AJwmAwmAhDRxF9wPmLdXUPvq19wxmA3Ax9BZftrSoAdCvZgxB/ehDSEIfi18e3CwcQxaT89A/Xaq+/zysA1wSX7Y3nANqDwaDdZriQMw2TADE6LW5xo+CLNTV/ml/Faan5BKBTLbRsbzwHUAtlyyPJOudRqtFE9ElNKQCijfj/QV5w1+huIE9MsFto2d74DaDVGOKuQc83jqXkOA3gv7Ef5u94ogG73GjXgUKEilcakExw16CN42nZAPNPn/7lX4i/O/f4AaDXR0yJQPEOQM0Adw1Cmu/Ysddff/1643nqDHIE/pwXfcCGfjVByMWNp7wD8Fxg8kwSCjcAouk/OPp4nDm3u9rFBwBRtjfR7Y1/AA5LTbRwByDs/D22Psi9WkkAhZztjdcAmloTtHAL4Kd1fAJQ2NneeA4glw1KA1jzA68AHBV0tjchAvhD7T/5BKDMLuRsb/wG0KGjhUsAf7xWW/sPngCI+30S0e2NrwBGjbRwB+Ddu/dZ6x8VBnDaFhchEpgJBtYv0fzz9XuVBxC5vdnFsa/QAPwzXoC7UXkTvBlAbm9SkSKBAfi3KwjAbyoNYCrbm+j2xmsAuW1QeiP07uq1rxoqDKCY7U3AAAKws1vhUfBVi5jtTYgAPquD8mzfq0cL4KZJzPYmRABz4kFXzARrxWxvAgEwvQ0V7cbKBfC3lwoNSbR/BN78nYFlHmR5FSI8AgGQtQ31+EYugJcKDkn0UUEBdveIVRYfU0ZlopQo1uoBMLUNFcvG81wA30vHJMo3JNEBEXjzcQZWhCRNLihxiSglSkhRPQCywiDkDkIK7/qVsO0gFI87nc7khKjBSpSuJUmoKgEETx7eK3XsUTyAVieSenHyhQNZklirEcAdHIp3pzIAdsVGnE7vhAgPF9IlkVUjgA/xOvDDygC4pXQ5KTHgMzciq04Ab2AAK6QBT2lcbeLsi6ABvIf5u1KBPiBWfMlk8XuvVET12O6h3rJUG/yg6gG8jTfC3D96AAeUVOalFSWRUBmVJ0EQcjve9Gvt95GOsU38RLed1M0YC+8zyMxFRvZXaM2khtmhq8HRHucA8PgslhaUJ7mvuaHqTTDYuX8lywIfCYDI7a0lUhqA+6rUfH/Yw8bdhDF0YpRwwZKDjqGwdxxFwItodJPe8HTQW3AbppuLbOyK5YP4oJn+AS+HQqG4Af5X9I1QVEwNubSy03VXK4DIDh/1NIyzGbm9SdMvDc1F1v2GufodPvxun/s0s+0O24XtYUtghDbBm+tQPU0Ajb9Htw5ULWrbAoOWs1fnWHcC0DmIfm+dESjcAdJ+Fd3nCqpVJ7pt8iBy/AzNkYFpZRSA0+M2i4aBi0DxJ3Q9AKwROCtfo24buE34aoResqYfjW4Fdi28xdMtnzJ70KOJcHZt3T2sBuGCWtAXJANa2Nh+n9zsP2AVXGFbge/IwYqEFrUwRXUoUcLwyaoH8C6WIwUQZ3tLub3RLw2nhvglc/0TfPjJfgBatqgt09wFyq87hQH0kn5vfHIJXliQSNrkfsmATkuX7ViUSMZtUjBCwp9shJSCmN4VNpIqeJ/ddWLJeyFJTZH1APTam5waMgoUM91Oqkd3OQ2g9RyxANlJKa9NeMI+xm4L8+gMgLahcKJnGR71zOypzbHGalCqoMthDLsC8LaoKtyh99OVjslpSR2GCYRwN4sy3zj9DtfUKGqEJ1D1AO63FFdeANnZ3goFEP68VvnJVFRiBGDnDH0BBaSL6SHTHgurW2S1jEDlt4jV4DaJAhmPd8L70plGfZNAQkClRBFR0OFATWmmtQ1Byg2EDjZS34iPJwg3IGfZbWEenQGwHWFpSoAGqAazapsgzrIalCq4PAo/Fs2p0+cYH8c2ihZayRJodWM8A34TgXesJeUGBza+faYGEcACARxgZ3srFECkKZRuaJsgRAhAPa3vNEgxNKK42V6ivh5qkFHQer7ZITdBi+gfA9vyPmgXkWZRt8D7ULjf7QU9vLwA+gzoJ9RFoYFF1+GZFIAeSmWH5GYB2M5uC/PoDIDYmUC/AlTqpezaQgjyTINwQTkJr5MEVOS9ZgtJ7G+DcwA870v1IClnTIc0oIvoelcATG/CKiIxXEEAdphY2d4KBbCd+cWhRUQABrWsCwyAVqhBLoO54EicgmCBTUPrtC4ClYcKqZZ6evrGHxhIUvZ2MIABdETBihmrnqVMH5CyfPgWE8w8OtCPVKmW7jaCFz4w3g2ya4uY4Ggm0yBckHTjAg0Jsv0MNcTMKB1igk85ounn96LkMGvyd8YEXyohMVxhJriHle2t0EHIXgCHZ1gXsk2wBeqvemhagSIwOQd/LCm5yJ4/9G1BLehoz5hgl4HtjoIhOQlJms4MQlZSgxBrSlsxj25ZQHWnAQwTTtTjy67NF2U3CBecodMcXEX/AFsMgHtMsMIGtX0kMwgxkpl4Jb0Iy6nldwbA90pIDJcvgBEjgsOaO3mar+QASKn9SYlnKXUBDUL60oMQe6+kaZlEZWM+A1K5UzrjCe+kkQaw0e71dlvgbb3BJi8ehCzbXYnNKScLwKTJCRSNuqFE8jyahpEto2mYc/Q0DPPomO1svNGSBhDM2C3QLGbX1jPIbhAu6DJo45K1Kaixo+FF80Fz6iuOgXgnmoY5iUPQLw/is7GziWQMa1XNVlUD+M2T3YYvHkP5orT993kCSLUQ0b0ztCUCCFQzqWkY3D3LmobxBsnmq7jsh4QSjbgVUb3aNnaWBjChIZWT6LbQHKmctkElI501q5Wd9SwAQe8cMxGNOw2yFR+aiKafQD9aOuhQGu0ZAD0EtphZtUnI06wGpQq64O0t8LH9ZnJs8SAAFVobuY4mojWoUgpNTCLlq1TbetHXNnVbVQO4Wlt7/cmuosihR4EAKoxygrBcLgnAckkbUeZQcIOjZam2ZxxUM4DvX0PLcF+BIwEQZXvLdXvjAYAdfeHNmUCZt+QkJstSrbu1qgF8gzcifH4kAHagbG+5bm88ANDlI22N74I7fPUBuIoB/OMRACg7KNsbT0zwOyHVB+Dv7yALrCgSwEKysWoPyvYmAihkAEHkv6t3/vd0vjgAC8nGKg0ckO1NBFDQAKJJwB/pdbiCAcw3GysGz+l960sTRbgA1hQPYF6TfyP6+sNfmihCArDrdQbAR2UGsGuWINatIoAigCyTeOPl8df09wfz5QXQ60N7yKUigCKASFIbXn528+NffPyKXvZ9devWre+L2wNzOIA42xs5qRBNcEo6y7Ic0qprqxYA2Rte9pFLHAOYT7Y3XgOogu3XaTbR18vtSrVtGPdmQ7MBtbm7iKW7pK5IMiY6HY5OZrEYOyYRbtiOTps8iKZWmfU4/gOIN7y8uok04M1XjAb8/lWRe2AOA3Akn2xvnAMY4bCsiqBCyUFHK+Sv2TdSf3bZFgYgYfZdpeL9+oNvO8jhafx8ngX3ypjvzBlfN/NvDcVogg3pbWkKb6ENYklyomoAhFb2zfXal8df/rX0eg8FMJ9sb/RLu4IkHZ1hFx/u7lM8yynJOhwgm/H2miGf2uZnnH08AXXz4v/ZO7+fNrIrjl8tiT0029hj7BiPbWxs/AuDwbENJsYGbH45YH4YGwombNqgGKVsWnVpt+lKFVJQtV1pVVWrdlfabZ9Kt4lSNasq+7BS1e5b+1/1nnvvjGfIBDDYWUzmPCDZ3Ll3xvOZe+aeOd854gb3Ut2+eJgkySu1Qjb/5IjLGFkNCskO/K99P5+agOzPO1sGX3xbBBCf2T3IB1wzQGbysLuA0JabPE8UJyQ6dBU2XeTMVPC0wUE9+3GTUdGblSTRsx1iyihRJ1U7FBXTQRr+HOmTmRdUxgY4SKJMGplsJQDR8B8wgMPNBxANnaLaG/vRyDPBT8QvPycfP1cDUC5KmrL15sqGFYSi/Eypd4aJfSYs0dK40yzykc/NhbawmzqqFbIZCrE948PNUiyZsCK9EL+TD2CK0sKsLpbprAF4c5SLYHbo5DXv2tlxKW7k2NAyAEHwlII626lZZW8xLizbIdpQ1ElJh0JMzIpmCdiTQfgbrFUmCjshp7+Q3LHuGuDqyU63FIAQB3yOmgqgZwUWHlNG1HAA5aIkSnkWITerq07EPqtwR5Tdkm3Uyx28rBWyWcREkjC3jqIC/noSU7QMJ72PKzEADQYXl5rCTejsNMH19HCKeuFsaBmAkD89PgK5e3eUvU04jbIdIg0lnZR0KMTErGi2uJgnooBADfxB2Ft0q8A5gyQ/cLSz5QCEOOCHf8L2YTMArN7nJusLHZwaQLkoCUVTAoiMwhyb74jYR4CZYmYElfEUUkSxpKnbgFF4SStkI2e1Iz6C/51H/XAK9zBFWxb4P5dnAMZKu6Z1JAG4yfUqARSHlgEI1KSdc9jHI2VvZSLfEHeINJR0UuKhqBoD8IH0hZ2o8yqhgZgtCHXLZ0MtCeAxbyc/H4DlIMcFF5sDoDwjeoWPxkprfnyAIoBETH6PAqjHU8jwgRAv6iJAx1GtEPCBT2VhQLeON+vPEB8ZQwUv+f9B7R6wK9COXfCCugsWh74BQ4QJgOTAMxUUGEfK3iIcXvRIO0QaSjop8VBO5YKLRKnUwUGiNFEmrSU1AGsG1d5ksrcGL0LkAFaAmgw+ayPLMgCpC06Kzu4Gvu+HE3ZUK0QA3Aa9bhFvJrngWbtHvgrGkFhB9SZbhBQUixA29DDMcpEagF2+OVcfUvYWht2Qdog0lHRS0qGouWCyCOmpLUIcKRLUIV8U4GjvL2sASlY0QbW3W3VG709rCgBngpHSctAPWjG8ElhiACoWIWHL3dxYgMwYR7RCBECrEC8NhPBmesGhi9hhEeLL9uQi054agGjJdxNt18IwOV/iYUk3w8Iw4tCh+3eKoRqAet4PSCl6Q6kl2Q7RhqJOSjoU9TCMn4Vh7HCAekOUxJAC93s6xl0Y/Jt8UQNQjKzVW+3tPAC2TweDQ7Nw1jbsFndFFPsowjDlEX51jAB4RCtEXfCAnfebYbN9vyVVhjml5A3y9n6jDMADAd9zbldMTp+DBqKHTBZ3Ulxms6F1Id4vmwFRliMeU94b2gjJdog2FHVStUNRs514dzcJRJNON3h6eZe8PgORzpftqKUAfOdHhwTAjz7G9lFjAVyut9rbRXoSUrYMN7X/dtNcU/oNlVsHwK/+6XnnN28dHn07VsMA3HHXWe3togB4r5ibcMebPIh5rBm9hgeNrQPgo2s//8e/mgQg+RmKdVZ7uygADpr4kf6bqKXtuwQwOsKn2MJzMyN0hyKqALZhAK/99BsMYBMC0QOp9Nl/NM1aG8Bdy6Su30Azj/sHe0uzlpgKgFOPAMBr/8YAHjYaQJC9FawagG8ogCEIR9pna18kHqsA+CUB8Ju3mgCgLgWyN70G4JsJ4BS8OQdV3pW+sJqWVAD84CsA8Nv333/eYBdsjPIc9wrZmwbgGwBgmttH4iNDekstsCft7Xq9vk+2CPn7J780qrwjWs3US7CqVWMNJ/H0Z4+d50fTrMUBhADTEylHsmwQ8/BsJH1WPRB9gr2qBOtLYuCIDw8xdBNpAGoumC1JeOnd/UdnwDoAfEUJ1persa5wnLxYgAbgm7gIGZItQsq8ImOttkN/ud52XayTXneU5RhzbIVRawO4n3B65Z/rq8Gk8zXljI9WWi0MU0WzDsyfM5pOp2+pAPgeBlCsk94YAK1k5ms3otcFoIPjnKY1Qsf+VpBPjJPHLuYtgbeP9p3jAo73LdYDoEIlhLKPzzjsQ7vFLk0WK34eEh1ROh5wkbdthrtzLQMgiposEIh2dIr1nBwqAF693vazQ2xQJ70hAKYzXPmcO14vgIV0X4Q8MptwLsSqk0IWw7/hmjZXiwujx9yjnNCt0KX8fBKACpWQ4i2lpxqO2ZxzXjfvZI+O8s5oLu9bQqhaueenb+P33m0dAI8zOYC/On0CzMkATggcF9S/XgDBU44KkKJCfOYYt4sBoOeLMbO44OMTeZrtMmOCTebdJpozDK+y77Lz9qg4eMXHr/aiKlyxFMH2u25LYJIAuB138wm4vh4meCFzgMwhQ3CV5lkoVULjkJ4ntaYlm0QxkiR6UrMsJJwW2ANoUs9pxk2cCX3fMOoyaQAeY1Dt7RSyt8YDmEv4QJ1BM0sCXjTOyZ8BWkOJSC4vB7Dbsb6+zmEK1rkS2nBv5jbFCa/izt9xCDuedHAmTRNhsqaJ3MAuAbBvMJZbwvNT2jle3YseeIKjHbou+rBJmaLshacAYmtaskkSI4miJ2LzYqYze2hqGgd8GWVeAHGDq8oA1HHVywSg5wcNBZBWe9tGDQHwvavHmPx+1eE08ByHT9wD5iSTdjQUlHcYcVEJUA1AH3hE/2MqnTDBLPWYFlg4sOAPU+7BGksl9qpoyQVvjaJeisGOmPePjqqE/NItIG5NSzYpxEhhjlW73BEznVnWFwyPyhb6YcMwYC3Z6WXFANTLhrwEAP7t2tPrbY/+0xgAZdXeGgHg1bePMfmK3ZEp7VUKHhmACbSmAHCQzSg1AEml3kE7Mo7MYBhIfSIfabJH0ILqNiKAK84pCUDPk4RgcGaRJ9Od3cCDTfPJmbQCQKYSCsDSQWxNSzZJYiRR9KRqFECefjDe5Z2CjRbiYgBOcfnLBOBfCYDffvHFLxoA4Gyt2tvrnQHhzq9zGVzwvroLXmIAPvYzGskmqM/Vu+8MYwDLMAXR5WUM9BkKAMdkAA4K92KlJN7YuG9LQC5+bH61e07FBa9C+EtqTeCRxEii6OlkF4wZ7pvKE+mwCGCY671MAP6ZAPj7U292LIBhn1Tt7fUvQsx8Wr4IuaFYhJiZC4768PQclwBEnaND4BfdspDJyy646qq54CQG0xqgG3vc4zRcU6ktQiSV0BC0kVqzkk00K1cSPam6YCJeLsizYB303oABOFBnhvYFB/BLAPD211dOa6987zPxu5FiY3buLACi1BBUuFrYY2GYKIRh9tdYGKYTFiERpHM96FgSagBuuIlec5KfKe11UZxQvzuCFyGLMsnjNF6EmFcIgP2mfd1C0It65ntvrFjyudm5akRg62dJJUQuAh+mTWxN4RHFSJLoST387XygewALlyV8l7Ad1cUqPHjgWCwVj8ErnWyZS7UK/i0A+Ox7dZj6e5/3V7cbuHNnArBswb6zWAhaWCB6oACBaOaId6YFCMOgqMngmK8BuMgbiJyy7LcI706IYRgBwjAyANtH3ZYALea14+32LeONdQUfH1hCYa/bYrKx9aykEqLTYwRJrdnsJYqRJNHTKwPRm0Aa3s3tkMGQIXeAJI4Ljjmwe6kA/OCz5wDgqWdA9fc+g+zNa/zOALyQFi00pdu83XOpADRCHPDZlfP1VQqB7E2vAagICTxpyhlf6UGXCkD0R5gBvz5PT6TaW52ytzcAwItiFx3A7x9iAH9yjo7Uq71pAGoAngygpwEAmtWrvWkAagCeBOCnv/txAwDsUq/2pgGoAXgSgE+fPn1+9erh2+cD0JjN9CENQA3A+gH8L3uqemYAjeSp+IEVaQBqAJ4FQDoFnjkME05yY8390TS71AD+7wW2K1eu3D4bgHkfvvvTawBqAJ4VwBfs2dqztmc/rHtzqPZ2DtlbSwCoiZKaDOALmoNwu+32r+vdmlZ7C6OLAeAFESU9WeVlSYiNESUZBwMW9//bO7uexo01js+qlTEXVXBIAgkxOIG8AgE2CSEEB0gIL2pZIJhFbLYt2qXLqgKklZB6G2mjXrSfopdHR1qp170/52vVM3beeDHxMuMY8/wvwIE4jz3zy9gznv88eI6rpyDk8aSHJ2VKMgbwE06J9OWL+XRwvWR7sxZAe5iS/GsrbQDpmJJQbWy1nJ5DqOya5Ta8eLzLOaakv782HRyZePpAtjdrAbSFKUnVeBtAOqYkTtSnF57iBS6O8fE6x5T094sXX0hSTLPp4JAv8GC2N8sB7L8pqRtAOqak+dha3v3qI0IfaqR9rzjJlPSJrEj+R/grstKszrE9OK3Q/jGaFvZPJ4C2MCV1A0jHlHQsJKqe6KjudarjL5VzTEk6gL+ZWhI/ubtswcFphfat0bzYzpEje5iSugGkY0p6hXFN8lwHgM4xJX0yn5MB294ylgHYewtoC1NSN4B0TEl+EQ958amOS7BzTEnmATy/xLa3AasANNcJ6bspqRtAOqakFL5LTavNYLsT4hxTkgrgu79Uvet1F5ztjZLtjQGA/Tcl+dKfQ+m0PjONjilppHCZTiaKeBhmRR+GcY4p6ZO5Hcxle+sDgH03JQWJcUjvItAxJSFZ/YTNj2Qg2ksGoh1kSjIHYD1vKtubpQDaUmBKogvgvrlsbwAgmJLoAjj004dzBAA+PTkAwCHS7x8IIwAQAKQJYI9DMB9LfKo/hQYCADXbm9QAAAHAvgBYOZ1gYXsDAAHAngDUsr3NIAAQAGQCoPFTkEdkewMAAcAeAPz9Z8P3bH99tjcAEAB8EMDv3hnzh4ZDfC2Hni2AYEpiDODDb7rY6eu3tlfZw5R0vpkX8v7WXA0qpiQtraRL3dofE2J43oSTTElG/76ebPTx4J6kKSm1mSqvRprx6JiSGrKqbBChhdBF+SKEFwJwjinJAEBsezt+QgDaxZSE0Hxe36BjSsJK4+mDrzHYs9g04BxT0v0AykVse2s8KQBtYUpC6KCgb9AxJZHjwflHCge4U+h1linpv/f8C2d7Y2x766nQfnlhoE4rqW1MSWg4vqFv0TEl4bIIzGP2IsmhZMRhpqS7R6HpZHujAeCLbwzUaaa3jSlJjr1qbtIxJeFNEX9+blMUpVOcscZBpqQ7AaSU7c3aFtAmpiQ5FmwN2tPKlISK+lBQZSa8EBpxlCnpTgDn6WR7s74T0n9T0kws056yRitTUnmi3eBd4r86yJR0J4Ajo1SyvVkPYN9NSXKsOCPLzXaXjilJvXGUCLXKe2WqFMA3Bw4yJd0C8Jp8PyvoaQLYb1PSOBk05vV9KJmSRqRt8kcuKsQnTBYEXAAABbtJREFUyToxDjIl3egFL2cmqjY5ODAl3SvnmpKqbp53vwQAaQlMSaYAxNneLLS9PQMAkb3K0uYAatnezhEACAD2AUAG2d4AQACwdwAP6Gd7e2yh5YAcSso9AQA5gXq2t0fewHNnQA4lnXFh+98Djl/ZrNRk7iw3CHq8cmecjOwMIJex5d3WkMyB6Egesi2AfxLb26xNh9Gg9aKicKu+bfgobnpJ7X1kXyKQ89UXABfyQqH5dK2ZaacDwP9HVP5q0N8EABnpwrvBzbq0+eLtTDutA/ofy2xvIAAQJbAtYUybTdFe5Lp1QEyzvYEAwIqIJ/zULsmL9jL/qgYHBgZ8eNGN5QHQM9EMv2w1gDJfV3/+ECMv2olOUNPuDHpeKlsPIPYq/GfsNoBaC+hj/6WbcUAIh5yGz9S6IowvwRbdEzgjBJTU13dCFg07IVCsAKAVwzDnaDvYmWkHihUAtGwg2u3FA9HBUdSRaUfXoJ/5Q2BnhICSAoFAIBAIBAKBQKCnLKM5WvRDvC0GQokU27PA66lE2YYY3HZ78xtsYxxFhcgmbS9MdUlqrwHCqLrNyXCOFv0Qs/NJZdubZhkCoeX8bpRpQaGlxNz5VJ1pjOrEVrmanaQcYefgbQtARtVtUoZztOiHIMp+ZhuidOCPMi2oVPwj88ogq0vvS/SDtABkVN3mZPyAmH4IrBH3PsuzQOOFMH0Au0IsFk+l2EqOaYy6d2do+vKYIYBsqtuk7p+jxSYE+W4HplmehRJREH0Au0LsCktTO+5NpjHQVUjklyoMAWRT3abP+b45WmxC4Jtr1xzLswgXFhATADvOoigsq/2piRzLGD9K89ep7KbTAbT+Enwh7DA9iz1eFMUJXpxjeBZB3EhxvMKyMjIl3BNhgIe9LsHGc7Toh0BHwjrbsxg5UbU4dtJgeBZvBPXTV6m3gF0xJjGA37ME0BadEOM5WvRDHIkLsiwvswyB5Y8yLaiGVPqx2k7BwCTGuLhQrhdo49FIp/m1tI9ldZuV0Rwt+iFGiR0hyPQs2ADYFYIrCtJKjm2M/awgZWjnBvfo5c+yukEgEAgEAoFAIBAIBAKBQCAQyNkaj5t7v3tL32Axdg16BgqSsX3lIQBx7spI6faKUNMv9aejjftmv5M9l04eATnI0QDuyqrCDwIYl2VPLHtn9id+3bhNleXkqLsCAILuBFCzTaxlXdJiQ4MjPRoKFZII1T8IUq3RAc0Rz6GFvDeGk1L73V6pRi7BbrWJc+NLcErAS5bh6VC39lzlr1sxyPNUP6qcSq6EByoAACS/tjzlubFFDZdshlMO0+g6tKXUC5sdGL3lT9a9C8qa6EFX8R3f1BsC4DQ/Lk9jAMORDaT+eHN7z72Mim4zRmVLbRMbKPO6OjwvKFADzx1A0eVylcjmYUDDJaSlNg9iQ0V1YrCF0UxCqrzGk6hKP6G1WKXVCSGXYNwJqRURSnn3buzJu1w8v6SHa8ZAwxN4ql5xG2rguQNYVBRFRp6iFBL4BoHDLxZ/HVYbQq+Kpovn2hip1+UAhnMrj3xu6dV6+AaAUypUuEXt3jOkcG9imLbOGOiQx+8RS1ADcAlWdS7Mfq9s8HsaHMpa0buOxmoKVqWJURnf1AXeawCi3Got8rrSDSCKreVCV+jGnvgT/R9uxrgQOYWgDwIAEboSRxD63IRDVWYJZYp3DJ1ol2DtgsrxSQIgmRVMAPQXDuPqhff2ngPx9XaMoxCGnK9C4YOaAKb5rfJ7SQMwt+g5r8dO0bWwmFZWa90ANjsh4xsn5QPhjAAYW5T3NAAVPooBvWPPlexQK0adnzt7iTL5t+Xkr5DZBwDUhmEkYfe9BmAlg0dY1IYsWQy5oj90A9gchllPxF2JOe0ecDUmuvUnIQmeDKzc3tMnHrZioOMAHobx572RyWuoARAIBAKBQCAQCAQCgUAgEAgEAoFAIBAIBAKBQCAK+hfIONVCwQ5I8AAAAABJRU5ErkJggg==)
+
+####  3.3.2.15.3. Multi-label case
+
+In multi-label classification, the `roc_auc_score` function is extended by
+averaging over the labels as above. In this case, you should provide a
+`y_score` of shape `(n_samples, n_classes)`. Thus, when using the probability
+estimates, one needs to select the probability of the class with the greater
+label for each output.
+
+    
+    >>> from sklearn.datasets import make_multilabel_classification
+    >>> from sklearn.multioutput import MultiOutputClassifier
+    >>> X, y = make_multilabel_classification(random_state=0)
+    >>> inner_clf = LogisticRegression(solver="liblinear", random_state=0)
+    >>> clf = MultiOutputClassifier(inner_clf).fit(X, y)
+    >>> y_score = np.transpose([y_pred[:, 1] for y_pred in clf.predict_proba(X)])
+    >>> roc_auc_score(y, y_score, average=None)
+    array([0.82..., 0.86..., 0.94..., 0.85... , 0.94...])
+    
+And the decision values do not require such processing.
+
+    
+    >>> from sklearn.linear_model import RidgeClassifierCV
+    >>> clf = RidgeClassifierCV().fit(X, y)
+    >>> y_score = clf.decision_function(X)
+    >>> roc_auc_score(y, y_score, average=None)
+    array([0.81..., 0.84... , 0.93..., 0.87..., 0.94...])
+    
+Examples:
+
+  * See Receiver Operating Characteristic (ROC) for an example of using ROC to evaluate the quality of the output of a classifier.
+  * See Receiver Operating Characteristic (ROC) with cross validation for an example of using ROC to evaluate classifier output quality, using cross-validation.
+  * See Species distribution modeling for an example of using ROC to model species distribution.
+
+References:
+
+`HT2001(1,2)`
+
+    
+Hand, D.J. and Till, R.J., (2001). A simple generalisation of the area under
+the ROC curve for multiple class classification problems. Machine learning,
+45(2), pp.171-186.
+
+`FC2009`
+
+    
+Ferri, Cèsar & Hernandez-Orallo, Jose & Modroiu, R. (2009). An Experimental
+Comparison of Performance Measures for Classification. Pattern Recognition
+Letters. 30. 27-38.
+
+`PD2000`
+
+    
+Provost, F., Domingos, P. (2000). Well-trained PETs: Improving probability
+estimation trees (Section 6.2), CeDER Working Paper #IS-00-04, Stern School of
+Business, New York University.
+
+`F2006`
+
+    
+Fawcett, T., 2006. An introduction to ROC analysis. Pattern Recognition
+Letters, 27(8), pp. 861-874.
+
+`F2001`
+
+    
+Fawcett, T., 2001. Using rule sets to maximize ROC performance In Data Mining,
+2001. Proceedings IEEE International Conference, pp. 131-138.
+
+###  3.3.2.16. Detection error tradeoff (DET)
+
+The function `det_curve` computes the detection error tradeoff curve (DET)
+curve [WikipediaDET2017]. Quoting Wikipedia:
+
+“A detection error tradeoff (DET) graph is a graphical plot of error rates for
+binary classification systems, plotting false reject rate vs. false accept
+rate. The x- and y-axes are scaled non-linearly by their standard normal
+deviates (or just by logarithmic transformation), yielding tradeoff curves
+that are more linear than ROC curves, and use most of the image area to
+highlight the differences of importance in the critical operating region.”
+
+DET curves are a variation of receiver operating characteristic (ROC) curves
+where False Negative Rate is plotted on the y-axis instead of True Positive
+Rate. DET curves are commonly plotted in normal deviate scale by
+transformation with \\(\phi^{-1}\\) (with \\(\phi\\) being the cumulative
+distribution function). The resulting performance curves explicitly visualize
+the tradeoff of error types for given classification algorithms. See
+[Martin1997] for examples and further motivation.
+
+This figure compares the ROC and DET curves of two example classifiers on the
+same classification task:
+
+![../_images/sphx_glr_plot_det_0011.png](data:image/png;base64,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)
+
+Properties:
+
+  * DET curves form a linear curve in normal deviate scale if the detection scores are normally (or close-to normally) distributed. It was shown by [Navratil2007] that the reverse it not necessarily true and even more general distributions are able produce linear DET curves.
+  * The normal deviate scale transformation spreads out the points such that a comparatively larger space of plot is occupied. Therefore curves with similar classification performance might be easier to distinguish on a DET plot.
+  * With False Negative Rate being “inverse” to True Positive Rate the point of perfection for DET curves is the origin (in contrast to the top left corner for ROC curves).
+
+Applications and limitations:
+
+DET curves are intuitive to read and hence allow quick visual assessment of a
+classifier’s performance. Additionally DET curves can be consulted for
+threshold analysis and operating point selection. This is particularly helpful
+if a comparison of error types is required.
+
+One the other hand DET curves do not provide their metric as a single number.
+Therefore for either automated evaluation or comparison to other
+classification tasks metrics like the derived area under ROC curve might be
+better suited.
+
+Examples:
+
+  * See Detection error tradeoff (DET) curve for an example comparison between receiver operating characteristic (ROC) curves and Detection error tradeoff (DET) curves.
+
+References:
+
+`WikipediaDET2017`
+
+    
+Wikipedia contributors. Detection error tradeoff. Wikipedia, The Free
+Encyclopedia. September 4, 2017, 23:33 UTC. Available at:
+https://en.wikipedia.org/w/index.php?title=Detection_error_tradeoff&oldid=798982054.
+Accessed February 19, 2018.
+
+`Martin1997`
+
+    
+A. Martin, G. Doddington, T. Kamm, M. Ordowski, and M. Przybocki, The DET
+Curve in Assessment of Detection Task Performance, NIST 1997.
+
+`Navratil2007`
+
+    
+J. Navractil and D. Klusacek, “On Linear DETs,” 2007 IEEE International
+Conference on Acoustics, Speech and Signal Processing - ICASSP ‘07, Honolulu,
+HI, 2007, pp. IV-229-IV-232.
+
+###  3.3.2.17. Zero one loss
+
+The `zero_one_loss` function computes the sum or the average of the 0-1
+classification loss (\\(L_{0-1}\\)) over \\(n_{\text{samples}}\\). By default,
+the function normalizes over the sample. To get the sum of the \\(L_{0-1}\\),
+set `normalize` to `False`.
+
+In multilabel classification, the `zero_one_loss` scores a subset as one if
+its labels strictly match the predictions, and as a zero if there are any
+errors. By default, the function returns the percentage of imperfectly
+predicted subsets. To get the count of such subsets instead, set `normalize`
+to `False`
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample and
+\\(y_i\\) is the corresponding true value, then the 0-1 loss \\(L_{0-1}\\) is
+defined as:
+
+\\[L_{0-1}(y_i, \hat{y}_i) = 1(\hat{y}_i \not= y_i)\\]
+
+where \\(1(x)\\) is the indicator function.
+
+    
+    >>> from sklearn.metrics import zero_one_loss
+    >>> y_pred = [1, 2, 3, 4]
+    >>> y_true = [2, 2, 3, 4]
+    >>> zero_one_loss(y_true, y_pred)
+    0.25
+    >>> zero_one_loss(y_true, y_pred, normalize=False)
+    1
+    
+In the multilabel case with binary label indicators, where the first label set
+[0,1] has an error:
+
+    
+    >>> zero_one_loss(np.array([[0, 1], [1, 1]]), np.ones((2, 2)))
+    0.5
+    
+    >>> zero_one_loss(np.array([[0, 1], [1, 1]]), np.ones((2, 2)),  normalize=False)
+    1
+    
+Example:
+
+  * See Recursive feature elimination with cross-validation for an example of zero one loss usage to perform recursive feature elimination with cross-validation.
+
+###  3.3.2.18. Brier score loss
+
+The `brier_score_loss` function computes the Brier score for binary classes
+[Brier1950]. Quoting Wikipedia:
+
+“The Brier score is a proper score function that measures the accuracy of
+probabilistic predictions. It is applicable to tasks in which predictions must
+assign probabilities to a set of mutually exclusive discrete outcomes.”
+
+This function returns the mean squared error of the actual outcome \\(y \in
+\\{0,1\\}\\) and the predicted probability estimate \\(p = \operatorname{Pr}(y
+= 1)\\) (predict_proba) as outputted by:
+
+\\[BS = \frac{1}{n_{\text{samples}}} \sum_{i=0}^{n_{\text{samples}} - 1}(y_i -
+p_i)^2\\]
+
+The Brier score loss is also between 0 to 1 and the lower the value (the mean
+square difference is smaller), the more accurate the prediction is.
+
+Here is a small example of usage of this function:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import brier_score_loss
+    >>> y_true = np.array([0, 1, 1, 0])
+    >>> y_true_categorical = np.array(["spam", "ham", "ham", "spam"])
+    >>> y_prob = np.array([0.1, 0.9, 0.8, 0.4])
+    >>> y_pred = np.array([0, 1, 1, 0])
+    >>> brier_score_loss(y_true, y_prob)
+    0.055
+    >>> brier_score_loss(y_true, 1 - y_prob, pos_label=0)
+    0.055
+    >>> brier_score_loss(y_true_categorical, y_prob, pos_label="ham")
+    0.055
+    >>> brier_score_loss(y_true, y_prob > 0.5)
+    0.0
+    
+The Brier score can be used to assess how well a classifier is calibrated.
+However, a lower Brier score loss does not always mean a better calibration.
+This is because, by analogy with the bias-variance decomposition of the mean
+squared error, the Brier score loss can be decomposed as the sum of
+calibration loss and refinement loss [Bella2012]. Calibration loss is defined
+as the mean squared deviation from empirical probabilities derived from the
+slope of ROC segments. Refinement loss can be defined as the expected optimal
+loss as measured by the area under the optimal cost curve. Refinement loss can
+change independently from calibration loss, thus a lower Brier score loss does
+not necessarily mean a better calibrated model. “Only when refinement loss
+remains the same does a lower Brier score loss always mean better calibration”
+[Bella2012], [Flach2008].
+
+Example:
+
+  * See Probability calibration of classifiers for an example of Brier score loss usage to perform probability calibration of classifiers.
+
+References:
+
+`Brier1950`
+
+    
+G. Brier, Verification of forecasts expressed in terms of probability, Monthly
+weather review 78.1 (1950)
+
+`Bella2012(1,2)`
+
+    
+Bella, Ferri, Hernández-Orallo, and Ramírez-Quintana “Calibration of Machine
+Learning Models” in Khosrow-Pour, M. “Machine learning: concepts,
+methodologies, tools and applications.” Hershey, PA: Information Science
+Reference (2012).
+
+`Flach2008`
+
+    
+Flach, Peter, and Edson Matsubara. “On classification, ranking, and
+probability estimation.” Dagstuhl Seminar Proceedings. Schloss Dagstuhl-
+Leibniz-Zentrum fr Informatik (2008).
+
+##  3.3.3. Multilabel ranking metrics
+
+In multilabel learning, each sample can have any number of ground truth labels
+associated with it. The goal is to give high scores and better rank to the
+ground truth labels.
+
+###  3.3.3.1. Coverage error
+
+The `coverage_error` function computes the average number of labels that have
+to be included in the final prediction such that all true labels are
+predicted. This is useful if you want to know how many top-scored-labels you
+have to predict in average without missing any true one. The best value of
+this metrics is thus the average number of true labels.
+
+Note
+
+Our implementation’s score is 1 greater than the one given in Tsoumakas et
+al., 2010. This extends it to handle the degenerate case in which an instance
+has 0 true labels.
+
+Formally, given a binary indicator matrix of the ground truth labels \\(y \in
+\left\\{0, 1\right\\}^{n_\text{samples} \times n_\text{labels}}\\) and the
+score associated with each label \\(\hat{f} \in \mathbb{R}^{n_\text{samples}
+\times n_\text{labels}}\\), the coverage is defined as
+
+\\[coverage(y, \hat{f}) = \frac{1}{n_{\text{samples}}}
+\sum_{i=0}^{n_{\text{samples}} - 1} \max_{j:y_{ij} = 1} \text{rank}_{ij}\\]
+
+with \\(\text{rank}_{ij} = \left|\left\\{k: \hat{f}_{ik} \geq \hat{f}_{ij}
+\right\\}\right|\\). Given the rank definition, ties in `y_scores` are broken
+by giving the maximal rank that would have been assigned to all tied values.
+
+Here is a small example of usage of this function:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import coverage_error
+    >>> y_true = np.array([[1, 0, 0], [0, 0, 1]])
+    >>> y_score = np.array([[0.75, 0.5, 1], [1, 0.2, 0.1]])
+    >>> coverage_error(y_true, y_score)
+    2.5
+    
+###  3.3.3.2. Label ranking average precision
+
+The `label_ranking_average_precision_score` function implements label ranking
+average precision (LRAP). This metric is linked to the
+`average_precision_score` function, but is based on the notion of label
+ranking instead of precision and recall.
+
+Label ranking average precision (LRAP) averages over the samples the answer to
+the following question: for each ground truth label, what fraction of higher-
+ranked labels were true labels? This performance measure will be higher if you
+are able to give better rank to the labels associated with each sample. The
+obtained score is always strictly greater than 0, and the best value is 1. If
+there is exactly one relevant label per sample, label ranking average
+precision is equivalent to the mean reciprocal rank.
+
+Formally, given a binary indicator matrix of the ground truth labels \\(y \in
+\left\\{0, 1\right\\}^{n_\text{samples} \times n_\text{labels}}\\) and the
+score associated with each label \\(\hat{f} \in \mathbb{R}^{n_\text{samples}
+\times n_\text{labels}}\\), the average precision is defined as
+
+\\[LRAP(y, \hat{f}) = \frac{1}{n_{\text{samples}}}
+\sum_{i=0}^{n_{\text{samples}} - 1} \frac{1}{||y_i||_0} \sum_{j:y_{ij} = 1}
+\frac{|\mathcal{L}_{ij}|}{\text{rank}_{ij}}\\]
+
+where \\(\mathcal{L}_{ij} = \left\\{k: y_{ik} = 1, \hat{f}_{ik} \geq
+\hat{f}_{ij} \right\\}\\), \\(\text{rank}_{ij} = \left|\left\\{k: \hat{f}_{ik}
+\geq \hat{f}_{ij} \right\\}\right|\\), \\(|\cdot|\\) computes the cardinality
+of the set (i.e., the number of elements in the set), and \\(||\cdot||_0\\) is
+the \\(\ell_0\\) “norm” (which computes the number of nonzero elements in a
+vector).
+
+Here is a small example of usage of this function:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import label_ranking_average_precision_score
+    >>> y_true = np.array([[1, 0, 0], [0, 0, 1]])
+    >>> y_score = np.array([[0.75, 0.5, 1], [1, 0.2, 0.1]])
+    >>> label_ranking_average_precision_score(y_true, y_score)
+    0.416...
+    
+###  3.3.3.3. Ranking loss
+
+The `label_ranking_loss` function computes the ranking loss which averages
+over the samples the number of label pairs that are incorrectly ordered, i.e.
+true labels have a lower score than false labels, weighted by the inverse of
+the number of ordered pairs of false and true labels. The lowest achievable
+ranking loss is zero.
+
+Formally, given a binary indicator matrix of the ground truth labels \\(y \in
+\left\\{0, 1\right\\}^{n_\text{samples} \times n_\text{labels}}\\) and the
+score associated with each label \\(\hat{f} \in \mathbb{R}^{n_\text{samples}
+\times n_\text{labels}}\\), the ranking loss is defined as
+
+\\[ranking\\_loss(y, \hat{f}) = \frac{1}{n_{\text{samples}}}
+\sum_{i=0}^{n_{\text{samples}} - 1} \frac{1}{||y_i||_0(n_\text{labels} -
+||y_i||_0)} \left|\left\\{(k, l): \hat{f}_{ik} \leq \hat{f}_{il}, y_{ik} = 1,
+y_{il} = 0 \right\\}\right|\\]
+
+where \\(|\cdot|\\) computes the cardinality of the set (i.e., the number of
+elements in the set) and \\(||\cdot||_0\\) is the \\(\ell_0\\) “norm” (which
+computes the number of nonzero elements in a vector).
+
+Here is a small example of usage of this function:
+
+    
+    >>> import numpy as np
+    >>> from sklearn.metrics import label_ranking_loss
+    >>> y_true = np.array([[1, 0, 0], [0, 0, 1]])
+    >>> y_score = np.array([[0.75, 0.5, 1], [1, 0.2, 0.1]])
+    >>> label_ranking_loss(y_true, y_score)
+    0.75...
+    >>> # With the following prediction, we have perfect and minimal loss
+    >>> y_score = np.array([[1.0, 0.1, 0.2], [0.1, 0.2, 0.9]])
+    >>> label_ranking_loss(y_true, y_score)
+    0.0
+    
+References:
+
+  * Tsoumakas, G., Katakis, I., & Vlahavas, I. (2010). Mining multi-label data. In Data mining and knowledge discovery handbook (pp. 667-685). Springer US.
+
+###  3.3.3.4. Normalized Discounted Cumulative Gain
+
+Discounted Cumulative Gain (DCG) and Normalized Discounted Cumulative Gain
+(NDCG) are ranking metrics implemented in `dcg_score` and `ndcg_score` ; they
+compare a predicted order to ground-truth scores, such as the relevance of
+answers to a query.
+
+From the Wikipedia page for Discounted Cumulative Gain:
+
+“Discounted cumulative gain (DCG) is a measure of ranking quality. In
+information retrieval, it is often used to measure effectiveness of web search
+engine algorithms or related applications. Using a graded relevance scale of
+documents in a search-engine result set, DCG measures the usefulness, or gain,
+of a document based on its position in the result list. The gain is
+accumulated from the top of the result list to the bottom, with the gain of
+each result discounted at lower ranks”
+
+DCG orders the true targets (e.g. relevance of query answers) in the predicted
+order, then multiplies them by a logarithmic decay and sums the result. The
+sum can be truncated after the first \\(K\\) results, in which case we call it
+DCG@K. NDCG, or NDCG@K is DCG divided by the DCG obtained by a perfect
+prediction, so that it is always between 0 and 1. Usually, NDCG is preferred
+to DCG.
+
+Compared with the ranking loss, NDCG can take into account relevance scores,
+rather than a ground-truth ranking. So if the ground-truth consists only of an
+ordering, the ranking loss should be preferred; if the ground-truth consists
+of actual usefulness scores (e.g. 0 for irrelevant, 1 for relevant, 2 for very
+relevant), NDCG can be used.
+
+For one sample, given the vector of continuous ground-truth values for each
+target \\(y \in \mathbb{R}^{M}\\), where \\(M\\) is the number of outputs, and
+the prediction \\(\hat{y}\\), which induces the ranking function \\(f\\), the
+DCG score is
+
+\\[\sum_{r=1}^{\min(K, M)}\frac{y_{f(r)}}{\log(1 + r)}\\]
+
+and the NDCG score is the DCG score divided by the DCG score obtained for
+\\(y\\).
+
+References:
+
+  * Wikipedia entry for Discounted Cumulative Gain
+  * Jarvelin, K., & Kekalainen, J. (2002). Cumulated gain-based evaluation of IR techniques. ACM Transactions on Information Systems (TOIS), 20(4), 422-446.
+  * Wang, Y., Wang, L., Li, Y., He, D., Chen, W., & Liu, T. Y. (2013, May). A theoretical analysis of NDCG ranking measures. In Proceedings of the 26th Annual Conference on Learning Theory (COLT 2013)
+  * McSherry, F., & Najork, M. (2008, March). Computing information retrieval performance measures efficiently in the presence of tied scores. In European conference on information retrieval (pp. 414-421). Springer, Berlin, Heidelberg.
+
+##  3.3.4. Regression metrics
+
+The `sklearn.metrics` module implements several loss, score, and utility
+functions to measure regression performance. Some of those have been enhanced
+to handle the multioutput case: `mean_squared_error`, `mean_absolute_error`,
+`explained_variance_score` and `r2_score`.
+
+These functions have an `multioutput` keyword argument which specifies the way
+the scores or losses for each individual target should be averaged. The
+default is `'uniform_average'`, which specifies a uniformly weighted mean over
+outputs. If an `ndarray` of shape `(n_outputs,)` is passed, then its entries
+are interpreted as weights and an according weighted average is returned. If
+`multioutput` is `'raw_values'` is specified, then all unaltered individual
+scores or losses will be returned in an array of shape `(n_outputs,)`.
+
+The `r2_score` and `explained_variance_score` accept an additional value
+`'variance_weighted'` for the `multioutput` parameter. This option leads to a
+weighting of each individual score by the variance of the corresponding target
+variable. This setting quantifies the globally captured unscaled variance. If
+the target variables are of different scale, then this score puts more
+importance on well explaining the higher variance variables.
+`multioutput='variance_weighted'` is the default value for `r2_score` for
+backward compatibility. This will be changed to `uniform_average` in the
+future.
+
+###  3.3.4.1. Explained variance score
+
+The `explained_variance_score` computes the explained variance regression
+score.
+
+If \\(\hat{y}\\) is the estimated target output, \\(y\\) the corresponding
+(correct) target output, and \\(Var\\) is Variance, the square of the standard
+deviation, then the explained variance is estimated as follow:
+
+\\[explained\\_{}variance(y, \hat{y}) = 1 - \frac{Var\\{ y -
+\hat{y}\\}}{Var\\{y\\}}\\]
+
+The best possible score is 1.0, lower values are worse.
+
+Here is a small example of usage of the `explained_variance_score` function:
+
+    
+    >>> from sklearn.metrics import explained_variance_score
+    >>> y_true = [3, -0.5, 2, 7]
+    >>> y_pred = [2.5, 0.0, 2, 8]
+    >>> explained_variance_score(y_true, y_pred)
+    0.957...
+    >>> y_true = [[0.5, 1], [-1, 1], [7, -6]]
+    >>> y_pred = [[0, 2], [-1, 2], [8, -5]]
+    >>> explained_variance_score(y_true, y_pred, multioutput='raw_values')
+    array([0.967..., 1.        ])
+    >>> explained_variance_score(y_true, y_pred, multioutput=[0.3, 0.7])
+    0.990...
+    
+###  3.3.4.2. Max error
+
+The `max_error` function computes the maximum residual error , a metric that
+captures the worst case error between the predicted value and the true value.
+In a perfectly fitted single output regression model, `max_error` would be `0`
+on the training set and though this would be highly unlikely in the real
+world, this metric shows the extent of error that the model had when it was
+fitted.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample, and
+\\(y_i\\) is the corresponding true value, then the max error is defined as
+
+\\[\text{Max Error}(y, \hat{y}) = max(| y_i - \hat{y}_i |)\\]
+
+Here is a small example of usage of the `max_error` function:
+
+    
+    >>> from sklearn.metrics import max_error
+    >>> y_true = [3, 2, 7, 1]
+    >>> y_pred = [9, 2, 7, 1]
+    >>> max_error(y_true, y_pred)
+    6
+    
+The `max_error` does not support multioutput.
+
+###  3.3.4.3. Mean absolute error
+
+The `mean_absolute_error` function computes mean absolute error, a risk metric
+corresponding to the expected value of the absolute error loss or
+\\(l1\\)-norm loss.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample, and
+\\(y_i\\) is the corresponding true value, then the mean absolute error (MAE)
+estimated over \\(n_{\text{samples}}\\) is defined as
+
+\\[\text{MAE}(y, \hat{y}) = \frac{1}{n_{\text{samples}}}
+\sum_{i=0}^{n_{\text{samples}}-1} \left| y_i - \hat{y}_i \right|.\\]
+
+Here is a small example of usage of the `mean_absolute_error` function:
+
+    
+    >>> from sklearn.metrics import mean_absolute_error
+    >>> y_true = [3, -0.5, 2, 7]
+    >>> y_pred = [2.5, 0.0, 2, 8]
+    >>> mean_absolute_error(y_true, y_pred)
+    0.5
+    >>> y_true = [[0.5, 1], [-1, 1], [7, -6]]
+    >>> y_pred = [[0, 2], [-1, 2], [8, -5]]
+    >>> mean_absolute_error(y_true, y_pred)
+    0.75
+    >>> mean_absolute_error(y_true, y_pred, multioutput='raw_values')
+    array([0.5, 1. ])
+    >>> mean_absolute_error(y_true, y_pred, multioutput=[0.3, 0.7])
+    0.85...
+    
+###  3.3.4.4. Mean squared error
+
+The `mean_squared_error` function computes mean square error, a risk metric
+corresponding to the expected value of the squared (quadratic) error or loss.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample, and
+\\(y_i\\) is the corresponding true value, then the mean squared error (MSE)
+estimated over \\(n_{\text{samples}}\\) is defined as
+
+\\[\text{MSE}(y, \hat{y}) = \frac{1}{n_\text{samples}}
+\sum_{i=0}^{n_\text{samples} - 1} (y_i - \hat{y}_i)^2.\\]
+
+Here is a small example of usage of the `mean_squared_error` function:
+
+    
+    >>> from sklearn.metrics import mean_squared_error
+    >>> y_true = [3, -0.5, 2, 7]
+    >>> y_pred = [2.5, 0.0, 2, 8]
+    >>> mean_squared_error(y_true, y_pred)
+    0.375
+    >>> y_true = [[0.5, 1], [-1, 1], [7, -6]]
+    >>> y_pred = [[0, 2], [-1, 2], [8, -5]]
+    >>> mean_squared_error(y_true, y_pred)
+    0.7083...
+    
+Examples:
+
+  * See Gradient Boosting regression for an example of mean squared error usage to evaluate gradient boosting regression.
+
+###  3.3.4.5. Mean squared logarithmic error
+
+The `mean_squared_log_error` function computes a risk metric corresponding to
+the expected value of the squared logarithmic (quadratic) error or loss.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample, and
+\\(y_i\\) is the corresponding true value, then the mean squared logarithmic
+error (MSLE) estimated over \\(n_{\text{samples}}\\) is defined as
+
+\\[\text{MSLE}(y, \hat{y}) = \frac{1}{n_\text{samples}}
+\sum_{i=0}^{n_\text{samples} - 1} (\log_e (1 + y_i) - \log_e (1 + \hat{y}_i)
+)^2.\\]
+
+Where \\(\log_e (x)\\) means the natural logarithm of \\(x\\). This metric is
+best to use when targets having exponential growth, such as population counts,
+average sales of a commodity over a span of years etc. Note that this metric
+penalizes an under-predicted estimate greater than an over-predicted estimate.
+
+Here is a small example of usage of the `mean_squared_log_error` function:
+
+    
+    >>> from sklearn.metrics import mean_squared_log_error
+    >>> y_true = [3, 5, 2.5, 7]
+    >>> y_pred = [2.5, 5, 4, 8]
+    >>> mean_squared_log_error(y_true, y_pred)
+    0.039...
+    >>> y_true = [[0.5, 1], [1, 2], [7, 6]]
+    >>> y_pred = [[0.5, 2], [1, 2.5], [8, 8]]
+    >>> mean_squared_log_error(y_true, y_pred)
+    0.044...
+    
+###  3.3.4.6. Mean absolute percentage error
+
+The `mean_absolute_percentage_error` (MAPE), also known as mean absolute
+percentage deviation (MAPD), is an evaluation metric for regression problems.
+The idea of this metric is to be sensitive to relative errors. It is for
+example not changed by a global scaling of the target variable.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample and
+\\(y_i\\) is the corresponding true value, then the mean absolute percentage
+error (MAPE) estimated over \\(n_{\text{samples}}\\) is defined as
+
+\\[\text{MAPE}(y, \hat{y}) = \frac{1}{n_{\text{samples}}}
+\sum_{i=0}^{n_{\text{samples}}-1} \frac{{}\left| y_i - \hat{y}_i
+\right|}{max(\epsilon, \left| y_i \right|)}\\]
+
+where \\(\epsilon\\) is an arbitrary small yet strictly positive number to
+avoid undefined results when y is zero.
+
+The `mean_absolute_percentage_error` function supports multioutput.
+
+Here is a small example of usage of the `mean_absolute_percentage_error`
+function:
+
+    
+    >>> from sklearn.metrics import mean_absolute_percentage_error
+    >>> y_true = [1, 10, 1e6]
+    >>> y_pred = [0.9, 15, 1.2e6]
+    >>> mean_absolute_percentage_error(y_true, y_pred)
+    0.2666...
+    
+In above example, if we had used `mean_absolute_error`, it would have ignored
+the small magnitude values and only reflected the error in prediction of
+highest magnitude value. But that problem is resolved in case of MAPE because
+it calculates relative percentage error with respect to actual output.
+
+###  3.3.4.7. Median absolute error
+
+The `median_absolute_error` is particularly interesting because it is robust
+to outliers. The loss is calculated by taking the median of all absolute
+differences between the target and the prediction.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample and
+\\(y_i\\) is the corresponding true value, then the median absolute error
+(MedAE) estimated over \\(n_{\text{samples}}\\) is defined as
+
+\\[\text{MedAE}(y, \hat{y}) = \text{median}(\mid y_1 - \hat{y}_1 \mid, \ldots,
+\mid y_n - \hat{y}_n \mid).\\]
+
+The `median_absolute_error` does not support multioutput.
+
+Here is a small example of usage of the `median_absolute_error` function:
+
+    
+    >>> from sklearn.metrics import median_absolute_error
+    >>> y_true = [3, -0.5, 2, 7]
+    >>> y_pred = [2.5, 0.0, 2, 8]
+    >>> median_absolute_error(y_true, y_pred)
+    0.5
+    
+###  3.3.4.8. R² score, the coefficient of determination
+
+The `r2_score` function computes the coefficient of determination, usually
+denoted as R².
+
+It represents the proportion of variance (of y) that has been explained by the
+independent variables in the model. It provides an indication of goodness of
+fit and therefore a measure of how well unseen samples are likely to be
+predicted by the model, through the proportion of explained variance.
+
+As such variance is dataset dependent, R² may not be meaningfully comparable
+across different datasets. Best possible score is 1.0 and it can be negative
+(because the model can be arbitrarily worse). A constant model that always
+predicts the expected value of y, disregarding the input features, would get a
+R² score of 0.0.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample and
+\\(y_i\\) is the corresponding true value for total \\(n\\) samples, the
+estimated R² is defined as:
+
+\\[R^2(y, \hat{y}) = 1 - \frac{\sum_{i=1}^{n} (y_i -
+\hat{y}_i)^2}{\sum_{i=1}^{n} (y_i - \bar{y})^2}\\]
+
+where \\(\bar{y} = \frac{1}{n} \sum_{i=1}^{n} y_i\\) and \\(\sum_{i=1}^{n}
+(y_i - \hat{y}_i)^2 = \sum_{i=1}^{n} \epsilon_i^2\\).
+
+Note that `r2_score` calculates unadjusted R² without correcting for bias in
+sample variance of y.
+
+Here is a small example of usage of the `r2_score` function:
+
+    
+    >>> from sklearn.metrics import r2_score
+    >>> y_true = [3, -0.5, 2, 7]
+    >>> y_pred = [2.5, 0.0, 2, 8]
+    >>> r2_score(y_true, y_pred)
+    0.948...
+    >>> y_true = [[0.5, 1], [-1, 1], [7, -6]]
+    >>> y_pred = [[0, 2], [-1, 2], [8, -5]]
+    >>> r2_score(y_true, y_pred, multioutput='variance_weighted')
+    0.938...
+    >>> y_true = [[0.5, 1], [-1, 1], [7, -6]]
+    >>> y_pred = [[0, 2], [-1, 2], [8, -5]]
+    >>> r2_score(y_true, y_pred, multioutput='uniform_average')
+    0.936...
+    >>> r2_score(y_true, y_pred, multioutput='raw_values')
+    array([0.965..., 0.908...])
+    >>> r2_score(y_true, y_pred, multioutput=[0.3, 0.7])
+    0.925...
+    
+Example:
+
+  * See Lasso and Elastic Net for Sparse Signals for an example of R² score usage to evaluate Lasso and Elastic Net on sparse signals.
+
+###  3.3.4.9. Mean Poisson, Gamma, and Tweedie deviances
+
+The `mean_tweedie_deviance` function computes the mean Tweedie deviance error
+with a `power` parameter (\\(p\\)). This is a metric that elicits predicted
+expectation values of regression targets.
+
+Following special cases exist,
+
+  * when `power=0` it is equivalent to `mean_squared_error`.
+  * when `power=1` it is equivalent to `mean_poisson_deviance`.
+  * when `power=2` it is equivalent to `mean_gamma_deviance`.
+
+If \\(\hat{y}_i\\) is the predicted value of the \\(i\\)-th sample, and
+\\(y_i\\) is the corresponding true value, then the mean Tweedie deviance
+error (D) for power \\(p\\), estimated over \\(n_{\text{samples}}\\) is
+defined as
+
+\\[\begin{split}\text{D}(y, \hat{y}) = \frac{1}{n_\text{samples}}
+\sum_{i=0}^{n_\text{samples} - 1} \begin{cases} (y_i-\hat{y}_i)^2, & \text{for
+}p=0\text{ (Normal)}\\\ 2(y_i \log(y/\hat{y}_i) + \hat{y}_i - y_i), &
+\text{for}p=1\text{ (Poisson)}\\\ 2(\log(\hat{y}_i/y_i) + y_i/\hat{y}_i - 1),
+& \text{for}p=2\text{ (Gamma)}\\\ 2\left(\frac{\max(y_i,0)^{2-p}}{(1-p)(2-p)}-
+\frac{y\,\hat{y}^{1-p}_i}{1-p}+\frac{\hat{y}^{2-p}_i}{2-p}\right), &
+\text{otherwise} \end{cases}\end{split}\\]
+
+Tweedie deviance is a homogeneous function of degree `2-power`. Thus, Gamma
+distribution with `power=2` means that simultaneously scaling `y_true` and
+`y_pred` has no effect on the deviance. For Poisson distribution `power=1` the
+deviance scales linearly, and for Normal distribution (`power=0`),
+quadratically. In general, the higher `power` the less weight is given to
+extreme deviations between true and predicted targets.
+
+For instance, let’s compare the two predictions 1.0 and 100 that are both 50%
+of their corresponding true value.
+
+The mean squared error (`power=0`) is very sensitive to the prediction
+difference of the second point,:
+
+    
+    >>> from sklearn.metrics import mean_tweedie_deviance
+    >>> mean_tweedie_deviance([1.0], [1.5], power=0)
+    0.25
+    >>> mean_tweedie_deviance([100.], [150.], power=0)
+    2500.0
+    
+If we increase `power` to 1,:
+
+    
+    >>> mean_tweedie_deviance([1.0], [1.5], power=1)
+    0.18...
+    >>> mean_tweedie_deviance([100.], [150.], power=1)
+    18.9...
+    
+the difference in errors decreases. Finally, by setting, `power=2`:
+
+    
+    >>> mean_tweedie_deviance([1.0], [1.5], power=2)
+    0.14...
+    >>> mean_tweedie_deviance([100.], [150.], power=2)
+    0.14...
+    
+we would get identical errors. The deviance when `power=2` is thus only
+sensitive to relative errors.
+
+##  3.3.5. Clustering metrics
+
+The `sklearn.metrics` module implements several loss, score, and utility
+functions. For more information see the Clustering performance evaluation
+section for instance clustering, and Biclustering evaluation for biclustering.
+
+##  3.3.6. Dummy estimators
+
+When doing supervised learning, a simple sanity check consists of comparing
+one’s estimator against simple rules of thumb. `DummyClassifier` implements
+several such simple strategies for classification:
+
+  * `stratified` generates random predictions by respecting the training set class distribution.
+  * `most_frequent` always predicts the most frequent label in the training set.
+  * `prior` always predicts the class that maximizes the class prior (like `most_frequent`) and `predict_proba` returns the class prior.
+  * `uniform` generates predictions uniformly at random.
+  * `constant always predicts a constant label that is provided by the user.`
+    
+A major motivation of this method is F1-scoring, when the positive class is in
+the minority.
+
+Note that with all these strategies, the `predict` method completely ignores
+the input data!
+
+To illustrate `DummyClassifier`, first let’s create an imbalanced dataset:
+
+    
+    >>> from sklearn.datasets import load_iris
+    >>> from sklearn.model_selection import train_test_split
+    >>> X, y = load_iris(return_X_y=True)
+    >>> y[y != 1] = -1
+    >>> X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+    
+Next, let’s compare the accuracy of `SVC` and `most_frequent`:
+
+    
+    >>> from sklearn.dummy import DummyClassifier
+    >>> from sklearn.svm import SVC
+    >>> clf = SVC(kernel='linear', C=1).fit(X_train, y_train)
+    >>> clf.score(X_test, y_test)
+    0.63...
+    >>> clf = DummyClassifier(strategy='most_frequent', random_state=0)
+    >>> clf.fit(X_train, y_train)
+    DummyClassifier(random_state=0, strategy='most_frequent')
+    >>> clf.score(X_test, y_test)
+    0.57...
+    
+We see that `SVC` doesn’t do much better than a dummy classifier. Now, let’s
+change the kernel:
+
+    
+    >>> clf = SVC(kernel='rbf', C=1).fit(X_train, y_train)
+    >>> clf.score(X_test, y_test)
+    0.94...
+    
+We see that the accuracy was boosted to almost 100%. A cross validation
+strategy is recommended for a better estimate of the accuracy, if it is not
+too CPU costly. For more information see the Cross-validation: evaluating
+estimator performance section. Moreover if you want to optimize over the
+parameter space, it is highly recommended to use an appropriate methodology;
+see the Tuning the hyper-parameters of an estimator section for details.
+
+More generally, when the accuracy of a classifier is too close to random, it
+probably means that something went wrong: features are not helpful, a
+hyperparameter is not correctly tuned, the classifier is suffering from class
+imbalance, etc…
+
+`DummyRegressor` also implements four simple rules of thumb for regression:
+
+  * `mean` always predicts the mean of the training targets.
+  * `median` always predicts the median of the training targets.
+  * `quantile` always predicts a user provided quantile of the training targets.
+  * `constant` always predicts a constant value that is provided by the user.
+
+In all these strategies, the `predict` method completely ignores the input
+data.
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-learn.org/0.24/modules/model_evaluation.html
+

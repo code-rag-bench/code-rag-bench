@@ -1,0 +1,104 @@
+<h1 id="cryptographic-signing">Cryptographic signing</h1> <p id="s-module-django.core.signing">The golden rule of web application security is to never trust data from untrusted sources. Sometimes it can be useful to pass data through an untrusted medium. Cryptographically signed values can be passed through an untrusted channel safe in the knowledge that any tampering will be detected.</p> <p>Django provides both a low-level API for signing values and a high-level API for setting and reading signed cookies, one of the most common uses of signing in web applications.</p> <p>You may also find signing useful for the following:</p> <ul class="simple"> <li>Generating “recover my account” URLs for sending to users who have lost their password.</li> <li>Ensuring data stored in hidden form fields has not been tampered with.</li> <li>Generating one-time secret URLs for allowing temporary access to a protected resource, for example a downloadable file that a user has paid for.</li> </ul>  <h2 id="protecting-the-secret-key">Protecting the <code>SECRET_KEY</code>
+</h2> <p id="s-protecting-the-secret-key">When you create a new Django project using <a class="reference internal" href="../ref/django-admin#django-admin-startproject"><code>startproject</code></a>, the <code>settings.py</code> file is generated automatically and gets a random <a class="reference internal" href="../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a> value. This value is the key to securing signed data – it is vital you keep this secure, or attackers could use it to generate their own signed values.</p>   <h2 id="using-the-low-level-api">Using the low-level API</h2> <p id="s-using-the-low-level-api">Django’s signing methods live in the <code>django.core.signing</code> module. To sign a value, first instantiate a <code>Signer</code> instance:</p> <pre data-language="python">&gt;&gt;&gt; from django.core.signing import Signer
+&gt;&gt;&gt; signer = Signer()
+&gt;&gt;&gt; value = signer.sign('My string')
+&gt;&gt;&gt; value
+'My string:GdMGD6HNQ_qdgxYP8yBZAdAIV1w'
+</pre> <p>The signature is appended to the end of the string, following the colon. You can retrieve the original value using the <code>unsign</code> method:</p> <pre data-language="python">&gt;&gt;&gt; original = signer.unsign(value)
+&gt;&gt;&gt; original
+'My string'
+</pre> <p>If you pass a non-string value to <code>sign</code>, the value will be forced to string before being signed, and the <code>unsign</code> result will give you that string value:</p> <pre data-language="python">&gt;&gt;&gt; signed = signer.sign(2.5)
+&gt;&gt;&gt; original = signer.unsign(signed)
+&gt;&gt;&gt; original
+'2.5'
+</pre> <p>If you wish to protect a list, tuple, or dictionary you can do so using the <code>sign_object()</code> and <code>unsign_object()</code> methods:</p> <pre data-language="python">&gt;&gt;&gt; signed_obj = signer.sign_object({'message': 'Hello!'})
+&gt;&gt;&gt; signed_obj
+'eyJtZXNzYWdlIjoiSGVsbG8hIn0:Xdc-mOFDjs22KsQAqfVfi8PQSPdo3ckWJxPWwQOFhR4'
+&gt;&gt;&gt; obj = signer.unsign_object(signed_obj)
+&gt;&gt;&gt; obj
+{'message': 'Hello!'}
+</pre> <p>See <a class="reference internal" href="#signing-complex-data"><span class="std std-ref">Protecting complex data structures</span></a> for more details.</p> <p>If the signature or value have been altered in any way, a <code>django.core.signing.BadSignature</code> exception will be raised:</p> <pre data-language="python">&gt;&gt;&gt; from django.core import signing
+&gt;&gt;&gt; value += 'm'
+&gt;&gt;&gt; try:
+...    original = signer.unsign(value)
+... except signing.BadSignature:
+...    print("Tampering detected!")
+</pre> <p>By default, the <code>Signer</code> class uses the <a class="reference internal" href="../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a> setting to generate signatures. You can use a different secret by passing it to the <code>Signer</code> constructor:</p> <pre data-language="python">&gt;&gt;&gt; signer = Signer('my-other-secret')
+&gt;&gt;&gt; value = signer.sign('My string')
+&gt;&gt;&gt; value
+'My string:EkfQJafvGyiofrdGnuthdxImIJw'
+</pre> <dl class="class"> <dt id="django.core.signing.Signer">
+<code>class Signer(key=None, sep=':', salt=None, algorithm=None)</code> </dt> <dd>
+<p>Returns a signer which uses <code>key</code> to generate signatures and <code>sep</code> to separate values. <code>sep</code> cannot be in the <a class="rfc reference external" href="https://tools.ietf.org/html/rfc4648.html#section-5" id="index-0"><strong>URL safe base64 alphabet</strong></a>. This alphabet contains alphanumeric characters, hyphens, and underscores. <code>algorithm</code> must be an algorithm supported by <a class="reference external" href="https://docs.python.org/3/library/hashlib.html#module-hashlib" title="(in Python v3.10)"><code>hashlib</code></a>, it defaults to <code>'sha256'</code>.</p> </dd>
+</dl> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>sign_object()</code> and <code>unsign_object()</code> methods were added.</p> </div>  <h3 id="using-the-salt-argument">Using the <code>salt</code> argument</h3> <p id="s-using-the-salt-argument">If you do not wish for every occurrence of a particular string to have the same signature hash, you can use the optional <code>salt</code> argument to the <code>Signer</code> class. Using a salt will seed the signing hash function with both the salt and your <a class="reference internal" href="../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; signer = Signer()
+&gt;&gt;&gt; signer.sign('My string')
+'My string:GdMGD6HNQ_qdgxYP8yBZAdAIV1w'
+&gt;&gt;&gt; signer.sign_object({'message': 'Hello!'})
+'eyJtZXNzYWdlIjoiSGVsbG8hIn0:Xdc-mOFDjs22KsQAqfVfi8PQSPdo3ckWJxPWwQOFhR4'
+&gt;&gt;&gt; signer = Signer(salt='extra')
+&gt;&gt;&gt; signer.sign('My string')
+'My string:Ee7vGi-ING6n02gkcJ-QLHg6vFw'
+&gt;&gt;&gt; signer.unsign('My string:Ee7vGi-ING6n02gkcJ-QLHg6vFw')
+'My string'
+&gt;&gt;&gt; signer.sign_object({'message': 'Hello!'})
+'eyJtZXNzYWdlIjoiSGVsbG8hIn0:-UWSLCE-oUAHzhkHviYz3SOZYBjFKllEOyVZNuUtM-I'
+&gt;&gt;&gt; signer.unsign_object('eyJtZXNzYWdlIjoiSGVsbG8hIn0:-UWSLCE-oUAHzhkHviYz3SOZYBjFKllEOyVZNuUtM-I')
+{'message': 'Hello!'}
+</pre> <p>Using salt in this way puts the different signatures into different namespaces. A signature that comes from one namespace (a particular salt value) cannot be used to validate the same plaintext string in a different namespace that is using a different salt setting. The result is to prevent an attacker from using a signed string generated in one place in the code as input to another piece of code that is generating (and verifying) signatures using a different salt.</p> <p>Unlike your <a class="reference internal" href="../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a>, your salt argument does not need to stay secret.</p> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>sign_object()</code> and <code>unsign_object()</code> methods were added.</p> </div>   <h3 id="verifying-timestamped-values">Verifying timestamped values</h3> <p id="s-verifying-timestamped-values"><code>TimestampSigner</code> is a subclass of <a class="reference internal" href="#django.core.signing.Signer" title="django.core.signing.Signer"><code>Signer</code></a> that appends a signed timestamp to the value. This allows you to confirm that a signed value was created within a specified period of time:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; from django.core.signing import TimestampSigner
+&gt;&gt;&gt; signer = TimestampSigner()
+&gt;&gt;&gt; value = signer.sign('hello')
+&gt;&gt;&gt; value
+'hello:1NMg5H:oPVuCqlJWmChm1rA2lyTUtelC-c'
+&gt;&gt;&gt; signer.unsign(value)
+'hello'
+&gt;&gt;&gt; signer.unsign(value, max_age=10)
+...
+SignatureExpired: Signature age 15.5289158821 &gt; 10 seconds
+&gt;&gt;&gt; signer.unsign(value, max_age=20)
+'hello'
+&gt;&gt;&gt; signer.unsign(value, max_age=timedelta(seconds=20))
+'hello'
+</pre> <dl class="class"> <dt id="django.core.signing.TimestampSigner">
+<code>class TimestampSigner(key=None, sep=':', salt=None, algorithm='sha256')</code> </dt> <dd>
+<dl class="method"> <dt id="django.core.signing.TimestampSigner.sign">
+<code>sign(value)</code> </dt> <dd>
+<p>Sign <code>value</code> and append current timestamp to it.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.signing.TimestampSigner.unsign">
+<code>unsign(value, max_age=None)</code> </dt> <dd>
+<p>Checks if <code>value</code> was signed less than <code>max_age</code> seconds ago, otherwise raises <code>SignatureExpired</code>. The <code>max_age</code> parameter can accept an integer or a <a class="reference external" href="https://docs.python.org/3/library/datetime.html#datetime.timedelta" title="(in Python v3.10)"><code>datetime.timedelta</code></a> object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.signing.TimestampSigner.sign_object">
+<code>sign_object(obj, serializer=JSONSerializer, compress=False)</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 3.2.</span> </div> <p>Encode, optionally compress, append current timestamp, and sign complex data structure (e.g. list, tuple, or dictionary).</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.signing.TimestampSigner.unsign_object">
+<code>unsign_object(signed_obj, serializer=JSONSerializer, max_age=None)</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 3.2.</span> </div> <p>Checks if <code>signed_obj</code> was signed less than <code>max_age</code> seconds ago, otherwise raises <code>SignatureExpired</code>. The <code>max_age</code> parameter can accept an integer or a <a class="reference external" href="https://docs.python.org/3/library/datetime.html#datetime.timedelta" title="(in Python v3.10)"><code>datetime.timedelta</code></a> object.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="signing-complex-data">Protecting complex data structures</h3> <p id="s-protecting-complex-data-structures">If you wish to protect a list, tuple or dictionary you can do so using the <code>Signer.sign_object()</code> and <code>unsign_object()</code> methods, or signing module’s <code>dumps()</code> or <code>loads()</code> functions (which are shortcuts for <code>TimestampSigner(salt='django.core.signing').sign_object()/unsign_object()</code>). These use JSON serialization under the hood. JSON ensures that even if your <a class="reference internal" href="../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a> is stolen an attacker will not be able to execute arbitrary commands by exploiting the pickle format:</p> <pre data-language="python">&gt;&gt;&gt; from django.core import signing
+&gt;&gt;&gt; signer = signing.TimestampSigner()
+&gt;&gt;&gt; value = signer.sign_object({'foo': 'bar'})
+&gt;&gt;&gt; value
+'eyJmb28iOiJiYXIifQ:1kx6R3:D4qGKiptAqo5QW9iv4eNLc6xl4RwiFfes6oOcYhkYnc'
+&gt;&gt;&gt; signer.unsign_object(value)
+{'foo': 'bar'}
+&gt;&gt;&gt; value = signing.dumps({'foo': 'bar'})
+&gt;&gt;&gt; value
+'eyJmb28iOiJiYXIifQ:1kx6Rf:LBB39RQmME-SRvilheUe5EmPYRbuDBgQp2tCAi7KGLk'
+&gt;&gt;&gt; signing.loads(value)
+{'foo': 'bar'}
+</pre> <p>Because of the nature of JSON (there is no native distinction between lists and tuples) if you pass in a tuple, you will get a list from <code>signing.loads(object)</code>:</p> <pre data-language="python">&gt;&gt;&gt; from django.core import signing
+&gt;&gt;&gt; value = signing.dumps(('a','b','c'))
+&gt;&gt;&gt; signing.loads(value)
+['a', 'b', 'c']
+</pre> <dl class="function"> <dt id="django.core.signing.dumps">
+<code>dumps(obj, key=None, salt='django.core.signing', serializer=JSONSerializer, compress=False)</code> </dt> <dd>
+<p>Returns URL-safe, signed base64 compressed JSON string. Serialized object is signed using <a class="reference internal" href="#django.core.signing.TimestampSigner" title="django.core.signing.TimestampSigner"><code>TimestampSigner</code></a>.</p> </dd>
+</dl> <dl class="function"> <dt id="django.core.signing.loads">
+<code>loads(string, key=None, salt='django.core.signing', serializer=JSONSerializer, max_age=None)</code> </dt> <dd>
+<p>Reverse of <code>dumps()</code>, raises <code>BadSignature</code> if signature fails. Checks <code>max_age</code> (in seconds) if given.</p> </dd>
+</dl> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>sign_object()</code> and <code>unsign_object()</code> methods were added.</p> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/signing/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/signing/</a>
+  </p>
+</div>

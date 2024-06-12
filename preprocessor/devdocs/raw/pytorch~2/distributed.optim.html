@@ -1,0 +1,155 @@
+<h1 id="distributed-optimizers">Distributed Optimizers</h1> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Distributed optimizer is not currently supported when using CUDA tensors</p> </div> <p id="module-torch.distributed.optim"><a class="reference internal" href="#module-torch.distributed.optim" title="torch.distributed.optim"><code>torch.distributed.optim</code></a> exposes DistributedOptimizer, which takes a list of remote parameters (<code>RRef</code>) and runs the optimizer locally on the workers where the parameters live. The distributed optimizer can use any of the local optimizer <a class="reference internal" href="optim#optimizer-algorithms"><span class="std std-ref">Base class</span></a> to apply the gradients on each worker.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.optim.DistributedOptimizer">
+<code>class torch.distributed.optim.DistributedOptimizer(optimizer_class, params_rref, *args, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/optimizer.html#DistributedOptimizer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>DistributedOptimizer takes remote references to parameters scattered across workers and applies the given optimizer locally for each parameter.</p> <p>This class uses <a class="reference internal" href="rpc#torch.distributed.autograd.get_gradients" title="torch.distributed.autograd.get_gradients"><code>get_gradients()</code></a> in order to retrieve the gradients for specific parameters.</p> <p>Concurrent calls to <a class="reference internal" href="#torch.distributed.optim.DistributedOptimizer.step" title="torch.distributed.optim.DistributedOptimizer.step"><code>step()</code></a>, either from the same or different clients, will be serialized on each worker – as each worker’s optimizer can only work on one set of gradients at a time. However, there is no guarantee that the full forward-backward-optimizer sequence will execute for one client at a time. This means that the gradients being applied may not correspond to the latest forward pass executed on a given worker. Also, there is no guaranteed ordering across workers.</p> <p><code>DistributedOptimizer</code> creates the local optimizer with TorchScript enabled by default, so that optimizer updates are not blocked by the Python Global Interpreter Lock (GIL) in the case of multithreaded training (e.g. Distributed Model Parallel). This feature is currently enabled for most optimizers. You can also follow <a class="reference external" href="https://github.com/pytorch/tutorials/pull/1465">the recipe</a> in PyTorch tutorials to enable TorchScript support for your own custom optimizers.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>optimizer_class</strong> (<a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer">optim.Optimizer</a>) – the class of optimizer to instantiate on each worker.</li> <li>
+<strong>params_rref</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.12)">list</a><em>[</em><em>RRef</em><em>]</em>) – list of RRefs to local or remote parameters to optimize.</li> <li>
+<strong>args</strong> – arguments to pass to the optimizer constructor on each worker.</li> <li>
+<strong>kwargs</strong> – arguments to pass to the optimizer constructor on each worker.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; from torch import optim
+&gt;&gt;&gt; from torch.distributed.optim import DistributedOptimizer
+&gt;&gt;&gt;
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;   # Forward pass.
+&gt;&gt;&gt;   rref1 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 3))
+&gt;&gt;&gt;   rref2 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 1))
+&gt;&gt;&gt;   loss = rref1.to_here() + rref2.to_here()
+&gt;&gt;&gt;
+&gt;&gt;&gt;   # Backward pass.
+&gt;&gt;&gt;   dist_autograd.backward(context_id, [loss.sum()])
+&gt;&gt;&gt;
+&gt;&gt;&gt;   # Optimizer.
+&gt;&gt;&gt;   dist_optim = DistributedOptimizer(
+&gt;&gt;&gt;      optim.SGD,
+&gt;&gt;&gt;      [rref1, rref2],
+&gt;&gt;&gt;      lr=0.05,
+&gt;&gt;&gt;   )
+&gt;&gt;&gt;   dist_optim.step(context_id)
+</pre> </dd> </dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.DistributedOptimizer.step">
+<code>step(context_id)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/optimizer.html#DistributedOptimizer.step"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Performs a single optimization step.</p> <p>This will call <a class="reference internal" href="generated/torch.optim.optimizer.step#torch.optim.Optimizer.step" title="torch.optim.Optimizer.step"><code>torch.optim.Optimizer.step()</code></a> on each worker containing parameters to be optimized, and will block until all workers return. The provided <code>context_id</code> will be used to retrieve the corresponding <a class="reference internal" href="rpc#torch.distributed.autograd.context" title="torch.distributed.autograd.context"><code>context</code></a> that contains the gradients that should be applied to the parameters.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>context_id</strong> – the autograd context id for which we should run the optimizer step.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.optim.PostLocalSGDOptimizer">
+<code>class torch.distributed.optim.PostLocalSGDOptimizer(optim, averager)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/post_localSGD_optimizer.html#PostLocalSGDOptimizer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Wraps an arbitrary <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>torch.optim.Optimizer</code></a> and runs <a class="reference external" href="https://arxiv.org/abs/1808.07217">post-local SGD</a>, This optimizer runs local optimizer at every step. After the warm-up stage, it averages parameters periodically afer the local optimizer is applied.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>optim</strong> (<a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.optimizer.Optimizer">Optimizer</a>) – The local optimizer.</li> <li>
+<strong>averager</strong> (<em>ModelAverager</em>) – A model averager instance to run post-localSGD algorithm.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; import torch.distributed.algorithms.model_averaging.averagers as averagers
+&gt;&gt;&gt; import torch.nn as nn
+&gt;&gt;&gt; from torch.distributed.optim import PostLocalSGDOptimizer
+&gt;&gt;&gt; from torch.distributed.algorithms.ddp_comm_hooks.post_localSGD_hook import (
+&gt;&gt;&gt;   PostLocalSGDState,
+&gt;&gt;&gt;   post_localSGD_hook,
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; model = nn.parallel.DistributedDataParallel(
+&gt;&gt;&gt;    module, device_ids=[rank], output_device=rank
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # Register a post-localSGD communication hook.
+&gt;&gt;&gt; state = PostLocalSGDState(process_group=None, subgroup=None, start_localSGD_iter=100)
+&gt;&gt;&gt; model.register_comm_hook(state, post_localSGD_hook)
+&gt;&gt;&gt;
+&gt;&gt;&gt; # Create a post-localSGD optimizer that wraps a local optimizer.
+&gt;&gt;&gt; # Note that ``warmup_steps`` used in ``PostLocalSGDOptimizer`` must be the same as
+&gt;&gt;&gt; # ``start_localSGD_iter`` used in ``PostLocalSGDState``.
+&gt;&gt;&gt; local_optim = torch.optim.SGD(params=model.parameters(), lr=0.01)
+&gt;&gt;&gt; opt = PostLocalSGDOptimizer(
+&gt;&gt;&gt;     optim=local_optim,
+&gt;&gt;&gt;     averager=averagers.PeriodicModelAverager(period=4, warmup_steps=100)
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # In the first 100 steps, DDP runs global gradient averaging at every step.
+&gt;&gt;&gt; # After 100 steps, DDP runs gradient averaging within each subgroup (intra-node by default),
+&gt;&gt;&gt; # and post-localSGD optimizer runs global model averaging every 4 steps after applying the local optimizer.
+&gt;&gt;&gt; for step in range(0, 200):
+&gt;&gt;&gt;    opt.zero_grad()
+&gt;&gt;&gt;    loss = loss_fn(output, labels)
+&gt;&gt;&gt;    loss.backward()
+&gt;&gt;&gt;    opt.step()
+</pre> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.PostLocalSGDOptimizer.load_state_dict">
+<code>load_state_dict(state_dict)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/post_localSGD_optimizer.html#PostLocalSGDOptimizer.load_state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is the same as <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>torch.optim.Optimizer</code></a> <a class="reference internal" href="#torch.distributed.optim.PostLocalSGDOptimizer.load_state_dict" title="torch.distributed.optim.PostLocalSGDOptimizer.load_state_dict"><code>load_state_dict()</code></a>, but also restores model averager’s step value to the one saved in the provided <code>state_dict</code>.</p> <p>If there is no <code>"step"</code> entry in <code>state_dict</code>, it will raise a warning and initialize the model averager’s step to 0.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.PostLocalSGDOptimizer.state_dict">
+<code>state_dict()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/post_localSGD_optimizer.html#PostLocalSGDOptimizer.state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is the same as <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>torch.optim.Optimizer</code></a> <a class="reference internal" href="#torch.distributed.optim.PostLocalSGDOptimizer.state_dict" title="torch.distributed.optim.PostLocalSGDOptimizer.state_dict"><code>state_dict()</code></a>, but adds an extra entry to record model averager’s step to the checkpoint to ensure reload does not cause unnecessary warm up again.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.PostLocalSGDOptimizer.step">
+<code>step()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/post_localSGD_optimizer.html#PostLocalSGDOptimizer.step"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Performs a single optimization step (parameter update).</p> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer">
+<code>class torch.distributed.optim.ZeroRedundancyOptimizer(params, optimizer_class, process_group=None, parameters_as_bucket_view=False, overlap_with_ddp=False, **defaults)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This class wraps an arbitrary <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>optim.Optimizer</code></a> and shards its states across ranks in the group as described by <a class="reference external" href="https://arxiv.org/abs/1910.02054">ZeRO</a>. The local optimizer instance in each rank is only responsible for updating approximately <code>1 / world_size</code> parameters and hence only needs to keep <code>1 / world_size</code> optimizer states. After parameters are updated locally, each rank will broadcast its parameters to all other peers to keep all model replicas in the same state. <code>ZeroRedundancyOptimizer</code> can be used in conjunction with <a class="reference internal" href="generated/torch.nn.parallel.distributeddataparallel#torch.nn.parallel.DistributedDataParallel" title="torch.nn.parallel.DistributedDataParallel"><code>torch.nn.parallel.DistributedDataParallel</code></a> to reduce per-rank peak memory consumption.</p> <p><code>ZeroRedundancyOptimizer</code> uses a sorted-greedy algorithm to pack a number of parameters at each rank. Each parameter belongs to a single rank and is not divided among ranks. The partition is arbitrary and might not match the the parameter registration or usage order.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>params</strong> (<code>Iterable</code>) – an <code>Iterable</code> of <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> s or <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)"><code>dict</code></a> s giving all parameters, which will be sharded across ranks.</p> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>optimizer_class</strong> (<code>torch.nn.Optimizer</code>) – the class of the local optimizer.</li> <li>
+<strong>process_group</strong> (<code>ProcessGroup</code>, optional) – <code>torch.distributed</code> <code>ProcessGroup</code> (default: <code>dist.group.WORLD</code> initialized by <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>torch.distributed.init_process_group()</code></a>).</li> <li>
+<strong>parameters_as_bucket_view</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – if <code>True</code>, parameters are packed into buckets to speed up communication, and <code>param.data</code> fields point to bucket views at different offsets; if <code>False</code>, each individual parameter is communicated separately, and each <code>params.data</code> stays intact (default: <code>False</code>).</li> <li>
+<strong>overlap_with_ddp</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – if <code>True</code>, <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer.step" title="torch.distributed.optim.ZeroRedundancyOptimizer.step"><code>step()</code></a> is overlapped with <code>DistributedDataParallel</code> ‘s gradient synchronization; this requires (1) either a functional optimizer for the <code>optimizer_class</code> argument or one with a functional equivalent and (2) registering a DDP communication hook constructed from one of the functions in <code>ddp_zero_hook.py</code>; parameters are packed into buckets matching those in <code>DistributedDataParallel</code>, meaning that the <code>parameters_as_bucket_view</code> argument is ignored. If <code>False</code>, <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer.step" title="torch.distributed.optim.ZeroRedundancyOptimizer.step"><code>step()</code></a> runs disjointly after the backward pass (per normal). (default: <code>False</code>)</li> <li>
+<strong>**defaults</strong> – any trailing arguments, which are forwarded to the local optimizer.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import torch.nn as nn
+&gt;&gt;&gt; from torch.distributed.optim import ZeroRedundancyOptimizer
+&gt;&gt;&gt; from torch.nn.parallel import DistributedDataParallel as DDP
+&gt;&gt;&gt; model = nn.Sequential(*[nn.Linear(2000, 2000).to(rank) for _ in range(20)])
+&gt;&gt;&gt; ddp = DDP(model, device_ids=[rank])
+&gt;&gt;&gt; opt = ZeroRedundancyOptimizer(
+&gt;&gt;&gt;     ddp.parameters(),
+&gt;&gt;&gt;     optimizer_class=torch.optim.Adam,
+&gt;&gt;&gt;     lr=0.01
+&gt;&gt;&gt; )
+&gt;&gt;&gt; ddp(inputs).sum().backward()
+&gt;&gt;&gt; opt.step()
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Currently, <code>ZeroRedundancyOptimizer</code> requires that all of the passed-in parameters are the same dense type.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>If you pass <code>overlap_with_ddp=True</code>, be wary of the following: Given the way that overlapping <code>DistributedDataParallel</code> with <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer" title="torch.distributed.optim.ZeroRedundancyOptimizer"><code>ZeroRedundancyOptimizer</code></a> is currently implemented, the first two or three training iterations do not perform parameter updates in the optimizer step, depending on if <code>static_graph=False</code> or <code>static_graph=True</code>, respectively. This is because it needs information about the gradient bucketing strategy used by <code>DistributedDataParallel</code>, which is not finalized until the second forward pass if <code>static_graph=False</code> or until the third forward pass if <code>static_graph=True</code>. To adjust for this, one option is to prepend dummy inputs.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>ZeroRedundancyOptimizer is experimental and subject to change.</p> </div> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.add_param_group">
+<code>add_param_group(param_group)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.add_param_group"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Add a parameter group to the <code>Optimizer</code> ‘s <code>param_groups</code>.</p> <p>This can be useful when fine tuning a pre-trained network, as frozen layers can be made trainable and added to the <code>Optimizer</code> as training progresses.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>param_group</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)">dict</a>) – specifies the parameters to be optimized and group-specific optimization options.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This method handles updating the shards on all partitions but needs to be called on all ranks. Calling this on a subset of the ranks will cause the training to hang because communication primitives are called depending on the managed parameters and expect all the ranks to participate on the same set of parameters.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.consolidate_state_dict">
+<code>consolidate_state_dict(to=0)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.consolidate_state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Consolidate a list of <code>state_dict</code> s (one per rank) on the target rank.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>to</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – the rank that receives the optimizer states (default: 0).</p> </dd> <dt class="field-even">Raises</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.12)"><strong>RuntimeError</strong></a> – if <code>overlap_with_ddp=True</code> and this method is called before this <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer" title="torch.distributed.optim.ZeroRedundancyOptimizer"><code>ZeroRedundancyOptimizer</code></a> instance has been fully initialized, which happens once <code>DistributedDataParallel</code> gradient buckets have been rebuilt.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This needs to be called on all ranks.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.join_hook">
+<code>join_hook(**kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.join_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the ZeRO join hook, which enables training on uneven inputs by shadowing the collective communications in the optimizer step.</p> <p>Gradients must be properly set before this hook is called.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)">dict</a>) – a <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)"><code>dict</code></a> containing any keyword arguments to modify the behavior of the join hook at run time; all <code>Joinable</code> instances sharing the same join context manager are forwarded the same value for <code>kwargs</code>.</p> </dd> </dl> <p>This hook does not support any keyword arguments; i.e. <code>kwargs</code> is unused.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.load_state_dict">
+<code>load_state_dict(state_dict)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.load_state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Load the state pertaining to the given rank from the input <code>state_dict</code>, updating the local optimizer as needed.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>state_dict</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)">dict</a>) – optimizer state; should be an object returned from a call to <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer.state_dict" title="torch.distributed.optim.ZeroRedundancyOptimizer.state_dict"><code>state_dict()</code></a>.</p> </dd> <dt class="field-even">Raises</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.12)"><strong>RuntimeError</strong></a> – if <code>overlap_with_ddp=True</code> and this method is called before this <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer" title="torch.distributed.optim.ZeroRedundancyOptimizer"><code>ZeroRedundancyOptimizer</code></a> instance has been fully initialized, which happens once <code>DistributedDataParallel</code> gradient buckets have been rebuilt.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.state_dict">
+<code>state_dict()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the last global optimizer state known to this rank.</p> <dl class="field-list simple"> <dt class="field-odd">Raises</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.12)"><strong>RuntimeError</strong></a> – if <code>overlap_with_ddp=True</code> and this method is called before this <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer" title="torch.distributed.optim.ZeroRedundancyOptimizer"><code>ZeroRedundancyOptimizer</code></a> instance has been fully initialized, which happens once <code>DistributedDataParallel</code> gradient buckets have been rebuilt; or if this method is called without a preceding call to <a class="reference internal" href="#torch.distributed.optim.ZeroRedundancyOptimizer.consolidate_state_dict" title="torch.distributed.optim.ZeroRedundancyOptimizer.consolidate_state_dict"><code>consolidate_state_dict()</code></a>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.optim.ZeroRedundancyOptimizer.step">
+<code>step(closure=None, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/optim/zero_redundancy_optimizer.html#ZeroRedundancyOptimizer.step"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Performs a single optimizer step and syncs parameters across all ranks.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>closure</strong> (<em>Callable</em>) – a closure that re-evaluates the model and returns the loss; optional for most optimizers.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Optional loss depending on the underlying local optimizer.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a>[<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>]</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/distributed.optim.html" class="_attribution-link">https://pytorch.org/docs/2.1/distributed.optim.html</a>
+  </p>
+</div>

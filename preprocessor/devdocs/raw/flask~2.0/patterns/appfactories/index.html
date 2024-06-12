@@ -1,0 +1,67 @@
+<h1>Application Factories</h1> <p>If you are already using packages and blueprints for your application (<a class="reference internal" href="../../blueprints/index"><span class="doc">Modular Applications with Blueprints</span></a>) there are a couple of really nice ways to further improve the experience. A common pattern is creating the application object when the blueprint is imported. But if you move the creation of this object into a function, you can then create multiple instances of this app later.</p> <p>So why would you want to do this?</p> <ol class="arabic simple"> <li>Testing. You can have instances of the application with different settings to test every case.</li> <li>Multiple instances. Imagine you want to run different versions of the same application. Of course you could have multiple instances with different configs set up in your webserver, but if you use factories, you can have multiple instances of the same application running in the same application process which can be handy.</li> </ol> <p>So how would you then actually implement that?</p>  <h2 id="basic-factories">Basic Factories</h2> <p>The idea is to set up the application in a function. Like this:</p> <pre data-language="python">def create_app(config_filename):
+    app = Flask(__name__)
+    app.config.from_pyfile(config_filename)
+
+    from yourapplication.model import db
+    db.init_app(app)
+
+    from yourapplication.views.admin import admin
+    from yourapplication.views.frontend import frontend
+    app.register_blueprint(admin)
+    app.register_blueprint(frontend)
+
+    return app
+</pre> <p>The downside is that you cannot use the application object in the blueprints at import time. You can however use it from within a request. How do you get access to the application with the config? Use <a class="reference internal" href="../../api/index#flask.current_app" title="flask.current_app"><code>current_app</code></a>:</p> <pre data-language="python">from flask import current_app, Blueprint, render_template
+admin = Blueprint('admin', __name__, url_prefix='/admin')
+
+@admin.route('/')
+def index():
+    return render_template(current_app.config['INDEX_TEMPLATE'])
+</pre> <p>Here we look up the name of a template in the config.</p>   <h2 id="factories-extensions">Factories &amp; Extensions</h2> <p>It’s preferable to create your extensions and app factories so that the extension object does not initially get bound to the application.</p> <p>Using <a class="reference external" href="https://flask-sqlalchemy.palletsprojects.com/">Flask-SQLAlchemy</a>, as an example, you should not do something along those lines:</p> <pre data-language="python">def create_app(config_filename):
+    app = Flask(__name__)
+    app.config.from_pyfile(config_filename)
+
+    db = SQLAlchemy(app)
+</pre> <p>But, rather, in model.py (or equivalent):</p> <pre data-language="python">db = SQLAlchemy()
+</pre> <p>and in your application.py (or equivalent):</p> <pre data-language="python">def create_app(config_filename):
+    app = Flask(__name__)
+    app.config.from_pyfile(config_filename)
+
+    from yourapplication.model import db
+    db.init_app(app)
+</pre> <p>Using this design pattern, no application-specific state is stored on the extension object, so one extension object can be used for multiple apps. For more information about the design of extensions refer to <a class="reference internal" href="https://flask.palletsprojects.com/en/2.0.x/extensiondev/"><span class="doc">Flask Extension Development</span></a>.</p>   <h2 id="using-applications">Using Applications</h2> <p>To run such an application, you can use the <strong class="command">flask</strong> command:</p> <div class="sphinx-tabs docutils container"> <div aria-label="Tabbed content" class="closeable" role="tablist">
+<button aria-controls="panel-0-QmFzaA==" aria-selected="true" class="sphinx-tabs-tab group-tab" id="tab-0-QmFzaA==" name="QmFzaA==" role="tab" tabindex="0">Bash</button><button aria-controls="panel-0-Q01E" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-0-Q01E" name="Q01E" role="tab" tabindex="-1">CMD</button><button aria-controls="panel-0-UG93ZXJzaGVsbA==" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-0-UG93ZXJzaGVsbA==" name="UG93ZXJzaGVsbA==" role="tab" tabindex="-1">Powershell</button>
+</div>
+<div aria-labelledby="tab-0-QmFzaA==" class="sphinx-tabs-panel group-tab" id="panel-0-QmFzaA==" name="QmFzaA==" role="tabpanel" tabindex="0">
+<pre data-language="text">$ export FLASK_APP=myapp
+$ flask run
+</pre> </div>
+<div aria-labelledby="tab-0-Q01E" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-0-Q01E" name="Q01E" role="tabpanel" tabindex="0">
+<pre data-language="text">&gt; set FLASK_APP=myapp
+&gt; flask run
+</pre> </div>
+<div aria-labelledby="tab-0-UG93ZXJzaGVsbA==" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-0-UG93ZXJzaGVsbA==" name="UG93ZXJzaGVsbA==" role="tabpanel" tabindex="0">
+<pre data-language="text">&gt; $env:FLASK_APP = "myapp"
+&gt; flask run
+</pre> </div>
+</div> <p>Flask will automatically detect the factory (<code>create_app</code> or <code>make_app</code>) in <code>myapp</code>. You can also pass arguments to the factory like this:</p> <div class="sphinx-tabs docutils container"> <div aria-label="Tabbed content" class="closeable" role="tablist">
+<button aria-controls="panel-1-QmFzaA==" aria-selected="true" class="sphinx-tabs-tab group-tab" id="tab-1-QmFzaA==" name="QmFzaA==" role="tab" tabindex="0">Bash</button><button aria-controls="panel-1-Q01E" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-1-Q01E" name="Q01E" role="tab" tabindex="-1">CMD</button><button aria-controls="panel-1-UG93ZXJzaGVsbA==" aria-selected="false" class="sphinx-tabs-tab group-tab" id="tab-1-UG93ZXJzaGVsbA==" name="UG93ZXJzaGVsbA==" role="tab" tabindex="-1">Powershell</button>
+</div>
+<div aria-labelledby="tab-1-QmFzaA==" class="sphinx-tabs-panel group-tab" id="panel-1-QmFzaA==" name="QmFzaA==" role="tabpanel" tabindex="0">
+<pre data-language="text">$ export FLASK_APP="myapp:create_app('dev')"
+$ flask run
+</pre> </div>
+<div aria-labelledby="tab-1-Q01E" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-1-Q01E" name="Q01E" role="tabpanel" tabindex="0">
+<pre data-language="text">&gt; set FLASK_APP="myapp:create_app('dev')"
+&gt; flask run
+</pre> </div>
+<div aria-labelledby="tab-1-UG93ZXJzaGVsbA==" class="sphinx-tabs-panel group-tab" hidden="true" id="panel-1-UG93ZXJzaGVsbA==" name="UG93ZXJzaGVsbA==" role="tabpanel" tabindex="0">
+<pre data-language="text">&gt; $env:FLASK_APP = "myapp:create_app('dev')"
+&gt; flask run
+</pre> </div>
+</div> <p>Then the <code>create_app</code> factory in <code>myapp</code> is called with the string <code>'dev'</code> as the argument. See <a class="reference internal" href="../../cli/index"><span class="doc">Command Line Interface</span></a> for more detail.</p>   <h2 id="factory-improvements">Factory Improvements</h2> <p>The factory function above is not very clever, but you can improve it. The following changes are straightforward to implement:</p> <ol class="arabic simple"> <li>Make it possible to pass in configuration values for unit tests so that you don’t have to create config files on the filesystem.</li> <li>Call a function from a blueprint when the application is setting up so that you have a place to modify attributes of the application (like hooking in before/after request handlers etc.)</li> <li>Add in WSGI middlewares when the application is being created if necessary.</li> </ol><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/appfactories/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/appfactories/</a>
+  </p>
+</div>

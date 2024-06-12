@@ -1,0 +1,404 @@
+<h1 class="devsite-page-title">tf.distribute.MultiWorkerMirroredStrategy</h1>       <p>A distribution strategy for synchronous training on multiple workers.</p> <p>Inherits From: <a href="strategy"><code translate="no" dir="ltr">Strategy</code></a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.distribute.MultiWorkerMirroredStrategy(
+    cluster_resolver=None, communication_options=None
+)
+</pre>  <p>This strategy implements synchronous distributed training across multiple workers, each with potentially multiple GPUs. Similar to <a href="mirroredstrategy"><code translate="no" dir="ltr">tf.distribute.MirroredStrategy</code></a>, it replicates all variables and computations to each local device. The difference is that it uses a distributed collective implementation (e.g. all-reduce), so that multiple workers can work together.</p> <p>You need to launch your program on each worker and configure <code translate="no" dir="ltr">cluster_resolver</code> correctly. For example, if you are using <a href="cluster_resolver/tfconfigclusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.TFConfigClusterResolver</code></a>, each worker needs to have its corresponding <code translate="no" dir="ltr">task_type</code> and <code translate="no" dir="ltr">task_id</code> set in the <code translate="no" dir="ltr">TF_CONFIG</code> environment variable. An example TF_CONFIG on worker-0 of a two worker cluster is:</p> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">TF_CONFIG = '{"cluster": {"worker": ["localhost:12345", "localhost:23456"]}, "task": {"type": "worker", "index": 0} }'
+</pre> <p>Your program runs on each worker as-is. Note that collectives require each worker to participate. All <a href="../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> and non <a href="../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> API may use collectives internally, e.g. checkpointing and saving since reading a <a href="../variable"><code translate="no" dir="ltr">tf.Variable</code></a> with <a href="../variablesynchronization#ON_READ"><code translate="no" dir="ltr">tf.VariableSynchronization.ON_READ</code></a> all-reduces the value. Therefore it's recommended to run exactly the same program on each worker. Dispatching based on <code translate="no" dir="ltr">task_type</code> or <code translate="no" dir="ltr">task_id</code> of the worker is error-prone.</p> <p><code translate="no" dir="ltr">cluster_resolver.num_accelerators()</code> determines the number of GPUs the strategy uses. If it's zero, the strategy uses the CPU. All workers need to use the same number of devices, otherwise the behavior is undefined.</p> <p>This strategy is not intended for TPU. Use <a href="tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a> instead.</p> <p>After setting up TF_CONFIG, using this strategy is similar to using <a href="mirroredstrategy"><code translate="no" dir="ltr">tf.distribute.MirroredStrategy</code></a> and <a href="tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a>.</p> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">strategy = tf.distribute.MultiWorkerMirroredStrategy()
+
+with strategy.scope():
+  model = tf.keras.Sequential([
+    tf.keras.layers.Dense(2, input_shape=(5,)),
+  ])
+  optimizer = tf.keras.optimizers.SGD(learning_rate=0.1)
+
+def dataset_fn(ctx):
+  x = np.random.random((2, 5)).astype(np.float32)
+  y = np.random.randint(2, size=(2, 1))
+  dataset = tf.data.Dataset.from_tensor_slices((x, y))
+  return dataset.repeat().batch(1, drop_remainder=True)
+dist_dataset = strategy.distribute_datasets_from_function(dataset_fn)
+
+model.compile()
+model.fit(dist_dataset)
+</pre> <p>You can also write your own training loop:</p> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">@tf.function
+def train_step(iterator):
+
+  def step_fn(inputs):
+    features, labels = inputs
+    with tf.GradientTape() as tape:
+      logits = model(features, training=True)
+      loss = tf.keras.losses.sparse_categorical_crossentropy(
+          labels, logits)
+
+    grads = tape.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+  strategy.run(step_fn, args=(next(iterator),))
+
+for _ in range(NUM_STEP):
+  train_step(iterator)
+</pre> <p>See <a href="https://www.tensorflow.org/tutorials/distribute/multi_worker_with_keras">Multi-worker training with Keras</a> for a detailed tutorial.</p> <p><strong>Saving</strong></p> <p>You need to save and checkpoint on all workers instead of just one. This is because variables whose synchronization=ON_READ triggers aggregation during saving. It's recommended to save to a different path on each worker to avoid race conditions. Each worker saves the same thing. See <a href="https://www.tensorflow.org/tutorials/distribute/multi_worker_with_keras#model_saving_and_loading">Multi-worker training with Keras</a> tutorial for examples.</p> <p><strong>Known Issues</strong></p> <ul> <li>
+<a href="cluster_resolver/tfconfigclusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.TFConfigClusterResolver</code></a> does not return the correct number of accelerators. The strategy uses all available GPUs if <code translate="no" dir="ltr">cluster_resolver</code> is <a href="cluster_resolver/tfconfigclusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.TFConfigClusterResolver</code></a> or <code translate="no" dir="ltr">None</code>.</li> <li>In eager mode, the strategy needs to be created before calling any other Tensorflow API.</li> </ul>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">cluster_resolver</code> </td> <td> optional <a href="cluster_resolver/clusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.ClusterResolver</code></a>. If <code translate="no" dir="ltr">None</code>, <a href="cluster_resolver/tfconfigclusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.TFConfigClusterResolver</code></a> is used. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">communication_options</code> </td> <td> optional <a href="experimental/communicationoptions"><code translate="no" dir="ltr">tf.distribute.experimental.CommunicationOptions</code></a>. This configures the default options for cross device communications. It can be overridden by options provided to the communication APIs like <a href="replicacontext#all_reduce"><code translate="no" dir="ltr">tf.distribute.ReplicaContext.all_reduce</code></a>. See <a href="experimental/communicationoptions"><code translate="no" dir="ltr">tf.distribute.experimental.CommunicationOptions</code></a> for details. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">cluster_resolver</code> </td> <td> Returns the cluster resolver associated with this strategy. <p>As a multi-worker strategy, <a href="experimental/multiworkermirroredstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.MultiWorkerMirroredStrategy</code></a> provides the associated <a href="cluster_resolver/clusterresolver"><code translate="no" dir="ltr">tf.distribute.cluster_resolver.ClusterResolver</code></a>. If the user provides one in <code translate="no" dir="ltr">__init__</code>, that instance is returned; if the user does not, a default <code translate="no" dir="ltr">TFConfigClusterResolver</code> is provided. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">extended</code> </td> <td> <a href="strategyextended"><code translate="no" dir="ltr">tf.distribute.StrategyExtended</code></a> with additional methods. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">num_replicas_in_sync</code> </td> <td> Returns number of replicas over which gradients are aggregated. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="distribute_datasets_from_function" data-text="distribute_datasets_from_function"><code translate="no" dir="ltr">distribute_datasets_from_function</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1061-L1135">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+distribute_datasets_from_function(
+    dataset_fn, options=None
+)
+</pre> <p>Distributes <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instances created by calls to <code translate="no" dir="ltr">dataset_fn</code>.</p> <p>The argument <code translate="no" dir="ltr">dataset_fn</code> that users pass in is an input function that has a <a href="inputcontext"><code translate="no" dir="ltr">tf.distribute.InputContext</code></a> argument and returns a <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance. It is expected that the returned dataset from <code translate="no" dir="ltr">dataset_fn</code> is already batched by per-replica batch size (i.e. global batch size divided by the number of replicas in sync) and sharded. <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function</code></a> does not batch or shard the <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance returned from the input function. <code translate="no" dir="ltr">dataset_fn</code> will be called on the CPU device of each of the workers and each generates a dataset where every replica on that worker will dequeue one batch of inputs (i.e. if a worker has two replicas, two batches will be dequeued from the <code translate="no" dir="ltr">Dataset</code> every step).</p> <p>This method can be used for several purposes. First, it allows you to specify your own batching and sharding logic. (In contrast, <code translate="no" dir="ltr">tf.distribute.experimental_distribute_dataset</code> does batching and sharding for you.) For example, where <code translate="no" dir="ltr">experimental_distribute_dataset</code> is unable to shard the input files, this method might be used to manually shard the dataset (avoiding the slow fallback behavior in <code translate="no" dir="ltr">experimental_distribute_dataset</code>). In cases where the dataset is infinite, this sharding can be done by creating dataset replicas that differ only in their random seed.</p> <p>The <code translate="no" dir="ltr">dataset_fn</code> should take an <a href="inputcontext"><code translate="no" dir="ltr">tf.distribute.InputContext</code></a> instance where information about batching and input replication can be accessed.</p> <p>You can use <code translate="no" dir="ltr">element_spec</code> property of the <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> returned by this API to query the <a href="../typespec"><code translate="no" dir="ltr">tf.TypeSpec</code></a> of the elements returned by the iterator. This can be used to set the <code translate="no" dir="ltr">input_signature</code> property of a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. Follow <a href="distributeddataset#element_spec"><code translate="no" dir="ltr">tf.distribute.DistributedDataset.element_spec</code></a> to see an example.</p> <aside class="key-point"><strong>Key Point:</strong><span> The <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> returned by <code translate="no" dir="ltr">dataset_fn</code> should have a per-replica batch size, unlike <code translate="no" dir="ltr">experimental_distribute_dataset</code>, which uses the global batch size. This may be computed using <code translate="no" dir="ltr">input_context.get_per_replica_batch_size</code>.</span></aside><blockquote class="note">
+<strong>Note:</strong><span> If you are using TPUStrategy, the order in which the data is processed by the workers when using <a href="strategy#experimental_distribute_dataset"><code translate="no" dir="ltr">tf.distribute.Strategy.experimental_distribute_dataset</code></a> or <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function</code></a> is not guaranteed. This is typically required if you are using <a href="../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> to scale prediction. You can however insert an index for each element in the batch and order outputs accordingly. Refer to <a href="https://www.tensorflow.org/tutorials/distribute/input#caveats">this snippet</a> for an example of how to order outputs.</span>
+</blockquote>
+<blockquote class="note">
+<strong>Note:</strong><span> Stateful dataset transformations are currently not supported with <code translate="no" dir="ltr">tf.distribute.experimental_distribute_dataset</code> or <code translate="no" dir="ltr">tf.distribute.distribute_datasets_from_function</code>. Any stateful ops that the dataset may have are currently ignored. For example, if your dataset has a <code translate="no" dir="ltr">map_fn</code> that uses <a href="../random/uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> to rotate an image, then you have a dataset graph that depends on state (i.e the random seed) on the local machine where the python process is being executed.</span>
+</blockquote> <p>For a tutorial on more usage and properties of this method, refer to the <a href="https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategyexperimental_distribute_datasets_from_function">tutorial on distributed input</a>). If you are interested in last partial batch handling, read <a href="https://www.tensorflow.org/tutorials/distribute/input#partial_batches">this section</a>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">dataset_fn</code> </td> <td> A function taking a <a href="inputcontext"><code translate="no" dir="ltr">tf.distribute.InputContext</code></a> instance and returning a <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">options</code> </td> <td> <a href="inputoptions"><code translate="no" dir="ltr">tf.distribute.InputOptions</code></a> used to control options on how this dataset is distributed. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a>. </td> </tr> 
+</table> <h3 id="experimental_distribute_dataset" data-text="experimental_distribute_dataset"><code translate="no" dir="ltr">experimental_distribute_dataset</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L942-L1059">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+experimental_distribute_dataset(
+    dataset, options=None
+)
+</pre> <p>Creates <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> from <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a>.</p> <p>The returned <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> can be iterated over similar to regular datasets. NOTE: The user cannot add any more transformations to a <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a>. You can only create an iterator or examine the <a href="../typespec"><code translate="no" dir="ltr">tf.TypeSpec</code></a> of the data generated by it. See API docs of <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> to learn more.</p> <p>The following is an example:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 2
+# Passing the devices is optional.
+strategy = tf.distribute.MirroredStrategy(devices=["GPU:0", "GPU:1"])
+# Create a dataset
+dataset = tf.data.Dataset.range(4).batch(global_batch_size)
+# Distribute that dataset
+dist_dataset = strategy.experimental_distribute_dataset(dataset)
+@tf.function
+def replica_fn(input):
+  return input*2
+result = []
+# Iterate over the `tf.distribute.DistributedDataset`
+for x in dist_dataset:
+  # process dataset elements
+  result.append(strategy.run(replica_fn, args=(x,)))
+print(result)
+[PerReplica:{
+  0: &lt;tf.Tensor: shape=(1,), dtype=int64, numpy=array([0])&gt;,
+  1: &lt;tf.Tensor: shape=(1,), dtype=int64, numpy=array([2])&gt;
+}, PerReplica:{
+  0: &lt;tf.Tensor: shape=(1,), dtype=int64, numpy=array([4])&gt;,
+  1: &lt;tf.Tensor: shape=(1,), dtype=int64, numpy=array([6])&gt;
+}]
+</pre> <p>Three key actions happending under the hood of this method are batching, sharding, and prefetching.</p> <p>In the code snippet above, <code translate="no" dir="ltr">dataset</code> is batched by <code translate="no" dir="ltr">global_batch_size</code>, and calling <code translate="no" dir="ltr">experimental_distribute_dataset</code> on it rebatches <code translate="no" dir="ltr">dataset</code> to a new batch size that is equal to the global batch size divided by the number of replicas in sync. We iterate through it using a Pythonic for loop. <code translate="no" dir="ltr">x</code> is a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> containing data for all replicas, and each replica gets data of the new batch size. <a href="strategy#run"><code translate="no" dir="ltr">tf.distribute.Strategy.run</code></a> will take care of feeding the right per-replica data in <code translate="no" dir="ltr">x</code> to the right <code translate="no" dir="ltr">replica_fn</code> executed on each replica.</p> <p>Sharding contains autosharding across multiple workers and within every worker. First, in multi-worker distributed training (i.e. when you use <a href="experimental/multiworkermirroredstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.MultiWorkerMirroredStrategy</code></a> or <a href="tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a>), autosharding a dataset over a set of workers means that each worker is assigned a subset of the entire dataset (if the right <a href="../data/experimental/autoshardpolicy"><code translate="no" dir="ltr">tf.data.experimental.AutoShardPolicy</code></a> is set). This is to ensure that at each step, a global batch size of non-overlapping dataset elements will be processed by each worker. Autosharding has a couple of different options that can be specified using <a href="../data/experimental/distributeoptions"><code translate="no" dir="ltr">tf.data.experimental.DistributeOptions</code></a>. Then, sharding within each worker means the method will split the data among all the worker devices (if more than one a present). This will happen regardless of multi-worker autosharding.</p> <blockquote class="note">
+<strong>Note:</strong><span> for autosharding across multiple workers, the default mode is <a href="../data/experimental/autoshardpolicy#AUTO"><code translate="no" dir="ltr">tf.data.experimental.AutoShardPolicy.AUTO</code></a>. This mode will attempt to shard the input dataset by files if the dataset is being created out of reader datasets (e.g. <a href="../data/tfrecorddataset"><code translate="no" dir="ltr">tf.data.TFRecordDataset</code></a>, <a href="../data/textlinedataset"><code translate="no" dir="ltr">tf.data.TextLineDataset</code></a>, etc.) or otherwise shard the dataset by data, where each of the workers will read the entire dataset and only process the shard assigned to it. However, if you have less than one input file per worker, we suggest that you disable dataset autosharding across workers by setting the <a href="../data/experimental/distributeoptions#auto_shard_policy"><code translate="no" dir="ltr">tf.data.experimental.DistributeOptions.auto_shard_policy</code></a> to be <a href="../data/experimental/autoshardpolicy#OFF"><code translate="no" dir="ltr">tf.data.experimental.AutoShardPolicy.OFF</code></a>.</span>
+</blockquote> <p>By default, this method adds a prefetch transformation at the end of the user provided <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance. The argument to the prefetch transformation which is <code translate="no" dir="ltr">buffer_size</code> is equal to the number of replicas in sync.</p> <p>If the above batch splitting and dataset sharding logic is undesirable, please use <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function</code></a> instead, which does not do any automatic batching or sharding for you.</p> <blockquote class="note">
+<strong>Note:</strong><span> If you are using TPUStrategy, the order in which the data is processed by the workers when using <a href="strategy#experimental_distribute_dataset"><code translate="no" dir="ltr">tf.distribute.Strategy.experimental_distribute_dataset</code></a> or <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function</code></a> is not guaranteed. This is typically required if you are using <a href="../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> to scale prediction. You can however insert an index for each element in the batch and order outputs accordingly. Refer to <a href="https://www.tensorflow.org/tutorials/distribute/input#caveats">this snippet</a> for an example of how to order outputs.</span>
+</blockquote>
+<blockquote class="note">
+<strong>Note:</strong><span> Stateful dataset transformations are currently not supported with <code translate="no" dir="ltr">tf.distribute.experimental_distribute_dataset</code> or <code translate="no" dir="ltr">tf.distribute.distribute_datasets_from_function</code>. Any stateful ops that the dataset may have are currently ignored. For example, if your dataset has a <code translate="no" dir="ltr">map_fn</code> that uses <a href="../random/uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> to rotate an image, then you have a dataset graph that depends on state (i.e the random seed) on the local machine where the python process is being executed.</span>
+</blockquote> <p>For a tutorial on more usage and properties of this method, refer to the <a href="https://www.tensorflow.org/tutorials/distribute/input#tfdistributestrategyexperimental_distribute_dataset">tutorial on distributed input</a>. If you are interested in last partial batch handling, read <a href="https://www.tensorflow.org/tutorials/distribute/input#partial_batches">this section</a>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">dataset</code> </td> <td> <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> that will be sharded across all replicas using the rules stated above. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">options</code> </td> <td> <a href="inputoptions"><code translate="no" dir="ltr">tf.distribute.InputOptions</code></a> used to control options on how this dataset is distributed. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a>. </td> </tr> 
+</table> <h3 id="experimental_distribute_values_from_function" data-text="experimental_distribute_values_from_function"><code translate="no" dir="ltr">experimental_distribute_values_from_function</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1616-L1690">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+experimental_distribute_values_from_function(
+    value_fn
+)
+</pre> <p>Generates <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> from <code translate="no" dir="ltr">value_fn</code>.</p> <p>This function is to generate <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> to pass into <code translate="no" dir="ltr">run</code>, <code translate="no" dir="ltr">reduce</code>, or other methods that take distributed values when not using datasets.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value_fn</code> </td> <td> The function to run to generate values. It is called for each replica with <code translate="no" dir="ltr">tf.distribute.ValueContext</code> as the sole argument. It must return a Tensor or a type that can be converted to a Tensor. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> containing a value for each replica. </td> </tr> 
+</table> <h4 id="example_usage" data-text="Example usage:">Example usage:</h4> <ol> <li>Return constant value per replica:</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+def value_fn(ctx):
+  return tf.constant(1.)
+distributed_values = (
+     strategy.experimental_distribute_values_from_function(
+       value_fn))
+local_result = strategy.experimental_local_results(distributed_values)
+local_result
+(&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;,
+ &lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;)
+</pre> <ol> <li>Distribute values in array based on replica_id:</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+array_value = np.array([3., 2., 1.])
+def value_fn(ctx):
+  return array_value[ctx.replica_id_in_sync_group]
+distributed_values = (
+     strategy.experimental_distribute_values_from_function(
+       value_fn))
+local_result = strategy.experimental_local_results(distributed_values)
+local_result
+(3.0, 2.0)
+</pre> <ol> <li>Specify values using num_replicas_in_sync:</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+def value_fn(ctx):
+  return ctx.num_replicas_in_sync
+distributed_values = (
+     strategy.experimental_distribute_values_from_function(
+       value_fn))
+local_result = strategy.experimental_local_results(distributed_values)
+local_result
+(2, 2)
+</pre> <ol> <li>Place values on devices and distribute:</li> </ol> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">strategy = tf.distribute.TPUStrategy()
+worker_devices = strategy.extended.worker_devices
+multiple_values = []
+for i in range(strategy.num_replicas_in_sync):
+  with tf.device(worker_devices[i]):
+    multiple_values.append(tf.constant(1.0))
+
+def value_fn(ctx):
+  return multiple_values[ctx.replica_id_in_sync_group]
+
+distributed_values = strategy.
+  experimental_distribute_values_from_function(
+  value_fn)
+</pre> <h3 id="experimental_local_results" data-text="experimental_local_results"><code translate="no" dir="ltr">experimental_local_results</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1482-L1499">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+experimental_local_results(
+    value
+)
+</pre> <p>Returns the list of all local per-replica values contained in <code translate="no" dir="ltr">value</code>.</p> <blockquote class="note">
+<strong>Note:</strong><span> This only returns values on the worker initiated by this client. When using a <a href="strategy"><code translate="no" dir="ltr">tf.distribute.Strategy</code></a> like <a href="experimental/multiworkermirroredstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.MultiWorkerMirroredStrategy</code></a>, each worker will be its own client, and this function will only return values computed on that worker.</span>
+</blockquote>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> A value returned by <code translate="no" dir="ltr">experimental_run()</code>, <code translate="no" dir="ltr">run()</code>, <code translate="no" dir="ltr">extended.call_for_each_replica()</code>, or a variable created in <code translate="no" dir="ltr">scope</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A tuple of values contained in <code translate="no" dir="ltr">value</code>. If <code translate="no" dir="ltr">value</code> represents a single value, this returns <code translate="no" dir="ltr">(value,).</code> </td> </tr> 
+</table> <h3 id="gather" data-text="gather"><code translate="no" dir="ltr">gather</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1692-L1796">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+gather(
+    value, axis
+)
+</pre> <p>Gather <code translate="no" dir="ltr">value</code> across replicas along <code translate="no" dir="ltr">axis</code> to the current device.</p> <p>Given a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> or <a href="../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a>-like object <code translate="no" dir="ltr">value</code>, this API gathers and concatenates <code translate="no" dir="ltr">value</code> across replicas along the <code translate="no" dir="ltr">axis</code>-th dimension. The result is copied to the "current" device</p> <ul> <li>which would typically be the CPU of the worker on which the program is running. For <a href="tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a>, it is the first TPU host. For multi-client <code translate="no" dir="ltr">MultiWorkerMirroredStrategy</code>, this is CPU of each worker.</li> </ul> <p>This API can only be called in the cross-replica context. For a counterpart in the replica context, see <a href="replicacontext#all_gather"><code translate="no" dir="ltr">tf.distribute.ReplicaContext.all_gather</code></a>.</p> <blockquote class="note">
+<strong>Note:</strong><span> For all strategies except <a href="tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a>, the input <code translate="no" dir="ltr">value</code> on different replicas must have the same rank, and their shapes must be the same in all dimensions except the <code translate="no" dir="ltr">axis</code>-th dimension. In other words, their shapes cannot be different in a dimension <code translate="no" dir="ltr">d</code> where <code translate="no" dir="ltr">d</code> does not equal to the <code translate="no" dir="ltr">axis</code> argument. For example, given a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> with component tensors of shape <code translate="no" dir="ltr">(1, 2, 3)</code> and <code translate="no" dir="ltr">(1, 3, 3)</code> on two replicas, you can call <code translate="no" dir="ltr">gather(..., axis=1, ...)</code> on it, but not <code translate="no" dir="ltr">gather(..., axis=0, ...)</code> or <code translate="no" dir="ltr">gather(..., axis=2, ...)</code>. However, for <a href="tpustrategy#gather"><code translate="no" dir="ltr">tf.distribute.TPUStrategy.gather</code></a>, all tensors must have exactly the same rank and same shape.</span>
+</blockquote>
+<blockquote class="note">
+<strong>Note:</strong><span> Given a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> <code translate="no" dir="ltr">value</code>, its component tensors must have a non-zero rank. Otherwise, consider using <a href="../expand_dims"><code translate="no" dir="ltr">tf.expand_dims</code></a> before gathering them.</span>
+</blockquote> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+# A DistributedValues with component tensor of shape (2, 1) on each replica
+distributed_values = strategy.experimental_distribute_values_from_function(lambda _: tf.identity(tf.constant([[1], [2]])))
+@tf.function
+def run():
+  return strategy.gather(distributed_values, axis=0)
+run()
+&lt;tf.Tensor: shape=(4, 1), dtype=int32, numpy=
+array([[1],
+       [2],
+       [1],
+       [2]], dtype=int32)&gt;
+</pre> <p>Consider the following example for more combinations:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1", "GPU:2", "GPU:3"])
+single_tensor = tf.reshape(tf.range(6), shape=(1,2,3))
+distributed_values = strategy.experimental_distribute_values_from_function(lambda _: tf.identity(single_tensor))
+@tf.function
+def run(axis):
+  return strategy.gather(distributed_values, axis=axis)
+axis=0
+run(axis)
+&lt;tf.Tensor: shape=(4, 2, 3), dtype=int32, numpy=
+array([[[0, 1, 2],
+        [3, 4, 5]],
+       [[0, 1, 2],
+        [3, 4, 5]],
+       [[0, 1, 2],
+        [3, 4, 5]],
+       [[0, 1, 2],
+        [3, 4, 5]]], dtype=int32)&gt;
+axis=1
+run(axis)
+&lt;tf.Tensor: shape=(1, 8, 3), dtype=int32, numpy=
+array([[[0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 2],
+        [3, 4, 5]]], dtype=int32)&gt;
+axis=2
+run(axis)
+&lt;tf.Tensor: shape=(1, 2, 12), dtype=int32, numpy=
+array([[[0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2],
+        [3, 4, 5, 3, 4, 5, 3, 4, 5, 3, 4, 5]]], dtype=int32)&gt;
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> instance, e.g. returned by <a href="mirroredstrategy#run"><code translate="no" dir="ltr">Strategy.run</code></a>, to be combined into a single tensor. It can also be a regular tensor when used with <a href="onedevicestrategy"><code translate="no" dir="ltr">tf.distribute.OneDeviceStrategy</code></a> or the default strategy. The tensors that constitute the DistributedValues can only be dense tensors with non-zero rank, NOT a <a href="../indexedslices"><code translate="no" dir="ltr">tf.IndexedSlices</code></a>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">axis</code> </td> <td> 0-D int32 Tensor. Dimension along which to gather. Must be in the range [0, rank(value)). </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <code translate="no" dir="ltr">Tensor</code> that's the concatenation of <code translate="no" dir="ltr">value</code> across replicas along <code translate="no" dir="ltr">axis</code> dimension. </td> </tr> 
+</table> <h3 id="reduce" data-text="reduce"><code translate="no" dir="ltr">reduce</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1261-L1458">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+reduce(
+    reduce_op, value, axis
+)
+</pre> <p>Reduce <code translate="no" dir="ltr">value</code> across replicas and return result on current device.</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+def step_fn():
+  i = tf.distribute.get_replica_context().replica_id_in_sync_group
+  return tf.identity(i)
+
+per_replica_result = strategy.run(step_fn)
+total = strategy.reduce("SUM", per_replica_result, axis=None)
+total
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=1&gt;
+</pre> <p>To see how this would look with multiple replicas, consider the same example with MirroredStrategy with 2 GPUs:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.MirroredStrategy(devices=["GPU:0", "GPU:1"])
+def step_fn():
+  i = tf.distribute.get_replica_context().replica_id_in_sync_group
+  return tf.identity(i)
+
+per_replica_result = strategy.run(step_fn)
+# Check devices on which per replica result is:
+strategy.experimental_local_results(per_replica_result)[0].device
+# /job:localhost/replica:0/task:0/device:GPU:0
+strategy.experimental_local_results(per_replica_result)[1].device
+# /job:localhost/replica:0/task:0/device:GPU:1
+
+total = strategy.reduce("SUM", per_replica_result, axis=None)
+# Check device on which reduced result is:
+total.device
+# /job:localhost/replica:0/task:0/device:CPU:0
+
+</pre> <p>This API is typically used for aggregating the results returned from different replicas, for reporting etc. For example, loss computed from different replicas can be averaged using this API before printing.</p> <blockquote class="note">
+<strong>Note:</strong><span> The result is copied to the "current" device - which would typically be the CPU of the worker on which the program is running. For <code translate="no" dir="ltr">TPUStrategy</code>, it is the first TPU host. For multi client <code translate="no" dir="ltr">MultiWorkerMirroredStrategy</code>, this is CPU of each worker.</span>
+</blockquote> <p>There are a number of different tf.distribute APIs for reducing values across replicas:</p> <ul> <li>
+<a href="replicacontext#all_reduce"><code translate="no" dir="ltr">tf.distribute.ReplicaContext.all_reduce</code></a>: This differs from <a href="mirroredstrategy#reduce"><code translate="no" dir="ltr">Strategy.reduce</code></a> in that it is for replica context and does not copy the results to the host device. <code translate="no" dir="ltr">all_reduce</code> should be typically used for reductions inside the training step such as gradients.</li> <li>
+<a href="strategyextended#reduce_to"><code translate="no" dir="ltr">tf.distribute.StrategyExtended.reduce_to</code></a> and <a href="strategyextended#batch_reduce_to"><code translate="no" dir="ltr">tf.distribute.StrategyExtended.batch_reduce_to</code></a>: These APIs are more advanced versions of <a href="mirroredstrategy#reduce"><code translate="no" dir="ltr">Strategy.reduce</code></a> as they allow customizing the destination of the result. They are also called in cross replica context.</li> </ul> <p><em>What should axis be?</em></p> <p>Given a per-replica value returned by <code translate="no" dir="ltr">run</code>, say a per-example loss, the batch will be divided across all the replicas. This function allows you to aggregate across replicas and optionally also across batch elements by specifying the axis parameter accordingly.</p> <p>For example, if you have a global batch size of 8 and 2 replicas, values for examples <code translate="no" dir="ltr">[0, 1, 2, 3]</code> will be on replica 0 and <code translate="no" dir="ltr">[4, 5, 6, 7]</code> will be on replica 1. With <code translate="no" dir="ltr">axis=None</code>, <code translate="no" dir="ltr">reduce</code> will aggregate only across replicas, returning <code translate="no" dir="ltr">[0+4, 1+5, 2+6, 3+7]</code>. This is useful when each replica is computing a scalar or some other value that doesn't have a "batch" dimension (like a gradient or loss).</p> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">strategy.reduce("sum", per_replica_result, axis=None)
+</pre> <p>Sometimes, you will want to aggregate across both the global batch <em>and</em> all replicas. You can get this behavior by specifying the batch dimension as the <code translate="no" dir="ltr">axis</code>, typically <code translate="no" dir="ltr">axis=0</code>. In this case it would return a scalar <code translate="no" dir="ltr">0+1+2+3+4+5+6+7</code>.</p> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">strategy.reduce("sum", per_replica_result, axis=0)
+</pre> <p>If there is a last partial batch, you will need to specify an axis so that the resulting shape is consistent across replicas. So if the last batch has size 6 and it is divided into [0, 1, 2, 3] and [4, 5], you would get a shape mismatch unless you specify <code translate="no" dir="ltr">axis=0</code>. If you specify <a href="reduceop#MEAN"><code translate="no" dir="ltr">tf.distribute.ReduceOp.MEAN</code></a>, using <code translate="no" dir="ltr">axis=0</code> will use the correct denominator of 6. Contrast this with computing <code translate="no" dir="ltr">reduce_mean</code> to get a scalar value on each replica and this function to average those means, which will weigh some values <code translate="no" dir="ltr">1/8</code> and others <code translate="no" dir="ltr">1/4</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">reduce_op</code> </td> <td> a <a href="reduceop"><code translate="no" dir="ltr">tf.distribute.ReduceOp</code></a> value specifying how values should be combined. Allows using string representation of the enum such as "SUM", "MEAN". </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> instance, e.g. returned by <a href="mirroredstrategy#run"><code translate="no" dir="ltr">Strategy.run</code></a>, to be combined into a single tensor. It can also be a regular tensor when used with <code translate="no" dir="ltr">OneDeviceStrategy</code> or default strategy. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">axis</code> </td> <td> specifies the dimension to reduce along within each replica's tensor. Should typically be set to the batch dimension, or <code translate="no" dir="ltr">None</code> to only reduce across replicas (e.g. if the tensor has no batch dimension). </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <code translate="no" dir="ltr">Tensor</code>. </td> </tr> 
+</table> <h3 id="run" data-text="run"><code translate="no" dir="ltr">run</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L1145-L1259">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+run(
+    fn, args=(), kwargs=None, options=None
+)
+</pre> <p>Invokes <code translate="no" dir="ltr">fn</code> on each replica, with the given arguments.</p> <p>This method is the primary way to distribute your computation with a tf.distribute object. It invokes <code translate="no" dir="ltr">fn</code> on each replica. If <code translate="no" dir="ltr">args</code> or <code translate="no" dir="ltr">kwargs</code> have <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a>, such as those produced by a <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> from <a href="strategy#experimental_distribute_dataset"><code translate="no" dir="ltr">tf.distribute.Strategy.experimental_distribute_dataset</code></a> or <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function</code></a>, when <code translate="no" dir="ltr">fn</code> is executed on a particular replica, it will be executed with the component of <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> that correspond to that replica.</p> <p><code translate="no" dir="ltr">fn</code> is invoked under a replica context. <code translate="no" dir="ltr">fn</code> may call <a href="get_replica_context"><code translate="no" dir="ltr">tf.distribute.get_replica_context()</code></a> to access members such as <code translate="no" dir="ltr">all_reduce</code>. Please see the module-level docstring of tf.distribute for the concept of replica context.</p> <p>All arguments in <code translate="no" dir="ltr">args</code> or <code translate="no" dir="ltr">kwargs</code> should either be Python values of a nested structure of tensors, e.g. a list of tensors, in which case <code translate="no" dir="ltr">args</code> and <code translate="no" dir="ltr">kwargs</code> will be passed to the <code translate="no" dir="ltr">fn</code> invoked on each replica. Or <code translate="no" dir="ltr">args</code> or <code translate="no" dir="ltr">kwargs</code> can be <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> containing tensors or composite tensors, i.e. <a href="../compat/v1/tensorinfo/compositetensor"><code translate="no" dir="ltr">tf.compat.v1.TensorInfo.CompositeTensor</code></a>, in which case each <code translate="no" dir="ltr">fn</code> call will get the component of a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> corresponding to its replica.</p> <aside class="key-point"><strong>Key Point:</strong><span> Depending on the implementation of <a href="strategy"><code translate="no" dir="ltr">tf.distribute.Strategy</code></a> and whether eager execution is enabled, <code translate="no" dir="ltr">fn</code> may be called one or more times. If <code translate="no" dir="ltr">fn</code> is annotated with <a href="../function"><code translate="no" dir="ltr">tf.function</code></a> or <a href="strategy#run"><code translate="no" dir="ltr">tf.distribute.Strategy.run</code></a> is called inside a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a> (eager execution is disabled inside a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a> by default), <code translate="no" dir="ltr">fn</code> is called once per replica to generate a Tensorflow graph, which will then be reused for execution with new inputs. Otherwise, if eager execution is enabled, <code translate="no" dir="ltr">fn</code> will be called once per replica every step just like regular python code.</span></aside> <h4 id="example_usage_2" data-text="Example usage:">Example usage:</h4> <ol> <li>Constant tensor input.</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+tensor_input = tf.constant(3.0)
+@tf.function
+def replica_fn(input):
+  return input*2.0
+result = strategy.run(replica_fn, args=(tensor_input,))
+result
+PerReplica:{
+  0: &lt;tf.Tensor: shape=(), dtype=float32, numpy=6.0&gt;,
+  1: &lt;tf.Tensor: shape=(), dtype=float32, numpy=6.0&gt;
+}
+</pre> <ol> <li>DistributedValues input.</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+@tf.function
+def run():
+  def value_fn(value_context):
+    return value_context.num_replicas_in_sync
+  distributed_values = (
+    strategy.experimental_distribute_values_from_function(
+      value_fn))
+  def replica_fn2(input):
+    return input*2
+  return strategy.run(replica_fn2, args=(distributed_values,))
+result = run()
+result
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=4&gt;
+</pre> <ol> <li>Use <a href="replicacontext"><code translate="no" dir="ltr">tf.distribute.ReplicaContext</code></a> to allreduce values.</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["gpu:0", "gpu:1"])
+@tf.function
+def run():
+   def value_fn(value_context):
+     return tf.constant(value_context.replica_id_in_sync_group)
+   distributed_values = (
+       strategy.experimental_distribute_values_from_function(
+           value_fn))
+   def replica_fn(input):
+     return tf.distribute.get_replica_context().all_reduce("sum", input)
+   return strategy.run(replica_fn, args=(distributed_values,))
+result = run()
+result
+PerReplica:{
+  0: &lt;tf.Tensor: shape=(), dtype=int32, numpy=1&gt;,
+  1: &lt;tf.Tensor: shape=(), dtype=int32, numpy=1&gt;
+}
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">fn</code> </td> <td> The function to run on each replica. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">args</code> </td> <td> Optional positional arguments to <code translate="no" dir="ltr">fn</code>. Its element can be a Python value, a tensor or a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">kwargs</code> </td> <td> Optional keyword arguments to <code translate="no" dir="ltr">fn</code>. Its element can be a Python value, a tensor or a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">options</code> </td> <td> An optional instance of <a href="runoptions"><code translate="no" dir="ltr">tf.distribute.RunOptions</code></a> specifying the options to run <code translate="no" dir="ltr">fn</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> Merged return value of <code translate="no" dir="ltr">fn</code> across replicas. The structure of the return value is the same as the return value from <code translate="no" dir="ltr">fn</code>. Each element in the structure can either be <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a>, <code translate="no" dir="ltr">Tensor</code> objects, or <code translate="no" dir="ltr">Tensor</code>s (for example, if running on a single replica). </td> </tr> 
+</table> <h3 id="scope" data-text="scope"><code translate="no" dir="ltr">scope</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/distribute_lib.py#L822-L910">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+scope()
+</pre> <p>Context manager to make the strategy current and distribute variables.</p> <p>This method returns a context manager, and is used as follows:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+# Variable created inside scope:
+with strategy.scope():
+  mirrored_variable = tf.Variable(1.)
+mirrored_variable
+MirroredVariable:{
+  0: &lt;tf.Variable 'Variable:0' shape=() dtype=float32, numpy=1.0&gt;,
+  1: &lt;tf.Variable 'Variable/replica_1:0' shape=() dtype=float32, numpy=1.0&gt;
+}
+# Variable created outside scope:
+regular_variable = tf.Variable(1.)
+regular_variable
+&lt;tf.Variable 'Variable:0' shape=() dtype=float32, numpy=1.0&gt;
+</pre> <p><em>What happens when Strategy.scope is entered?</em></p> <ul> <li>
+<code translate="no" dir="ltr">strategy</code> is installed in the global context as the "current" strategy. Inside this scope, <a href="get_strategy"><code translate="no" dir="ltr">tf.distribute.get_strategy()</code></a> will now return this strategy. Outside this scope, it returns the default no-op strategy.</li> <li>Entering the scope also enters the "cross-replica context". See <a href="strategyextended"><code translate="no" dir="ltr">tf.distribute.StrategyExtended</code></a> for an explanation on cross-replica and replica contexts.</li> <li>Variable creation inside <code translate="no" dir="ltr">scope</code> is intercepted by the strategy. Each strategy defines how it wants to affect the variable creation. Sync strategies like <code translate="no" dir="ltr">MirroredStrategy</code>, <code translate="no" dir="ltr">TPUStrategy</code> and <code translate="no" dir="ltr">MultiWorkerMiroredStrategy</code> create variables replicated on each replica, whereas <code translate="no" dir="ltr">ParameterServerStrategy</code> creates variables on the parameter servers. This is done using a custom <a href="../variable_creator_scope"><code translate="no" dir="ltr">tf.variable_creator_scope</code></a>.</li> <li>In some strategies, a default device scope may also be entered: in <code translate="no" dir="ltr">MultiWorkerMiroredStrategy</code>, a default device scope of "/CPU:0" is entered on each worker.</li> </ul> <blockquote class="note">
+<strong>Note:</strong><span> Entering a scope does not automatically distribute a computation, except in the case of high level training framework like keras <code translate="no" dir="ltr">model.fit</code>. If you're not using <code translate="no" dir="ltr">model.fit</code>, you need to use <code translate="no" dir="ltr">strategy.run</code> API to explicitly distribute that computation. See an example in the <a href="https://www.tensorflow.org/tutorials/distribute/custom_training">custom training loop tutorial</a>.</span>
+</blockquote> <p><em>What should be in scope and what should be outside?</em></p> <p>There are a number of requirements on what needs to happen inside the scope. However, in places where we have information about which strategy is in use, we often enter the scope for the user, so they don't have to do it explicitly (i.e. calling those either inside or outside the scope is OK).</p> <ul> <li>Anything that creates variables that should be distributed variables must be in <code translate="no" dir="ltr">strategy.scope</code>. This can be either by directly putting it in scope, or relying on another API like <code translate="no" dir="ltr">strategy.run</code> or <code translate="no" dir="ltr">model.fit</code> to enter it for you. Any variable that is created outside scope will not be distributed and may have performance implications. Common things that create variables in TF: models, optimizers, metrics. These should always be created inside the scope. Another source of variable creation can be a checkpoint restore - when variables are created lazily. Note that any variable created inside a strategy captures the strategy information. So reading and writing to these variables outside the <code translate="no" dir="ltr">strategy.scope</code> can also work seamlessly, without the user having to enter the scope.</li> <li>Some strategy APIs (such as <code translate="no" dir="ltr">strategy.run</code> and <code translate="no" dir="ltr">strategy.reduce</code>) which require to be in a strategy's scope, enter the scope for you automatically, which means when using those APIs you don't need to enter the scope yourself.</li> <li>When a <a href="../keras/model"><code translate="no" dir="ltr">tf.keras.Model</code></a> is created inside a <code translate="no" dir="ltr">strategy.scope</code>, we capture this information. When high level training frameworks methods such as <code translate="no" dir="ltr">model.compile</code>, <code translate="no" dir="ltr">model.fit</code> etc are then called on this model, we automatically enter the scope, as well as use this strategy to distribute the training etc. See detailed example in <a href="https://www.tensorflow.org/tutorials/distribute/keras">distributed keras tutorial</a>. Note that simply calling the <code translate="no" dir="ltr">model(..)</code> is not impacted - only high level training framework APIs are. <code translate="no" dir="ltr">model.compile</code>, <code translate="no" dir="ltr">model.fit</code>, <code translate="no" dir="ltr">model.evaluate</code>, <code translate="no" dir="ltr">model.predict</code> and <code translate="no" dir="ltr">model.save</code> can all be called inside or outside the scope.</li> <li>The following can be either inside or outside the scope: <ul> <li>Creating the input datasets</li> <li>Defining <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>s that represent your training step</li> <li>Saving APIs such as <a href="../saved_model/save"><code translate="no" dir="ltr">tf.saved_model.save</code></a>. Loading creates variables, so that should go inside the scope if you want to train the model in a distributed way.</li> <li>Checkpoint saving. As mentioned above - <code translate="no" dir="ltr">checkpoint.restore</code> may sometimes need to be inside scope if it creates variables.</li> </ul>
+</li> </ul>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A context manager. </td> </tr> 
+</table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/MultiWorkerMirroredStrategy" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/MultiWorkerMirroredStrategy</a>
+  </p>
+</div>

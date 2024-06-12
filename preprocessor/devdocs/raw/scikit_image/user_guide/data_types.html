@@ -1,0 +1,69 @@
+<h1 id="data-types">Image data types and what they mean</h1> <p id="image-data-types-and-what-they-mean">In <code>skimage</code>, images are simply <a class="reference external" href="https://docs.scipy.org/doc/numpy/user/">numpy</a> arrays, which support a variety of data types <a class="footnote-reference brackets" href="#id2" id="id1">1</a>, <em>i.e.</em> “dtypes”. To avoid distorting image intensities (see <a class="reference internal" href="#rescaling-intensity-values">Rescaling intensity values</a>), we assume that images use the following dtype ranges:</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p>Data type</p></th> <th class="head"><p>Range</p></th> </tr> </thead>  <tr>
+<td><p>uint8</p></td> <td><p>0 to 255</p></td> </tr> <tr>
+<td><p>uint16</p></td> <td><p>0 to 65535</p></td> </tr> <tr>
+<td><p>uint32</p></td> <td><p>0 to 2<sup>32</sup> - 1</p></td> </tr> <tr>
+<td><p>float</p></td> <td><p>-1 to 1 or 0 to 1</p></td> </tr> <tr>
+<td><p>int8</p></td> <td><p>-128 to 127</p></td> </tr> <tr>
+<td><p>int16</p></td> <td><p>-32768 to 32767</p></td> </tr> <tr>
+<td><p>int32</p></td> <td><p>-2<sup>31</sup> to 2<sup>31</sup> - 1</p></td> </tr>  </table> <p>Note that float images should be restricted to the range -1 to 1 even though the data type itself can exceed this range; all integer dtypes, on the other hand, have pixel intensities that can span the entire data type range. With a few exceptions, <em>64-bit (u)int images are not supported</em>.</p> <p>Functions in <code>skimage</code> are designed so that they accept any of these dtypes, but, for efficiency, <em>may return an image of a different dtype</em> (see <a class="reference internal" href="#output-types">Output types</a>). If you need a particular dtype, <code>skimage</code> provides utility functions that convert dtypes and properly rescale image intensities (see <a class="reference internal" href="#input-types">Input types</a>). You should <strong>never use</strong> <code>astype</code> on an image, because it violates these assumptions about the dtype range:</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_float
+&gt;&gt;&gt; image = np.arange(0, 50, 10, dtype=np.uint8)
+&gt;&gt;&gt; print(image.astype(float)) # These float values are out of range.
+[  0.  10.  20.  30.  40.]
+&gt;&gt;&gt; print(img_as_float(image))
+[ 0.          0.03921569  0.07843137  0.11764706  0.15686275]
+</pre>  <h2 id="input-types">Input types</h2> <p>Although we aim to preserve the data range and type of input images, functions may support only a subset of these data-types. In such a case, the input will be converted to the required type (if possible), and a warning message printed to the log if a memory copy is needed. Type requirements should be noted in the docstrings.</p> <p>The following utility functions in the main package are available to developers and users:</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p>Function name</p></th> <th class="head"><p>Description</p></th> </tr> </thead>  <tr>
+<td><p>img_as_float</p></td> <td><p>Convert to 64-bit floating point.</p></td> </tr> <tr>
+<td><p>img_as_ubyte</p></td> <td><p>Convert to 8-bit uint.</p></td> </tr> <tr>
+<td><p>img_as_uint</p></td> <td><p>Convert to 16-bit uint.</p></td> </tr> <tr>
+<td><p>img_as_int</p></td> <td><p>Convert to 16-bit int.</p></td> </tr>  </table> <p>These functions convert images to the desired dtype and <em>properly rescale their values</em>:</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_ubyte
+&gt;&gt;&gt; image = np.array([0, 0.5, 1], dtype=float)
+&gt;&gt;&gt; img_as_ubyte(image)
+array([  0, 128, 255], dtype=uint8)
+</pre> <p>Be careful! These conversions can result in a loss of precision, since 8 bits cannot hold the same amount of information as 64 bits:</p> <pre data-language="python">&gt;&gt;&gt; image = np.array([0, 0.5, 0.503, 1], dtype=float)
+&gt;&gt;&gt; image_as_ubyte(image)
+array([  0, 128, 128, 255], dtype=uint8)
+</pre> <p>Additionally, some functions take a <code>preserve_range</code> argument where a range conversion is convenient but not necessary. For example, interpolation in <code>transform.warp</code> requires an image of type float, which should have a range in [0, 1]. So, by default, input images will be rescaled to this range. However, in some cases, the image values represent physical measurements, such as temperature or rainfall values, that the user does not want rescaled. With <code>preserve_range=True</code>, the original range of the data will be preserved, even though the output is a float image. Users must then ensure this non-standard image is properly processed by downstream functions, which may expect an image in [0, 1].</p> <pre data-language="python">&gt;&gt;&gt; from skimage import data
+&gt;&gt;&gt; from skimage.transform import rescale
+&gt;&gt;&gt; image = data.coins()
+&gt;&gt;&gt; image.dtype, image.min(), image.max(), image.shape
+(dtype('uint8'), 1, 252, (303, 384))
+&gt;&gt;&gt; rescaled = rescale(image, 0.5)
+&gt;&gt;&gt; (rescaled.dtype, np.round(rescaled.min(), 4),
+...  np.round(rescaled.max(), 4), rescaled.shape)
+(dtype('float64'), 0.0147, 0.9456, (152, 192))
+&gt;&gt;&gt; rescaled = rescale(image, 0.5, preserve_range=True)
+&gt;&gt;&gt; (rescaled.dtype, np.round(rescaled.min()),
+...  np.round(rescaled.max()), rescaled.shape
+(dtype('float64'), 4.0, 241.0, (152, 192))
+</pre>   <h2 id="output-types">Output types</h2> <p>The output type of a function is determined by the function author and is documented for the benefit of the user. While this requires the user to explicitly convert the output to whichever format is needed, it ensures that no unnecessary data copies take place.</p> <p>A user that requires a specific type of output (e.g., for display purposes), may write:</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_uint
+&gt;&gt;&gt; out = img_as_uint(sobel(image))
+&gt;&gt;&gt; plt.imshow(out)
+</pre>   <h2 id="working-with-opencv">Working with OpenCV</h2> <p>It is possible that you may need to use an image created using <code>skimage</code> with <a class="reference external" href="https://opencv.org/">OpenCV</a> or vice versa. OpenCV image data can be accessed (without copying) in NumPy (and, thus, in scikit-image). OpenCV uses BGR (instead of scikit-image’s RGB) for color images, and its dtype is uint8 by default (See <a class="reference internal" href="#image-data-types-and-what-they-mean">Image data types and what they mean</a>). BGR stands for Blue Green Red.</p>  <h3 id="converting-bgr-to-rgb-or-vice-versa">Converting BGR to RGB or vice versa</h3> <p>The color images in <code>skimage</code> and OpenCV have 3 dimensions: width, height and color. RGB and BGR use the same color space, except the order of colors is reversed.</p> <p>Note that in <code>scikit-image</code> we usually refer to <code>rows</code> and <code>columns</code> instead of width and height (see <a class="reference internal" href="numpy_images#numpy-images-coordinate-conventions"><span class="std std-ref">Coordinate conventions</span></a>).</p> <p>The following instruction effectively reverses the order of the colors, leaving the rows and columns unaffected.</p> <pre data-language="python">&gt;&gt;&gt; image = image[:, :, ::-1]
+</pre>   <h3 id="using-an-image-from-opencv-with-skimage">Using an image from OpenCV with <code>skimage</code>
+</h3> <p>If cv_image is an array of unsigned bytes, <code>skimage</code> will understand it by default. If you prefer working with floating point images, <code>img_as_float()</code> can be used to convert the image:</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_float
+&gt;&gt;&gt; image = img_as_float(any_opencv_image)
+</pre>   <h3 id="using-an-image-from-skimage-with-opencv">Using an image from <code>skimage</code> with OpenCV</h3> <p>The reverse can be achieved with <code>img_as_ubyte()</code>:</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_ubyte
+&gt;&gt;&gt; cv_image = img_as_ubyte(any_skimage_image)
+</pre>    <h2 id="image-processing-pipeline">Image processing pipeline</h2> <p>This dtype behavior allows you to string together any <code>skimage</code> function without worrying about the image dtype. On the other hand, if you want to use a custom function that requires a particular dtype, you should call one of the dtype conversion functions (here, <code>func1</code> and <code>func2</code> are <code>skimage</code> functions):</p> <pre data-language="python">&gt;&gt;&gt; from skimage.util import img_as_float
+&gt;&gt;&gt; image = img_as_float(func1(func2(image)))
+&gt;&gt;&gt; processed_image = custom_func(image)
+</pre> <p>Better yet, you can convert the image internally and use a simplified processing pipeline:</p> <pre data-language="python">&gt;&gt;&gt; def custom_func(image):
+...     image = img_as_float(image)
+...     # do something
+...
+&gt;&gt;&gt; processed_image = custom_func(func1(func2(image)))
+</pre>   <h2 id="rescaling-intensity-values">Rescaling intensity values</h2> <p>When possible, functions should avoid blindly stretching image intensities (e.g. rescaling a float image so that the min and max intensities are 0 and 1), since this can heavily distort an image. For example, if you’re looking for bright markers in dark images, there may be an image where no markers are present; stretching its input intensity to span the full range would make background noise look like markers.</p> <p>Sometimes, however, you have images that should span the entire intensity range but do not. For example, some cameras store images with 10-, 12-, or 14-bit depth per pixel. If these images are stored in an array with dtype uint16, then the image won’t extend over the full intensity range, and thus, would appear dimmer than it should. To correct for this, you can use the <code>rescale_intensity</code> function to rescale the image so that it uses the full dtype range:</p> <pre data-language="python">&gt;&gt;&gt; from skimage import exposure
+&gt;&gt;&gt; image = exposure.rescale_intensity(img10bit, in_range=(0, 2**10 - 1))
+</pre> <p>Here, the <code>in_range</code> argument is set to the maximum range for a 10-bit image. By default, <code>rescale_intensity</code> stretches the values of <code>in_range</code> to match the range of the dtype. <code>rescale_intensity</code> also accepts strings as inputs to <code>in_range</code> and <code>out_range</code>, so the example above could also be written as:</p> <pre data-language="python">&gt;&gt;&gt; image = exposure.rescale_intensity(img10bit, in_range='uint10')
+</pre>   <h2 id="note-about-negative-values">Note about negative values</h2> <p>People very often represent images in signed dtypes, even though they only manipulate the positive values of the image (e.g., using only 0-127 in an int8 image). For this reason, conversion functions <em>only spread the positive values</em> of a signed dtype over the entire range of an unsigned dtype. In other words, negative values are clipped to 0 when converting from signed to unsigned dtypes. (Negative values are preserved when converting between signed dtypes.) To prevent this clipping behavior, you should rescale your image beforehand:</p> <pre data-language="python">&gt;&gt;&gt; image = exposure.rescale_intensity(img_int32, out_range=(0, 2**31 - 1))
+&gt;&gt;&gt; img_uint8 = img_as_ubyte(image)
+</pre> <p>This behavior is symmetric: The values in an unsigned dtype are spread over just the positive range of a signed dtype.</p>   <h2 id="references">References</h2> <dl class="footnote brackets"> <dt class="label" id="id2">
+<code>1</code> </dt> <dd>
+<p><a class="reference external" href="https://docs.scipy.org/doc/numpy/user/basics.types.html">https://docs.scipy.org/doc/numpy/user/basics.types.html</a></p> </dd> </dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 the scikit-image team<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://scikit-image.org/docs/0.18.x/user_guide/data_types.html" class="_attribution-link">https://scikit-image.org/docs/0.18.x/user_guide/data_types.html</a>
+  </p>
+</div>

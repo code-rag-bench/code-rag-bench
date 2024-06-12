@@ -1,0 +1,955 @@
+<h1 id="ctypes-a-foreign-function-library-for-python">ctypes — A foreign function library for Python</h1>  <p id="module-ctypes"><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> is a foreign function library for Python. It provides C compatible data types, and allows calling functions in DLLs or shared libraries. It can be used to wrap these libraries in pure Python.</p>  <h2 id="ctypes-ctypes-tutorial">ctypes tutorial</h2> <p id="ctypes-tutorial">Note: The code samples in this tutorial use <a class="reference internal" href="doctest#module-doctest" title="doctest: Test pieces of code within docstrings."><code>doctest</code></a> to make sure that they actually work. Since some code samples behave differently under Linux, Windows, or Mac OS X, they contain doctest directives in comments.</p> <p>Note: Some code samples reference the ctypes <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a> type. On platforms where <code>sizeof(long) == sizeof(int)</code> it is an alias to <a class="reference internal" href="#ctypes.c_long" title="ctypes.c_long"><code>c_long</code></a>. So, you should not be confused if <a class="reference internal" href="#ctypes.c_long" title="ctypes.c_long"><code>c_long</code></a> is printed if you would expect <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a> — they are actually the same type.</p>  <h3 id="ctypes-loading-dynamic-link-libraries">Loading dynamic link libraries</h3> <p id="loading-dynamic-link-libraries"><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> exports the <em>cdll</em>, and on Windows <em>windll</em> and <em>oledll</em> objects, for loading dynamic link libraries.</p> <p>You load libraries by accessing them as attributes of these objects. <em>cdll</em> loads libraries which export functions using the standard <code>cdecl</code> calling convention, while <em>windll</em> libraries call functions using the <code>stdcall</code> calling convention. <em>oledll</em> also uses the <code>stdcall</code> calling convention, and assumes the functions return a Windows <code>HRESULT</code> error code. The error code is used to automatically raise an <a class="reference internal" href="exceptions#OSError" title="OSError"><code>OSError</code></a> exception when the function call fails.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.3: </span>Windows errors used to raise <a class="reference internal" href="exceptions#WindowsError" title="WindowsError"><code>WindowsError</code></a>, which is now an alias of <a class="reference internal" href="exceptions#OSError" title="OSError"><code>OSError</code></a>.</p> </div> <p>Here are some examples for Windows. Note that <code>msvcrt</code> is the MS standard C library containing most standard C functions, and uses the cdecl calling convention:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; print(windll.kernel32)  
+&lt;WinDLL 'kernel32', handle ... at ...&gt;
+&gt;&gt;&gt; print(cdll.msvcrt)      
+&lt;CDLL 'msvcrt', handle ... at ...&gt;
+&gt;&gt;&gt; libc = cdll.msvcrt      
+&gt;&gt;&gt;
+</pre> <p>Windows appends the usual <code>.dll</code> file suffix automatically.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Accessing the standard C library through <code>cdll.msvcrt</code> will use an outdated version of the library that may be incompatible with the one being used by Python. Where possible, use native Python functionality, or else import and use the <code>msvcrt</code> module.</p> </div> <p>On Linux, it is required to specify the filename <em>including</em> the extension to load a library, so attribute access can not be used to load libraries. Either the <code>LoadLibrary()</code> method of the dll loaders should be used, or you should load the library by creating an instance of CDLL by calling the constructor:</p> <pre data-language="python">&gt;&gt;&gt; cdll.LoadLibrary("libc.so.6")  
+&lt;CDLL 'libc.so.6', handle ... at ...&gt;
+&gt;&gt;&gt; libc = CDLL("libc.so.6")       
+&gt;&gt;&gt; libc                           
+&lt;CDLL 'libc.so.6', handle ... at ...&gt;
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-accessing-functions-from-loaded-dlls">Accessing functions from loaded dlls</h3> <p id="accessing-functions-from-loaded-dlls">Functions are accessed as attributes of dll objects:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; libc.printf
+&lt;_FuncPtr object at 0x...&gt;
+&gt;&gt;&gt; print(windll.kernel32.GetModuleHandleA)  
+&lt;_FuncPtr object at 0x...&gt;
+&gt;&gt;&gt; print(windll.kernel32.MyOwnFunction)     
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "ctypes.py", line 239, in __getattr__
+    func = _StdcallFuncPtr(name, self)
+AttributeError: function 'MyOwnFunction' not found
+&gt;&gt;&gt;
+</pre> <p>Note that win32 system dlls like <code>kernel32</code> and <code>user32</code> often export ANSI as well as UNICODE versions of a function. The UNICODE version is exported with an <code>W</code> appended to the name, while the ANSI version is exported with an <code>A</code> appended to the name. The win32 <code>GetModuleHandle</code> function, which returns a <em>module handle</em> for a given module name, has the following C prototype, and a macro is used to expose one of them as <code>GetModuleHandle</code> depending on whether UNICODE is defined or not:</p> <pre data-language="python">/* ANSI version */
+HMODULE GetModuleHandleA(LPCSTR lpModuleName);
+/* UNICODE version */
+HMODULE GetModuleHandleW(LPCWSTR lpModuleName);
+</pre> <p><em>windll</em> does not try to select one of them by magic, you must access the version you need by specifying <code>GetModuleHandleA</code> or <code>GetModuleHandleW</code> explicitly, and then call it with bytes or string objects respectively.</p> <p>Sometimes, dlls export functions with names which aren’t valid Python identifiers, like <code>"??2@YAPAXI@Z"</code>. In this case you have to use <a class="reference internal" href="functions#getattr" title="getattr"><code>getattr()</code></a> to retrieve the function:</p> <pre data-language="python">&gt;&gt;&gt; getattr(cdll.msvcrt, "??2@YAPAXI@Z")  
+&lt;_FuncPtr object at 0x...&gt;
+&gt;&gt;&gt;
+</pre> <p>On Windows, some dlls export functions not by name but by ordinal. These functions can be accessed by indexing the dll object with the ordinal number:</p> <pre data-language="python">&gt;&gt;&gt; cdll.kernel32[1]  
+&lt;_FuncPtr object at 0x...&gt;
+&gt;&gt;&gt; cdll.kernel32[0]  
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "ctypes.py", line 310, in __getitem__
+    func = _StdcallFuncPtr(name, self)
+AttributeError: function ordinal 0 not found
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-calling-functions">Calling functions</h3> <p id="calling-functions">You can call these functions like any other Python callable. This example uses the <code>time()</code> function, which returns system time in seconds since the Unix epoch, and the <code>GetModuleHandleA()</code> function, which returns a win32 module handle.</p> <p>This example calls both functions with a <code>NULL</code> pointer (<code>None</code> should be used as the <code>NULL</code> pointer):</p> <pre data-language="python">&gt;&gt;&gt; print(libc.time(None))  
+1150640792
+&gt;&gt;&gt; print(hex(windll.kernel32.GetModuleHandleA(None)))  
+0x1d000000
+&gt;&gt;&gt;
+</pre> <p><a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> is raised when you call an <code>stdcall</code> function with the <code>cdecl</code> calling convention, or vice versa:</p> <pre data-language="python">&gt;&gt;&gt; cdll.kernel32.GetModuleHandleA(None)  
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: Procedure probably called with not enough arguments (4 bytes missing)
+&gt;&gt;&gt;
+
+&gt;&gt;&gt; windll.msvcrt.printf(b"spam")  
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: Procedure probably called with too many arguments (4 bytes in excess)
+&gt;&gt;&gt;
+</pre> <p>To find out the correct calling convention you have to look into the C header file or the documentation for the function you want to call.</p> <p>On Windows, <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> uses win32 structured exception handling to prevent crashes from general protection faults when functions are called with invalid argument values:</p> <pre data-language="python">&gt;&gt;&gt; windll.kernel32.GetModuleHandleA(32)  
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+OSError: exception: access violation reading 0x00000020
+&gt;&gt;&gt;
+</pre> <p>There are, however, enough ways to crash Python with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>, so you should be careful anyway. The <a class="reference internal" href="faulthandler#module-faulthandler" title="faulthandler: Dump the Python traceback."><code>faulthandler</code></a> module can be helpful in debugging crashes (e.g. from segmentation faults produced by erroneous C library calls).</p> <p><code>None</code>, integers, bytes objects and (unicode) strings are the only native Python objects that can directly be used as parameters in these function calls. <code>None</code> is passed as a C <code>NULL</code> pointer, bytes objects and strings are passed as pointer to the memory block that contains their data (<code>char *</code> or <code>wchar_t *</code>). Python integers are passed as the platforms default C <code>int</code> type, their value is masked to fit into the C type.</p> <p>Before we move on calling functions with other parameter types, we have to learn more about <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> data types.</p>   <h3 id="ctypes-fundamental-data-types">Fundamental data types</h3> <p id="fundamental-data-types"><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> defines a number of primitive C compatible data types:</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p>ctypes type</p></th> <th class="head"><p>C type</p></th> <th class="head"><p>Python type</p></th> </tr> </thead>  <tr>
+<td><p><a class="reference internal" href="#ctypes.c_bool" title="ctypes.c_bool"><code>c_bool</code></a></p></td> <td><p><code>_Bool</code></p></td> <td><p>bool (1)</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_char" title="ctypes.c_char"><code>c_char</code></a></p></td> <td><p><code>char</code></p></td> <td><p>1-character bytes object</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_wchar" title="ctypes.c_wchar"><code>c_wchar</code></a></p></td> <td><p><code>wchar_t</code></p></td> <td><p>1-character string</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_byte" title="ctypes.c_byte"><code>c_byte</code></a></p></td> <td><p><code>char</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_ubyte" title="ctypes.c_ubyte"><code>c_ubyte</code></a></p></td> <td><p><code>unsigned char</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_short" title="ctypes.c_short"><code>c_short</code></a></p></td> <td><p><code>short</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_ushort" title="ctypes.c_ushort"><code>c_ushort</code></a></p></td> <td><p><code>unsigned short</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a></p></td> <td><p><code>int</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_uint" title="ctypes.c_uint"><code>c_uint</code></a></p></td> <td><p><code>unsigned int</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_long" title="ctypes.c_long"><code>c_long</code></a></p></td> <td><p><code>long</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_ulong" title="ctypes.c_ulong"><code>c_ulong</code></a></p></td> <td><p><code>unsigned long</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_longlong" title="ctypes.c_longlong"><code>c_longlong</code></a></p></td> <td><p><code>__int64</code> or <code>long long</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_ulonglong" title="ctypes.c_ulonglong"><code>c_ulonglong</code></a></p></td> <td><p><code>unsigned __int64</code> or <code>unsigned long long</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_size_t" title="ctypes.c_size_t"><code>c_size_t</code></a></p></td> <td><p><code>size_t</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_ssize_t" title="ctypes.c_ssize_t"><code>c_ssize_t</code></a></p></td> <td><p><code>ssize_t</code> or <code>Py_ssize_t</code></p></td> <td><p>int</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_float" title="ctypes.c_float"><code>c_float</code></a></p></td> <td><p><code>float</code></p></td> <td><p>float</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_double" title="ctypes.c_double"><code>c_double</code></a></p></td> <td><p><code>double</code></p></td> <td><p>float</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_longdouble" title="ctypes.c_longdouble"><code>c_longdouble</code></a></p></td> <td><p><code>long double</code></p></td> <td><p>float</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a></p></td> <td><p><code>char *</code> (NUL terminated)</p></td> <td><p>bytes object or <code>None</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_wchar_p" title="ctypes.c_wchar_p"><code>c_wchar_p</code></a></p></td> <td><p><code>wchar_t *</code> (NUL terminated)</p></td> <td><p>string or <code>None</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#ctypes.c_void_p" title="ctypes.c_void_p"><code>c_void_p</code></a></p></td> <td><p><code>void *</code></p></td> <td><p>int or <code>None</code></p></td> </tr>  </table> <ol class="arabic simple"> <li>The constructor accepts any object with a truth value.</li> </ol> <p>All these types can be created by calling them with an optional initializer of the correct type and value:</p> <pre data-language="python">&gt;&gt;&gt; c_int()
+c_long(0)
+&gt;&gt;&gt; c_wchar_p("Hello, World")
+c_wchar_p(140018365411392)
+&gt;&gt;&gt; c_ushort(-3)
+c_ushort(65533)
+&gt;&gt;&gt;
+</pre> <p>Since these types are mutable, their value can also be changed afterwards:</p> <pre data-language="python">&gt;&gt;&gt; i = c_int(42)
+&gt;&gt;&gt; print(i)
+c_long(42)
+&gt;&gt;&gt; print(i.value)
+42
+&gt;&gt;&gt; i.value = -99
+&gt;&gt;&gt; print(i.value)
+-99
+&gt;&gt;&gt;
+</pre> <p>Assigning a new value to instances of the pointer types <a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a>, <a class="reference internal" href="#ctypes.c_wchar_p" title="ctypes.c_wchar_p"><code>c_wchar_p</code></a>, and <a class="reference internal" href="#ctypes.c_void_p" title="ctypes.c_void_p"><code>c_void_p</code></a> changes the <em>memory location</em> they point to, <em>not the contents</em> of the memory block (of course not, because Python bytes objects are immutable):</p> <pre data-language="python">&gt;&gt;&gt; s = "Hello, World"
+&gt;&gt;&gt; c_s = c_wchar_p(s)
+&gt;&gt;&gt; print(c_s)
+c_wchar_p(139966785747344)
+&gt;&gt;&gt; print(c_s.value)
+Hello World
+&gt;&gt;&gt; c_s.value = "Hi, there"
+&gt;&gt;&gt; print(c_s)              # the memory location has changed
+c_wchar_p(139966783348904)
+&gt;&gt;&gt; print(c_s.value)
+Hi, there
+&gt;&gt;&gt; print(s)                # first object is unchanged
+Hello, World
+&gt;&gt;&gt;
+</pre> <p>You should be careful, however, not to pass them to functions expecting pointers to mutable memory. If you need mutable memory blocks, ctypes has a <a class="reference internal" href="#ctypes.create_string_buffer" title="ctypes.create_string_buffer"><code>create_string_buffer()</code></a> function which creates these in various ways. The current memory block contents can be accessed (or changed) with the <code>raw</code> property; if you want to access it as NUL terminated string, use the <code>value</code> property:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; p = create_string_buffer(3)            # create a 3 byte buffer, initialized to NUL bytes
+&gt;&gt;&gt; print(sizeof(p), repr(p.raw))
+3 b'\x00\x00\x00'
+&gt;&gt;&gt; p = create_string_buffer(b"Hello")     # create a buffer containing a NUL terminated string
+&gt;&gt;&gt; print(sizeof(p), repr(p.raw))
+6 b'Hello\x00'
+&gt;&gt;&gt; print(repr(p.value))
+b'Hello'
+&gt;&gt;&gt; p = create_string_buffer(b"Hello", 10) # create a 10 byte buffer
+&gt;&gt;&gt; print(sizeof(p), repr(p.raw))
+10 b'Hello\x00\x00\x00\x00\x00'
+&gt;&gt;&gt; p.value = b"Hi"
+&gt;&gt;&gt; print(sizeof(p), repr(p.raw))
+10 b'Hi\x00lo\x00\x00\x00\x00\x00'
+&gt;&gt;&gt;
+</pre> <p>The <a class="reference internal" href="#ctypes.create_string_buffer" title="ctypes.create_string_buffer"><code>create_string_buffer()</code></a> function replaces the <code>c_buffer()</code> function (which is still available as an alias), as well as the <code>c_string()</code> function from earlier ctypes releases. To create a mutable memory block containing unicode characters of the C type <code>wchar_t</code> use the <a class="reference internal" href="#ctypes.create_unicode_buffer" title="ctypes.create_unicode_buffer"><code>create_unicode_buffer()</code></a> function.</p>   <h3 id="ctypes-calling-functions-continued">Calling functions, continued</h3> <p id="calling-functions-continued">Note that printf prints to the real standard output channel, <em>not</em> to <a class="reference internal" href="sys#sys.stdout" title="sys.stdout"><code>sys.stdout</code></a>, so these examples will only work at the console prompt, not from within <em>IDLE</em> or <em>PythonWin</em>:</p> <pre data-language="python">&gt;&gt;&gt; printf = libc.printf
+&gt;&gt;&gt; printf(b"Hello, %s\n", b"World!")
+Hello, World!
+14
+&gt;&gt;&gt; printf(b"Hello, %S\n", "World!")
+Hello, World!
+14
+&gt;&gt;&gt; printf(b"%d bottles of beer\n", 42)
+42 bottles of beer
+19
+&gt;&gt;&gt; printf(b"%f bottles of beer\n", 42.5)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ArgumentError: argument 2: exceptions.TypeError: Don't know how to convert parameter 2
+&gt;&gt;&gt;
+</pre> <p>As has been mentioned before, all Python types except integers, strings, and bytes objects have to be wrapped in their corresponding <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> type, so that they can be converted to the required C data type:</p> <pre data-language="python">&gt;&gt;&gt; printf(b"An int %d, a double %f\n", 1234, c_double(3.14))
+An int 1234, a double 3.140000
+31
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-calling-functions-with-own-custom-data-types">Calling functions with your own custom data types</h3> <p id="calling-functions-with-your-own-custom-data-types">You can also customize <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> argument conversion to allow instances of your own classes be used as function arguments. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> looks for an <code>_as_parameter_</code> attribute and uses this as the function argument. Of course, it must be one of integer, string, or bytes:</p> <pre data-language="python">&gt;&gt;&gt; class Bottles:
+...     def __init__(self, number):
+...         self._as_parameter_ = number
+...
+&gt;&gt;&gt; bottles = Bottles(42)
+&gt;&gt;&gt; printf(b"%d bottles of beer\n", bottles)
+42 bottles of beer
+19
+&gt;&gt;&gt;
+</pre> <p>If you don’t want to store the instance’s data in the <code>_as_parameter_</code> instance variable, you could define a <a class="reference internal" href="functions#property" title="property"><code>property</code></a> which makes the attribute available on request.</p>   <h3 id="ctypes-specifying-required-argument-types">Specifying the required argument types (function prototypes)</h3> <p id="specifying-the-required-argument-types-function-prototypes">It is possible to specify the required argument types of functions exported from DLLs by setting the <code>argtypes</code> attribute.</p> <p><code>argtypes</code> must be a sequence of C data types (the <code>printf</code> function is probably not a good example here, because it takes a variable number and different types of parameters depending on the format string, on the other hand this is quite handy to experiment with this feature):</p> <pre data-language="python">&gt;&gt;&gt; printf.argtypes = [c_char_p, c_char_p, c_int, c_double]
+&gt;&gt;&gt; printf(b"String '%s', Int %d, Double %f\n", b"Hi", 10, 2.2)
+String 'Hi', Int 10, Double 2.200000
+37
+&gt;&gt;&gt;
+</pre> <p>Specifying a format protects against incompatible argument types (just as a prototype for a C function), and tries to convert the arguments to valid types:</p> <pre data-language="python">&gt;&gt;&gt; printf(b"%d %d %d", 1, 2, 3)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ArgumentError: argument 2: exceptions.TypeError: wrong type
+&gt;&gt;&gt; printf(b"%s %d %f\n", b"X", 2, 3)
+X 2 3.000000
+13
+&gt;&gt;&gt;
+</pre> <p>If you have defined your own classes which you pass to function calls, you have to implement a <code>from_param()</code> class method for them to be able to use them in the <code>argtypes</code> sequence. The <code>from_param()</code> class method receives the Python object passed to the function call, it should do a typecheck or whatever is needed to make sure this object is acceptable, and then return the object itself, its <code>_as_parameter_</code> attribute, or whatever you want to pass as the C function argument in this case. Again, the result should be an integer, string, bytes, a <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> instance, or an object with an <code>_as_parameter_</code> attribute.</p>   <h3 id="ctypes-return-types">Return types</h3> <p id="return-types">By default functions are assumed to return the C <code>int</code> type. Other return types can be specified by setting the <code>restype</code> attribute of the function object.</p> <p>Here is a more advanced example, it uses the <code>strchr</code> function, which expects a string pointer and a char, and returns a pointer to a string:</p> <pre data-language="python">&gt;&gt;&gt; strchr = libc.strchr
+&gt;&gt;&gt; strchr(b"abcdef", ord("d"))  
+8059983
+&gt;&gt;&gt; strchr.restype = c_char_p    # c_char_p is a pointer to a string
+&gt;&gt;&gt; strchr(b"abcdef", ord("d"))
+b'def'
+&gt;&gt;&gt; print(strchr(b"abcdef", ord("x")))
+None
+&gt;&gt;&gt;
+</pre> <p>If you want to avoid the <code>ord("x")</code> calls above, you can set the <code>argtypes</code> attribute, and the second argument will be converted from a single character Python bytes object into a C char:</p> <pre data-language="python">&gt;&gt;&gt; strchr.restype = c_char_p
+&gt;&gt;&gt; strchr.argtypes = [c_char_p, c_char]
+&gt;&gt;&gt; strchr(b"abcdef", b"d")
+'def'
+&gt;&gt;&gt; strchr(b"abcdef", b"def")
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ArgumentError: argument 2: exceptions.TypeError: one character string expected
+&gt;&gt;&gt; print(strchr(b"abcdef", b"x"))
+None
+&gt;&gt;&gt; strchr(b"abcdef", b"d")
+'def'
+&gt;&gt;&gt;
+</pre> <p>You can also use a callable Python object (a function or a class for example) as the <code>restype</code> attribute, if the foreign function returns an integer. The callable will be called with the <em>integer</em> the C function returns, and the result of this call will be used as the result of your function call. This is useful to check for error return values and automatically raise an exception:</p> <pre data-language="python">&gt;&gt;&gt; GetModuleHandle = windll.kernel32.GetModuleHandleA  
+&gt;&gt;&gt; def ValidHandle(value):
+...     if value == 0:
+...         raise WinError()
+...     return value
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; GetModuleHandle.restype = ValidHandle  
+&gt;&gt;&gt; GetModuleHandle(None)  
+486539264
+&gt;&gt;&gt; GetModuleHandle("something silly")  
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 3, in ValidHandle
+OSError: [Errno 126] The specified module could not be found.
+&gt;&gt;&gt;
+</pre> <p><code>WinError</code> is a function which will call Windows <code>FormatMessage()</code> api to get the string representation of an error code, and <em>returns</em> an exception. <code>WinError</code> takes an optional error code parameter, if no one is used, it calls <a class="reference internal" href="#ctypes.GetLastError" title="ctypes.GetLastError"><code>GetLastError()</code></a> to retrieve it.</p> <p>Please note that a much more powerful error checking mechanism is available through the <code>errcheck</code> attribute; see the reference manual for details.</p>   <h3 id="ctypes-passing-pointers">Passing pointers (or: passing parameters by reference)</h3> <p id="passing-pointers-or-passing-parameters-by-reference">Sometimes a C api function expects a <em>pointer</em> to a data type as parameter, probably to write into the corresponding location, or if the data is too large to be passed by value. This is also known as <em>passing parameters by reference</em>.</p> <p><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> exports the <a class="reference internal" href="#ctypes.byref" title="ctypes.byref"><code>byref()</code></a> function which is used to pass parameters by reference. The same effect can be achieved with the <a class="reference internal" href="#ctypes.pointer" title="ctypes.pointer"><code>pointer()</code></a> function, although <a class="reference internal" href="#ctypes.pointer" title="ctypes.pointer"><code>pointer()</code></a> does a lot more work since it constructs a real pointer object, so it is faster to use <a class="reference internal" href="#ctypes.byref" title="ctypes.byref"><code>byref()</code></a> if you don’t need the pointer object in Python itself:</p> <pre data-language="python">&gt;&gt;&gt; i = c_int()
+&gt;&gt;&gt; f = c_float()
+&gt;&gt;&gt; s = create_string_buffer(b'\000' * 32)
+&gt;&gt;&gt; print(i.value, f.value, repr(s.value))
+0 0.0 b''
+&gt;&gt;&gt; libc.sscanf(b"1 3.14 Hello", b"%d %f %s",
+...             byref(i), byref(f), s)
+3
+&gt;&gt;&gt; print(i.value, f.value, repr(s.value))
+1 3.1400001049 b'Hello'
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-structures-unions">Structures and unions</h3> <p id="structures-and-unions">Structures and unions must derive from the <a class="reference internal" href="#ctypes.Structure" title="ctypes.Structure"><code>Structure</code></a> and <a class="reference internal" href="#ctypes.Union" title="ctypes.Union"><code>Union</code></a> base classes which are defined in the <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> module. Each subclass must define a <code>_fields_</code> attribute. <code>_fields_</code> must be a list of <em>2-tuples</em>, containing a <em>field name</em> and a <em>field type</em>.</p> <p>The field type must be a <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> type like <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a>, or any other derived <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> type: structure, union, array, pointer.</p> <p>Here is a simple example of a POINT structure, which contains two integers named <em>x</em> and <em>y</em>, and also shows how to initialize a structure in the constructor:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; class POINT(Structure):
+...     _fields_ = [("x", c_int),
+...                 ("y", c_int)]
+...
+&gt;&gt;&gt; point = POINT(10, 20)
+&gt;&gt;&gt; print(point.x, point.y)
+10 20
+&gt;&gt;&gt; point = POINT(y=5)
+&gt;&gt;&gt; print(point.x, point.y)
+0 5
+&gt;&gt;&gt; POINT(1, 2, 3)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: too many initializers
+&gt;&gt;&gt;
+</pre> <p>You can, however, build much more complicated structures. A structure can itself contain other structures by using a structure as a field type.</p> <p>Here is a RECT structure which contains two POINTs named <em>upperleft</em> and <em>lowerright</em>:</p> <pre data-language="python">&gt;&gt;&gt; class RECT(Structure):
+...     _fields_ = [("upperleft", POINT),
+...                 ("lowerright", POINT)]
+...
+&gt;&gt;&gt; rc = RECT(point)
+&gt;&gt;&gt; print(rc.upperleft.x, rc.upperleft.y)
+0 5
+&gt;&gt;&gt; print(rc.lowerright.x, rc.lowerright.y)
+0 0
+&gt;&gt;&gt;
+</pre> <p>Nested structures can also be initialized in the constructor in several ways:</p> <pre data-language="python">&gt;&gt;&gt; r = RECT(POINT(1, 2), POINT(3, 4))
+&gt;&gt;&gt; r = RECT((1, 2), (3, 4))
+</pre> <p>Field <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-descriptor"><span class="xref std std-term">descriptor</span></a>s can be retrieved from the <em>class</em>, they are useful for debugging because they can provide useful information:</p> <pre data-language="python">&gt;&gt;&gt; print(POINT.x)
+&lt;Field type=c_long, ofs=0, size=4&gt;
+&gt;&gt;&gt; print(POINT.y)
+&lt;Field type=c_long, ofs=4, size=4&gt;
+&gt;&gt;&gt;
+</pre> <div class="admonition warning" id="ctypes-structureunion-alignment-byte-order"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> does not support passing unions or structures with bit-fields to functions by value. While this may work on 32-bit x86, it’s not guaranteed by the library to work in the general case. Unions and structures with bit-fields should always be passed to functions by pointer.</p> </div>   <h3 id="structure-union-alignment-and-byte-order">Structure/union alignment and byte order</h3> <p>By default, Structure and Union fields are aligned in the same way the C compiler does it. It is possible to override this behavior by specifying a <code>_pack_</code> class attribute in the subclass definition. This must be set to a positive integer and specifies the maximum alignment for the fields. This is what <code>#pragma pack(n)</code> also does in MSVC.</p> <p><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> uses the native byte order for Structures and Unions. To build structures with non-native byte order, you can use one of the <a class="reference internal" href="#ctypes.BigEndianStructure" title="ctypes.BigEndianStructure"><code>BigEndianStructure</code></a>, <a class="reference internal" href="#ctypes.LittleEndianStructure" title="ctypes.LittleEndianStructure"><code>LittleEndianStructure</code></a>, <code>BigEndianUnion</code>, and <code>LittleEndianUnion</code> base classes. These classes cannot contain pointer fields.</p>   <h3 id="ctypes-bit-fields-in-structures-unions">Bit fields in structures and unions</h3> <p id="bit-fields-in-structures-and-unions">It is possible to create structures and unions containing bit fields. Bit fields are only possible for integer fields, the bit width is specified as the third item in the <code>_fields_</code> tuples:</p> <pre data-language="python">&gt;&gt;&gt; class Int(Structure):
+...     _fields_ = [("first_16", c_int, 16),
+...                 ("second_16", c_int, 16)]
+...
+&gt;&gt;&gt; print(Int.first_16)
+&lt;Field type=c_long, ofs=0:0, bits=16&gt;
+&gt;&gt;&gt; print(Int.second_16)
+&lt;Field type=c_long, ofs=0:16, bits=16&gt;
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-arrays">Arrays</h3> <p id="arrays">Arrays are sequences, containing a fixed number of instances of the same type.</p> <p>The recommended way to create array types is by multiplying a data type with a positive integer:</p> <pre data-language="python">TenPointsArrayType = POINT * 10
+</pre> <p>Here is an example of a somewhat artificial data type, a structure containing 4 POINTs among other stuff:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; class POINT(Structure):
+...     _fields_ = ("x", c_int), ("y", c_int)
+...
+&gt;&gt;&gt; class MyStruct(Structure):
+...     _fields_ = [("a", c_int),
+...                 ("b", c_float),
+...                 ("point_array", POINT * 4)]
+&gt;&gt;&gt;
+&gt;&gt;&gt; print(len(MyStruct().point_array))
+4
+&gt;&gt;&gt;
+</pre> <p>Instances are created in the usual way, by calling the class:</p> <pre data-language="python">arr = TenPointsArrayType()
+for pt in arr:
+    print(pt.x, pt.y)
+</pre> <p>The above code print a series of <code>0 0</code> lines, because the array contents is initialized to zeros.</p> <p>Initializers of the correct type can also be specified:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; TenIntegers = c_int * 10
+&gt;&gt;&gt; ii = TenIntegers(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+&gt;&gt;&gt; print(ii)
+&lt;c_long_Array_10 object at 0x...&gt;
+&gt;&gt;&gt; for i in ii: print(i, end=" ")
+...
+1 2 3 4 5 6 7 8 9 10
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-pointers">Pointers</h3> <p id="pointers">Pointer instances are created by calling the <a class="reference internal" href="#ctypes.pointer" title="ctypes.pointer"><code>pointer()</code></a> function on a <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> type:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; i = c_int(42)
+&gt;&gt;&gt; pi = pointer(i)
+&gt;&gt;&gt;
+</pre> <p>Pointer instances have a <a class="reference internal" href="#ctypes._Pointer.contents" title="ctypes._Pointer.contents"><code>contents</code></a> attribute which returns the object to which the pointer points, the <code>i</code> object above:</p> <pre data-language="python">&gt;&gt;&gt; pi.contents
+c_long(42)
+&gt;&gt;&gt;
+</pre> <p>Note that <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> does not have OOR (original object return), it constructs a new, equivalent object each time you retrieve an attribute:</p> <pre data-language="python">&gt;&gt;&gt; pi.contents is i
+False
+&gt;&gt;&gt; pi.contents is pi.contents
+False
+&gt;&gt;&gt;
+</pre> <p>Assigning another <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a> instance to the pointer’s contents attribute would cause the pointer to point to the memory location where this is stored:</p> <pre data-language="python">&gt;&gt;&gt; i = c_int(99)
+&gt;&gt;&gt; pi.contents = i
+&gt;&gt;&gt; pi.contents
+c_long(99)
+&gt;&gt;&gt;
+</pre> <p>Pointer instances can also be indexed with integers:</p> <pre data-language="python">&gt;&gt;&gt; pi[0]
+99
+&gt;&gt;&gt;
+</pre> <p>Assigning to an integer index changes the pointed to value:</p> <pre data-language="python">&gt;&gt;&gt; print(i)
+c_long(99)
+&gt;&gt;&gt; pi[0] = 22
+&gt;&gt;&gt; print(i)
+c_long(22)
+&gt;&gt;&gt;
+</pre> <p>It is also possible to use indexes different from 0, but you must know what you’re doing, just as in C: You can access or change arbitrary memory locations. Generally you only use this feature if you receive a pointer from a C function, and you <em>know</em> that the pointer actually points to an array instead of a single item.</p> <p>Behind the scenes, the <a class="reference internal" href="#ctypes.pointer" title="ctypes.pointer"><code>pointer()</code></a> function does more than simply create pointer instances, it has to create pointer <em>types</em> first. This is done with the <a class="reference internal" href="#ctypes.POINTER" title="ctypes.POINTER"><code>POINTER()</code></a> function, which accepts any <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> type, and returns a new type:</p> <pre data-language="python">&gt;&gt;&gt; PI = POINTER(c_int)
+&gt;&gt;&gt; PI
+&lt;class 'ctypes.LP_c_long'&gt;
+&gt;&gt;&gt; PI(42)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: expected c_long instead of int
+&gt;&gt;&gt; PI(c_int(42))
+&lt;ctypes.LP_c_long object at 0x...&gt;
+&gt;&gt;&gt;
+</pre> <p>Calling the pointer type without an argument creates a <code>NULL</code> pointer. <code>NULL</code> pointers have a <code>False</code> boolean value:</p> <pre data-language="python">&gt;&gt;&gt; null_ptr = POINTER(c_int)()
+&gt;&gt;&gt; print(bool(null_ptr))
+False
+&gt;&gt;&gt;
+</pre> <p><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> checks for <code>NULL</code> when dereferencing pointers (but dereferencing invalid non-<code>NULL</code> pointers would crash Python):</p> <pre data-language="python">&gt;&gt;&gt; null_ptr[0]
+Traceback (most recent call last):
+    ....
+ValueError: NULL pointer access
+&gt;&gt;&gt;
+
+&gt;&gt;&gt; null_ptr[0] = 1234
+Traceback (most recent call last):
+    ....
+ValueError: NULL pointer access
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-type-conversions">Type conversions</h3> <p id="type-conversions">Usually, ctypes does strict type checking. This means, if you have <code>POINTER(c_int)</code> in the <code>argtypes</code> list of a function or as the type of a member field in a structure definition, only instances of exactly the same type are accepted. There are some exceptions to this rule, where ctypes accepts other objects. For example, you can pass compatible array instances instead of pointer types. So, for <code>POINTER(c_int)</code>, ctypes accepts an array of c_int:</p> <pre data-language="python">&gt;&gt;&gt; class Bar(Structure):
+...     _fields_ = [("count", c_int), ("values", POINTER(c_int))]
+...
+&gt;&gt;&gt; bar = Bar()
+&gt;&gt;&gt; bar.values = (c_int * 3)(1, 2, 3)
+&gt;&gt;&gt; bar.count = 3
+&gt;&gt;&gt; for i in range(bar.count):
+...     print(bar.values[i])
+...
+1
+2
+3
+&gt;&gt;&gt;
+</pre> <p>In addition, if a function argument is explicitly declared to be a pointer type (such as <code>POINTER(c_int)</code>) in <code>argtypes</code>, an object of the pointed type (<code>c_int</code> in this case) can be passed to the function. ctypes will apply the required <a class="reference internal" href="#ctypes.byref" title="ctypes.byref"><code>byref()</code></a> conversion in this case automatically.</p> <p>To set a POINTER type field to <code>NULL</code>, you can assign <code>None</code>:</p> <pre data-language="python">&gt;&gt;&gt; bar.values = None
+&gt;&gt;&gt;
+</pre> <p>Sometimes you have instances of incompatible types. In C, you can cast one type into another type. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> provides a <a class="reference internal" href="#ctypes.cast" title="ctypes.cast"><code>cast()</code></a> function which can be used in the same way. The <code>Bar</code> structure defined above accepts <code>POINTER(c_int)</code> pointers or <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a> arrays for its <code>values</code> field, but not instances of other types:</p> <pre data-language="python">&gt;&gt;&gt; bar.values = (c_byte * 4)()
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+TypeError: incompatible types, c_byte_Array_4 instance instead of LP_c_long instance
+&gt;&gt;&gt;
+</pre> <p>For these cases, the <a class="reference internal" href="#ctypes.cast" title="ctypes.cast"><code>cast()</code></a> function is handy.</p> <p>The <a class="reference internal" href="#ctypes.cast" title="ctypes.cast"><code>cast()</code></a> function can be used to cast a ctypes instance into a pointer to a different ctypes data type. <a class="reference internal" href="#ctypes.cast" title="ctypes.cast"><code>cast()</code></a> takes two parameters, a ctypes object that is or can be converted to a pointer of some kind, and a ctypes pointer type. It returns an instance of the second argument, which references the same memory block as the first argument:</p> <pre data-language="python">&gt;&gt;&gt; a = (c_byte * 4)()
+&gt;&gt;&gt; cast(a, POINTER(c_int))
+&lt;ctypes.LP_c_long object at ...&gt;
+&gt;&gt;&gt;
+</pre> <p>So, <a class="reference internal" href="#ctypes.cast" title="ctypes.cast"><code>cast()</code></a> can be used to assign to the <code>values</code> field of <code>Bar</code> the structure:</p> <pre data-language="python">&gt;&gt;&gt; bar = Bar()
+&gt;&gt;&gt; bar.values = cast((c_byte * 4)(), POINTER(c_int))
+&gt;&gt;&gt; print(bar.values[0])
+0
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-incomplete-types">Incomplete Types</h3> <p id="incomplete-types"><em>Incomplete Types</em> are structures, unions or arrays whose members are not yet specified. In C, they are specified by forward declarations, which are defined later:</p> <pre data-language="python">struct cell; /* forward declaration */
+
+struct cell {
+    char *name;
+    struct cell *next;
+};
+</pre> <p>The straightforward translation into ctypes code would be this, but it does not work:</p> <pre data-language="python">&gt;&gt;&gt; class cell(Structure):
+...     _fields_ = [("name", c_char_p),
+...                 ("next", POINTER(cell))]
+...
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+  File "&lt;stdin&gt;", line 2, in cell
+NameError: name 'cell' is not defined
+&gt;&gt;&gt;
+</pre> <p>because the new <code>class cell</code> is not available in the class statement itself. In <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>, we can define the <code>cell</code> class and set the <code>_fields_</code> attribute later, after the class statement:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; class cell(Structure):
+...     pass
+...
+&gt;&gt;&gt; cell._fields_ = [("name", c_char_p),
+...                  ("next", POINTER(cell))]
+&gt;&gt;&gt;
+</pre> <p>Let’s try it. We create two instances of <code>cell</code>, and let them point to each other, and finally follow the pointer chain a few times:</p> <pre data-language="python">&gt;&gt;&gt; c1 = cell()
+&gt;&gt;&gt; c1.name = b"foo"
+&gt;&gt;&gt; c2 = cell()
+&gt;&gt;&gt; c2.name = b"bar"
+&gt;&gt;&gt; c1.next = pointer(c2)
+&gt;&gt;&gt; c2.next = pointer(c1)
+&gt;&gt;&gt; p = c1
+&gt;&gt;&gt; for i in range(8):
+...     print(p.name, end=" ")
+...     p = p.next[0]
+...
+foo bar foo bar foo bar foo bar
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-callback-functions">Callback functions</h3> <p id="callback-functions"><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> allows creating C callable function pointers from Python callables. These are sometimes called <em>callback functions</em>.</p> <p>First, you must create a class for the callback function. The class knows the calling convention, the return type, and the number and types of arguments this function will receive.</p> <p>The <a class="reference internal" href="#ctypes.CFUNCTYPE" title="ctypes.CFUNCTYPE"><code>CFUNCTYPE()</code></a> factory function creates types for callback functions using the <code>cdecl</code> calling convention. On Windows, the <a class="reference internal" href="#ctypes.WINFUNCTYPE" title="ctypes.WINFUNCTYPE"><code>WINFUNCTYPE()</code></a> factory function creates types for callback functions using the <code>stdcall</code> calling convention.</p> <p>Both of these factory functions are called with the result type as first argument, and the callback functions expected argument types as the remaining arguments.</p> <p>I will present an example here which uses the standard C library’s <code>qsort()</code> function, that is used to sort items with the help of a callback function. <code>qsort()</code> will be used to sort an array of integers:</p> <pre data-language="python">&gt;&gt;&gt; IntArray5 = c_int * 5
+&gt;&gt;&gt; ia = IntArray5(5, 1, 7, 33, 99)
+&gt;&gt;&gt; qsort = libc.qsort
+&gt;&gt;&gt; qsort.restype = None
+&gt;&gt;&gt;
+</pre> <p><code>qsort()</code> must be called with a pointer to the data to sort, the number of items in the data array, the size of one item, and a pointer to the comparison function, the callback. The callback will then be called with two pointers to items, and it must return a negative integer if the first item is smaller than the second, a zero if they are equal, and a positive integer otherwise.</p> <p>So our callback function receives pointers to integers, and must return an integer. First we create the <code>type</code> for the callback function:</p> <pre data-language="python">&gt;&gt;&gt; CMPFUNC = CFUNCTYPE(c_int, POINTER(c_int), POINTER(c_int))
+&gt;&gt;&gt;
+</pre> <p>To get started, here is a simple callback that shows the values it gets passed:</p> <pre data-language="python">&gt;&gt;&gt; def py_cmp_func(a, b):
+...     print("py_cmp_func", a[0], b[0])
+...     return 0
+...
+&gt;&gt;&gt; cmp_func = CMPFUNC(py_cmp_func)
+&gt;&gt;&gt;
+</pre> <p>The result:</p> <pre data-language="python">&gt;&gt;&gt; qsort(ia, len(ia), sizeof(c_int), cmp_func)  
+py_cmp_func 5 1
+py_cmp_func 33 99
+py_cmp_func 7 33
+py_cmp_func 5 7
+py_cmp_func 1 7
+&gt;&gt;&gt;
+</pre> <p>Now we can actually compare the two items and return a useful result:</p> <pre data-language="python">&gt;&gt;&gt; def py_cmp_func(a, b):
+...     print("py_cmp_func", a[0], b[0])
+...     return a[0] - b[0]
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; qsort(ia, len(ia), sizeof(c_int), CMPFUNC(py_cmp_func)) 
+py_cmp_func 5 1
+py_cmp_func 33 99
+py_cmp_func 7 33
+py_cmp_func 1 7
+py_cmp_func 5 7
+&gt;&gt;&gt;
+</pre> <p>As we can easily check, our array is sorted now:</p> <pre data-language="python">&gt;&gt;&gt; for i in ia: print(i, end=" ")
+...
+1 5 7 33 99
+&gt;&gt;&gt;
+</pre> <p>The function factories can be used as decorator factories, so we may as well write:</p> <pre data-language="python">&gt;&gt;&gt; @CFUNCTYPE(c_int, POINTER(c_int), POINTER(c_int))
+... def py_cmp_func(a, b):
+...     print("py_cmp_func", a[0], b[0])
+...     return a[0] - b[0]
+...
+&gt;&gt;&gt; qsort(ia, len(ia), sizeof(c_int), py_cmp_func)
+py_cmp_func 5 1
+py_cmp_func 33 99
+py_cmp_func 7 33
+py_cmp_func 1 7
+py_cmp_func 5 7
+&gt;&gt;&gt;
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Make sure you keep references to <a class="reference internal" href="#ctypes.CFUNCTYPE" title="ctypes.CFUNCTYPE"><code>CFUNCTYPE()</code></a> objects as long as they are used from C code. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> doesn’t, and if you don’t, they may be garbage collected, crashing your program when a callback is made.</p> <p>Also, note that if the callback function is called in a thread created outside of Python’s control (e.g. by the foreign code that calls the callback), ctypes creates a new dummy Python thread on every invocation. This behavior is correct for most purposes, but it means that values stored with <a class="reference internal" href="threading#threading.local" title="threading.local"><code>threading.local</code></a> will <em>not</em> survive across different callbacks, even when those calls are made from the same C thread.</p> </div>   <h3 id="ctypes-accessing-values-exported-from-dlls">Accessing values exported from dlls</h3> <p id="accessing-values-exported-from-dlls">Some shared libraries not only export functions, they also export variables. An example in the Python library itself is the <a class="reference internal" href="https://docs.python.org/3.9/c-api/init.html#c.Py_OptimizeFlag" title="Py_OptimizeFlag"><code>Py_OptimizeFlag</code></a>, an integer set to 0, 1, or 2, depending on the <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#cmdoption-o"><code>-O</code></a> or <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#cmdoption-oo"><code>-OO</code></a> flag given on startup.</p> <p><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> can access values like this with the <code>in_dll()</code> class methods of the type. <em>pythonapi</em> is a predefined symbol giving access to the Python C api:</p> <pre data-language="python">&gt;&gt;&gt; opt_flag = c_int.in_dll(pythonapi, "Py_OptimizeFlag")
+&gt;&gt;&gt; print(opt_flag)
+c_long(0)
+&gt;&gt;&gt;
+</pre> <p>If the interpreter would have been started with <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#cmdoption-o"><code>-O</code></a>, the sample would have printed <code>c_long(1)</code>, or <code>c_long(2)</code> if <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#cmdoption-oo"><code>-OO</code></a> would have been specified.</p> <p>An extended example which also demonstrates the use of pointers accesses the <a class="reference internal" href="https://docs.python.org/3.9/c-api/import.html#c.PyImport_FrozenModules" title="PyImport_FrozenModules"><code>PyImport_FrozenModules</code></a> pointer exported by Python.</p> <p>Quoting the docs for that value:</p>  <p>This pointer is initialized to point to an array of <code>struct _frozen</code> records, terminated by one whose members are all <code>NULL</code> or zero. When a frozen module is imported, it is searched in this table. Third-party code could play tricks with this to provide a dynamically created collection of frozen modules.</p>  <p>So manipulating this pointer could even prove useful. To restrict the example size, we show only how this table can be read with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt;
+&gt;&gt;&gt; class struct_frozen(Structure):
+...     _fields_ = [("name", c_char_p),
+...                 ("code", POINTER(c_ubyte)),
+...                 ("size", c_int)]
+...
+&gt;&gt;&gt;
+</pre> <p>We have defined the <code>struct _frozen</code> data type, so we can get the pointer to the table:</p> <pre data-language="python">&gt;&gt;&gt; FrozenTable = POINTER(struct_frozen)
+&gt;&gt;&gt; table = FrozenTable.in_dll(pythonapi, "PyImport_FrozenModules")
+&gt;&gt;&gt;
+</pre> <p>Since <code>table</code> is a <code>pointer</code> to the array of <code>struct_frozen</code> records, we can iterate over it, but we just have to make sure that our loop terminates, because pointers have no size. Sooner or later it would probably crash with an access violation or whatever, so it’s better to break out of the loop when we hit the <code>NULL</code> entry:</p> <pre data-language="python">&gt;&gt;&gt; for item in table:
+...     if item.name is None:
+...         break
+...     print(item.name.decode("ascii"), item.size)
+...
+_frozen_importlib 31764
+_frozen_importlib_external 41499
+__hello__ 161
+__phello__ -161
+__phello__.spam 161
+&gt;&gt;&gt;
+</pre> <p>The fact that standard Python has a frozen module and a frozen package (indicated by the negative <code>size</code> member) is not well known, it is only used for testing. Try it out with <code>import __hello__</code> for example.</p>   <h3 id="ctypes-surprises">Surprises</h3> <p id="surprises">There are some edges in <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> where you might expect something other than what actually happens.</p> <p>Consider the following example:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import *
+&gt;&gt;&gt; class POINT(Structure):
+...     _fields_ = ("x", c_int), ("y", c_int)
+...
+&gt;&gt;&gt; class RECT(Structure):
+...     _fields_ = ("a", POINT), ("b", POINT)
+...
+&gt;&gt;&gt; p1 = POINT(1, 2)
+&gt;&gt;&gt; p2 = POINT(3, 4)
+&gt;&gt;&gt; rc = RECT(p1, p2)
+&gt;&gt;&gt; print(rc.a.x, rc.a.y, rc.b.x, rc.b.y)
+1 2 3 4
+&gt;&gt;&gt; # now swap the two points
+&gt;&gt;&gt; rc.a, rc.b = rc.b, rc.a
+&gt;&gt;&gt; print(rc.a.x, rc.a.y, rc.b.x, rc.b.y)
+3 4 3 4
+&gt;&gt;&gt;
+</pre> <p>Hm. We certainly expected the last statement to print <code>3 4 1 2</code>. What happened? Here are the steps of the <code>rc.a, rc.b = rc.b, rc.a</code> line above:</p> <pre data-language="python">&gt;&gt;&gt; temp0, temp1 = rc.b, rc.a
+&gt;&gt;&gt; rc.a = temp0
+&gt;&gt;&gt; rc.b = temp1
+&gt;&gt;&gt;
+</pre> <p>Note that <code>temp0</code> and <code>temp1</code> are objects still using the internal buffer of the <code>rc</code> object above. So executing <code>rc.a = temp0</code> copies the buffer contents of <code>temp0</code> into <code>rc</code> ‘s buffer. This, in turn, changes the contents of <code>temp1</code>. So, the last assignment <code>rc.b = temp1</code>, doesn’t have the expected effect.</p> <p>Keep in mind that retrieving sub-objects from Structure, Unions, and Arrays doesn’t <em>copy</em> the sub-object, instead it retrieves a wrapper object accessing the root-object’s underlying buffer.</p> <p>Another example that may behave differently from what one would expect is this:</p> <pre data-language="python">&gt;&gt;&gt; s = c_char_p()
+&gt;&gt;&gt; s.value = b"abc def ghi"
+&gt;&gt;&gt; s.value
+b'abc def ghi'
+&gt;&gt;&gt; s.value is s.value
+False
+&gt;&gt;&gt;
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Objects instantiated from <a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a> can only have their value set to bytes or integers.</p> </div> <p>Why is it printing <code>False</code>? ctypes instances are objects containing a memory block plus some <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-descriptor"><span class="xref std std-term">descriptor</span></a>s accessing the contents of the memory. Storing a Python object in the memory block does not store the object itself, instead the <code>contents</code> of the object is stored. Accessing the contents again constructs a new Python object each time!</p>   <h3 id="ctypes-variable-sized-data-types">Variable-sized data types</h3> <p id="variable-sized-data-types"><a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> provides some support for variable-sized arrays and structures.</p> <p>The <a class="reference internal" href="#ctypes.resize" title="ctypes.resize"><code>resize()</code></a> function can be used to resize the memory buffer of an existing ctypes object. The function takes the object as first argument, and the requested size in bytes as the second argument. The memory block cannot be made smaller than the natural memory block specified by the objects type, a <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> is raised if this is tried:</p> <pre data-language="python">&gt;&gt;&gt; short_array = (c_short * 4)()
+&gt;&gt;&gt; print(sizeof(short_array))
+8
+&gt;&gt;&gt; resize(short_array, 4)
+Traceback (most recent call last):
+    ...
+ValueError: minimum size is 8
+&gt;&gt;&gt; resize(short_array, 32)
+&gt;&gt;&gt; sizeof(short_array)
+32
+&gt;&gt;&gt; sizeof(type(short_array))
+8
+&gt;&gt;&gt;
+</pre> <p>This is nice and fine, but how would one access the additional elements contained in this array? Since the type still only knows about 4 elements, we get errors accessing other elements:</p> <pre data-language="python">&gt;&gt;&gt; short_array[:]
+[0, 0, 0, 0]
+&gt;&gt;&gt; short_array[7]
+Traceback (most recent call last):
+    ...
+IndexError: invalid index
+&gt;&gt;&gt;
+</pre> <p>Another way to use variable-sized data types with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> is to use the dynamic nature of Python, and (re-)define the data type after the required size is already known, on a case by case basis.</p>    <h2 id="ctypes-ctypes-reference">ctypes reference</h2>  <h3 id="ctypes-finding-shared-libraries">Finding shared libraries</h3> <p id="ctypes-reference">When programming in a compiled language, shared libraries are accessed when compiling/linking a program, and when the program is run.</p> <p>The purpose of the <code>find_library()</code> function is to locate a library in a way similar to what the compiler or runtime loader does (on platforms with several versions of a shared library the most recent should be loaded), while the ctypes library loaders act like when a program is run, and call the runtime loader directly.</p> <p>The <code>ctypes.util</code> module provides a function which can help to determine the library to load.</p> <dl class="data"> <dt>
+<code>ctypes.util.find_library(name)</code> </dt> <dd>
+<p>Try to find a library and return a pathname. <em>name</em> is the library name without any prefix like <em>lib</em>, suffix like <code>.so</code>, <code>.dylib</code> or version number (this is the form used for the posix linker option <code>-l</code>). If no library can be found, returns <code>None</code>.</p> </dd>
+</dl> <p>The exact functionality is system dependent.</p> <p>On Linux, <code>find_library()</code> tries to run external programs (<code>/sbin/ldconfig</code>, <code>gcc</code>, <code>objdump</code> and <code>ld</code>) to find the library file. It returns the filename of the library file.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>On Linux, the value of the environment variable <code>LD_LIBRARY_PATH</code> is used when searching for libraries, if a library cannot be found by any other means.</p> </div> <p>Here are some examples:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes.util import find_library
+&gt;&gt;&gt; find_library("m")
+'libm.so.6'
+&gt;&gt;&gt; find_library("c")
+'libc.so.6'
+&gt;&gt;&gt; find_library("bz2")
+'libbz2.so.1.0'
+&gt;&gt;&gt;
+</pre> <p>On OS X, <code>find_library()</code> tries several predefined naming schemes and paths to locate the library, and returns a full pathname if successful:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes.util import find_library
+&gt;&gt;&gt; find_library("c")
+'/usr/lib/libc.dylib'
+&gt;&gt;&gt; find_library("m")
+'/usr/lib/libm.dylib'
+&gt;&gt;&gt; find_library("bz2")
+'/usr/lib/libbz2.dylib'
+&gt;&gt;&gt; find_library("AGL")
+'/System/Library/Frameworks/AGL.framework/AGL'
+&gt;&gt;&gt;
+</pre> <p>On Windows, <code>find_library()</code> searches along the system search path, and returns the full pathname, but since there is no predefined naming scheme a call like <code>find_library("c")</code> will fail and return <code>None</code>.</p> <p>If wrapping a shared library with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>, it <em>may</em> be better to determine the shared library name at development time, and hardcode that into the wrapper module instead of using <code>find_library()</code> to locate the library at runtime.</p>   <h3 id="ctypes-loading-shared-libraries">Loading shared libraries</h3> <p id="loading-shared-libraries">There are several ways to load shared libraries into the Python process. One way is to instantiate one of the following classes:</p> <dl class="class"> <dt id="ctypes.CDLL">
+<code>class ctypes.CDLL(name, mode=DEFAULT_MODE, handle=None, use_errno=False, use_last_error=False, winmode=0)</code> </dt> <dd>
+<p>Instances of this class represent loaded shared libraries. Functions in these libraries use the standard C calling convention, and are assumed to return <code>int</code>.</p> <p>On Windows creating a <a class="reference internal" href="#ctypes.CDLL" title="ctypes.CDLL"><code>CDLL</code></a> instance may fail even if the DLL name exists. When a dependent DLL of the loaded DLL is not found, a <a class="reference internal" href="exceptions#OSError" title="OSError"><code>OSError</code></a> error is raised with the message <em>“[WinError 126] The specified module could not be found”.</em> This error message does not contain the name of the missing DLL because the Windows API does not return this information making this error hard to diagnose. To resolve this error and determine which DLL is not found, you need to find the list of dependent DLLs and determine which one is not found using Windows debugging and tracing tools.</p> </dd>
+</dl> <div class="admonition seealso"> <p class="admonition-title">See also</p> <p><a class="reference external" href="https://docs.microsoft.com/cpp/build/reference/dependents">Microsoft DUMPBIN tool</a> – A tool to find DLL dependents.</p> </div> <dl class="class"> <dt id="ctypes.OleDLL">
+<code>class ctypes.OleDLL(name, mode=DEFAULT_MODE, handle=None, use_errno=False, use_last_error=False, winmode=0)</code> </dt> <dd>
+<p>Windows only: Instances of this class represent loaded shared libraries, functions in these libraries use the <code>stdcall</code> calling convention, and are assumed to return the windows specific <a class="reference internal" href="#ctypes.HRESULT" title="ctypes.HRESULT"><code>HRESULT</code></a> code. <a class="reference internal" href="#ctypes.HRESULT" title="ctypes.HRESULT"><code>HRESULT</code></a> values contain information specifying whether the function call failed or succeeded, together with additional error code. If the return value signals a failure, an <a class="reference internal" href="exceptions#OSError" title="OSError"><code>OSError</code></a> is automatically raised.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.3: </span><a class="reference internal" href="exceptions#WindowsError" title="WindowsError"><code>WindowsError</code></a> used to be raised.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="ctypes.WinDLL">
+<code>class ctypes.WinDLL(name, mode=DEFAULT_MODE, handle=None, use_errno=False, use_last_error=False, winmode=0)</code> </dt> <dd>
+<p>Windows only: Instances of this class represent loaded shared libraries, functions in these libraries use the <code>stdcall</code> calling convention, and are assumed to return <code>int</code> by default.</p> <p>On Windows CE only the standard calling convention is used, for convenience the <a class="reference internal" href="#ctypes.WinDLL" title="ctypes.WinDLL"><code>WinDLL</code></a> and <a class="reference internal" href="#ctypes.OleDLL" title="ctypes.OleDLL"><code>OleDLL</code></a> use the standard calling convention on this platform.</p> </dd>
+</dl> <p>The Python <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-global-interpreter-lock"><span class="xref std std-term">global interpreter lock</span></a> is released before calling any function exported by these libraries, and reacquired afterwards.</p> <dl class="class"> <dt id="ctypes.PyDLL">
+<code>class ctypes.PyDLL(name, mode=DEFAULT_MODE, handle=None)</code> </dt> <dd>
+<p>Instances of this class behave like <a class="reference internal" href="#ctypes.CDLL" title="ctypes.CDLL"><code>CDLL</code></a> instances, except that the Python GIL is <em>not</em> released during the function call, and after the function execution the Python error flag is checked. If the error flag is set, a Python exception is raised.</p> <p>Thus, this is only useful to call Python C api functions directly.</p> </dd>
+</dl> <p>All these classes can be instantiated by calling them with at least one argument, the pathname of the shared library. If you have an existing handle to an already loaded shared library, it can be passed as the <code>handle</code> named parameter, otherwise the underlying platforms <code>dlopen</code> or <code>LoadLibrary</code> function is used to load the library into the process, and to get a handle to it.</p> <p>The <em>mode</em> parameter can be used to specify how the library is loaded. For details, consult the <em class="manpage"><a class="manpage reference external" href="https://manpages.debian.org/dlopen(3)">dlopen(3)</a></em> manpage. On Windows, <em>mode</em> is ignored. On posix systems, RTLD_NOW is always added, and is not configurable.</p> <p>The <em>use_errno</em> parameter, when set to true, enables a ctypes mechanism that allows accessing the system <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> error number in a safe way. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> maintains a thread-local copy of the systems <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> variable; if you call foreign functions created with <code>use_errno=True</code> then the <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> value before the function call is swapped with the ctypes private copy, the same happens immediately after the function call.</p> <p>The function <a class="reference internal" href="#ctypes.get_errno" title="ctypes.get_errno"><code>ctypes.get_errno()</code></a> returns the value of the ctypes private copy, and the function <a class="reference internal" href="#ctypes.set_errno" title="ctypes.set_errno"><code>ctypes.set_errno()</code></a> changes the ctypes private copy to a new value and returns the former value.</p> <p>The <em>use_last_error</em> parameter, when set to true, enables the same mechanism for the Windows error code which is managed by the <a class="reference internal" href="#ctypes.GetLastError" title="ctypes.GetLastError"><code>GetLastError()</code></a> and <code>SetLastError()</code> Windows API functions; <a class="reference internal" href="#ctypes.get_last_error" title="ctypes.get_last_error"><code>ctypes.get_last_error()</code></a> and <a class="reference internal" href="#ctypes.set_last_error" title="ctypes.set_last_error"><code>ctypes.set_last_error()</code></a> are used to request and change the ctypes private copy of the windows error code.</p> <p>The <em>winmode</em> parameter is used on Windows to specify how the library is loaded (since <em>mode</em> is ignored). It takes any value that is valid for the Win32 API <code>LoadLibraryEx</code> flags parameter. When omitted, the default is to use the flags that result in the most secure DLL load to avoiding issues such as DLL hijacking. Passing the full path to the DLL is the safest way to ensure the correct library and dependencies are loaded.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added <em>winmode</em> parameter.</p> </div> <dl class="data"> <dt>
+<code>ctypes.RTLD_GLOBAL</code> </dt> <dd>
+<p>Flag to use as <em>mode</em> parameter. On platforms where this flag is not available, it is defined as the integer zero.</p> </dd>
+</dl> <dl class="data"> <dt>
+<code>ctypes.RTLD_LOCAL</code> </dt> <dd>
+<p>Flag to use as <em>mode</em> parameter. On platforms where this is not available, it is the same as <em>RTLD_GLOBAL</em>.</p> </dd>
+</dl> <dl class="data"> <dt>
+<code>ctypes.DEFAULT_MODE</code> </dt> <dd>
+<p>The default mode which is used to load shared libraries. On OSX 10.3, this is <em>RTLD_GLOBAL</em>, otherwise it is the same as <em>RTLD_LOCAL</em>.</p> </dd>
+</dl> <p>Instances of these classes have no public methods. Functions exported by the shared library can be accessed as attributes or by index. Please note that accessing the function through an attribute caches the result and therefore accessing it repeatedly returns the same object each time. On the other hand, accessing it through an index returns a new object each time:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import CDLL
+&gt;&gt;&gt; libc = CDLL("libc.so.6")  # On Linux
+&gt;&gt;&gt; libc.time == libc.time
+True
+&gt;&gt;&gt; libc['time'] == libc['time']
+False
+</pre> <p>The following public attributes are available, their name starts with an underscore to not clash with exported function names:</p> <dl class="attribute"> <dt id="ctypes.PyDLL._handle">
+<code>PyDLL._handle</code> </dt> <dd>
+<p>The system handle used to access the library.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes.PyDLL._name">
+<code>PyDLL._name</code> </dt> <dd>
+<p>The name of the library passed in the constructor.</p> </dd>
+</dl> <p>Shared libraries can also be loaded by using one of the prefabricated objects, which are instances of the <a class="reference internal" href="#ctypes.LibraryLoader" title="ctypes.LibraryLoader"><code>LibraryLoader</code></a> class, either by calling the <code>LoadLibrary()</code> method, or by retrieving the library as attribute of the loader instance.</p> <dl class="class"> <dt id="ctypes.LibraryLoader">
+<code>class ctypes.LibraryLoader(dlltype)</code> </dt> <dd>
+<p>Class which loads shared libraries. <em>dlltype</em> should be one of the <a class="reference internal" href="#ctypes.CDLL" title="ctypes.CDLL"><code>CDLL</code></a>, <a class="reference internal" href="#ctypes.PyDLL" title="ctypes.PyDLL"><code>PyDLL</code></a>, <a class="reference internal" href="#ctypes.WinDLL" title="ctypes.WinDLL"><code>WinDLL</code></a>, or <a class="reference internal" href="#ctypes.OleDLL" title="ctypes.OleDLL"><code>OleDLL</code></a> types.</p> <p><a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__getattr__" title="object.__getattr__"><code>__getattr__()</code></a> has special behavior: It allows loading a shared library by accessing it as attribute of a library loader instance. The result is cached, so repeated attribute accesses return the same library each time.</p> <dl class="method"> <dt id="ctypes.LibraryLoader.LoadLibrary">
+<code>LoadLibrary(name)</code> </dt> <dd>
+<p>Load a shared library into the process and return it. This method always returns a new instance of the library.</p> </dd>
+</dl> </dd>
+</dl> <p>These prefabricated library loaders are available:</p> <dl class="data"> <dt>
+<code>ctypes.cdll</code> </dt> <dd>
+<p>Creates <a class="reference internal" href="#ctypes.CDLL" title="ctypes.CDLL"><code>CDLL</code></a> instances.</p> </dd>
+</dl> <dl class="data"> <dt>
+<code>ctypes.windll</code> </dt> <dd>
+<p>Windows only: Creates <a class="reference internal" href="#ctypes.WinDLL" title="ctypes.WinDLL"><code>WinDLL</code></a> instances.</p> </dd>
+</dl> <dl class="data"> <dt>
+<code>ctypes.oledll</code> </dt> <dd>
+<p>Windows only: Creates <a class="reference internal" href="#ctypes.OleDLL" title="ctypes.OleDLL"><code>OleDLL</code></a> instances.</p> </dd>
+</dl> <dl class="data"> <dt>
+<code>ctypes.pydll</code> </dt> <dd>
+<p>Creates <a class="reference internal" href="#ctypes.PyDLL" title="ctypes.PyDLL"><code>PyDLL</code></a> instances.</p> </dd>
+</dl> <p>For accessing the C Python api directly, a ready-to-use Python shared library object is available:</p> <dl class="data"> <dt>
+<code>ctypes.pythonapi</code> </dt> <dd>
+<p>An instance of <a class="reference internal" href="#ctypes.PyDLL" title="ctypes.PyDLL"><code>PyDLL</code></a> that exposes Python C API functions as attributes. Note that all these functions are assumed to return C <code>int</code>, which is of course not always the truth, so you have to assign the correct <code>restype</code> attribute to use these functions.</p> </dd>
+</dl> 
+<p>Loading a library through any of these objects raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.dlopen</code> with string argument <code>name</code>, the name used to load the library.</p> 
+<p>Accessing a function on a loaded library raises an auditing event <code>ctypes.dlsym</code> with arguments <code>library</code> (the library object) and <code>name</code> (the symbol’s name as a string or integer).</p> 
+<p>In cases when only the library handle is available rather than the object, accessing a function raises an auditing event <code>ctypes.dlsym/handle</code> with arguments <code>handle</code> (the raw library handle) and <code>name</code>.</p>   <h3 id="ctypes-foreign-functions">Foreign functions</h3> <p id="foreign-functions">As explained in the previous section, foreign functions can be accessed as attributes of loaded shared libraries. The function objects created in this way by default accept any number of arguments, accept any ctypes data instances as arguments, and return the default result type specified by the library loader. They are instances of a private class:</p> <dl class="class"> <dt id="ctypes._FuncPtr">
+<code>class ctypes._FuncPtr</code> </dt> <dd>
+<p>Base class for C callable foreign functions.</p> <p>Instances of foreign functions are also C compatible data types; they represent C function pointers.</p> <p>This behavior can be customized by assigning to special attributes of the foreign function object.</p> <dl class="attribute"> <dt id="ctypes._FuncPtr.restype">
+<code>restype</code> </dt> <dd>
+<p>Assign a ctypes type to specify the result type of the foreign function. Use <code>None</code> for <code>void</code>, a function not returning anything.</p> <p>It is possible to assign a callable Python object that is not a ctypes type, in this case the function is assumed to return a C <code>int</code>, and the callable will be called with this integer, allowing further processing or error checking. Using this is deprecated, for more flexible post processing or error checking use a ctypes data type as <a class="reference internal" href="#ctypes._FuncPtr.restype" title="ctypes._FuncPtr.restype"><code>restype</code></a> and assign a callable to the <a class="reference internal" href="#ctypes._FuncPtr.errcheck" title="ctypes._FuncPtr.errcheck"><code>errcheck</code></a> attribute.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes._FuncPtr.argtypes">
+<code>argtypes</code> </dt> <dd>
+<p>Assign a tuple of ctypes types to specify the argument types that the function accepts. Functions using the <code>stdcall</code> calling convention can only be called with the same number of arguments as the length of this tuple; functions using the C calling convention accept additional, unspecified arguments as well.</p> <p>When a foreign function is called, each actual argument is passed to the <code>from_param()</code> class method of the items in the <a class="reference internal" href="#ctypes._FuncPtr.argtypes" title="ctypes._FuncPtr.argtypes"><code>argtypes</code></a> tuple, this method allows adapting the actual argument to an object that the foreign function accepts. For example, a <a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a> item in the <a class="reference internal" href="#ctypes._FuncPtr.argtypes" title="ctypes._FuncPtr.argtypes"><code>argtypes</code></a> tuple will convert a string passed as argument into a bytes object using ctypes conversion rules.</p> <p>New: It is now possible to put items in argtypes which are not ctypes types, but each item must have a <code>from_param()</code> method which returns a value usable as argument (integer, string, ctypes instance). This allows defining adapters that can adapt custom objects as function parameters.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes._FuncPtr.errcheck">
+<code>errcheck</code> </dt> <dd>
+<p>Assign a Python function or another callable to this attribute. The callable will be called with three or more arguments:</p> <dl class="function"> <dt>
+<code>callable(result, func, arguments)</code> </dt> <dd>
+<p><em>result</em> is what the foreign function returns, as specified by the <code>restype</code> attribute.</p> <p><em>func</em> is the foreign function object itself, this allows reusing the same callable object to check or post process the results of several functions.</p> <p><em>arguments</em> is a tuple containing the parameters originally passed to the function call, this allows specializing the behavior on the arguments used.</p> </dd>
+</dl> <p>The object that this function returns will be returned from the foreign function call, but it can also check the result value and raise an exception if the foreign function call failed.</p> </dd>
+</dl> </dd>
+</dl> <dl class="exception"> <dt id="ctypes.ArgumentError">
+<code>exception ctypes.ArgumentError</code> </dt> <dd>
+<p>This exception is raised when a foreign function call cannot convert one of the passed arguments.</p> </dd>
+</dl> 
+<p>On Windows, when a foreign function call raises a system exception (for example, due to an access violation), it will be captured and replaced with a suitable Python exception. Further, an auditing event <code>ctypes.seh_exception</code> with argument <code>code</code> will be raised, allowing an audit hook to replace the exception with its own.</p> 
+<p>Some ways to invoke foreign function calls may raise an auditing event <code>ctypes.call_function</code> with arguments <code>function pointer</code> and <code>arguments</code>.</p>   <h3 id="ctypes-function-prototypes">Function prototypes</h3> <p id="function-prototypes">Foreign functions can also be created by instantiating function prototypes. Function prototypes are similar to function prototypes in C; they describe a function (return type, argument types, calling convention) without defining an implementation. The factory functions must be called with the desired result type and the argument types of the function, and can be used as decorator factories, and as such, be applied to functions through the <code>@wrapper</code> syntax. See <a class="reference internal" href="#ctypes-callback-functions"><span class="std std-ref">Callback functions</span></a> for examples.</p> <dl class="function"> <dt id="ctypes.CFUNCTYPE">
+<code>ctypes.CFUNCTYPE(restype, *argtypes, use_errno=False, use_last_error=False)</code> </dt> <dd>
+<p>The returned function prototype creates functions that use the standard C calling convention. The function will release the GIL during the call. If <em>use_errno</em> is set to true, the ctypes private copy of the system <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> variable is exchanged with the real <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> value before and after the call; <em>use_last_error</em> does the same for the Windows error code.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.WINFUNCTYPE">
+<code>ctypes.WINFUNCTYPE(restype, *argtypes, use_errno=False, use_last_error=False)</code> </dt> <dd>
+<p>Windows only: The returned function prototype creates functions that use the <code>stdcall</code> calling convention, except on Windows CE where <a class="reference internal" href="#ctypes.WINFUNCTYPE" title="ctypes.WINFUNCTYPE"><code>WINFUNCTYPE()</code></a> is the same as <a class="reference internal" href="#ctypes.CFUNCTYPE" title="ctypes.CFUNCTYPE"><code>CFUNCTYPE()</code></a>. The function will release the GIL during the call. <em>use_errno</em> and <em>use_last_error</em> have the same meaning as above.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.PYFUNCTYPE">
+<code>ctypes.PYFUNCTYPE(restype, *argtypes)</code> </dt> <dd>
+<p>The returned function prototype creates functions that use the Python calling convention. The function will <em>not</em> release the GIL during the call.</p> </dd>
+</dl> <p>Function prototypes created by these factory functions can be instantiated in different ways, depending on the type and number of the parameters in the call:</p>  <dl class="function"> <dt>
+<code>prototype(address)</code> </dt> <dd>
+<p>Returns a foreign function at the specified address which must be an integer.</p> </dd>
+</dl> <dl class="function"> <dt>
+<code>prototype(callable)</code> </dt> <dd>
+<p>Create a C callable function (a callback function) from a Python <em>callable</em>.</p> </dd>
+</dl> <dl class="function"> <dt>
+<code>prototype(func_spec[, paramflags])</code> </dt> <dd>
+<p>Returns a foreign function exported by a shared library. <em>func_spec</em> must be a 2-tuple <code>(name_or_ordinal, library)</code>. The first item is the name of the exported function as string, or the ordinal of the exported function as small integer. The second item is the shared library instance.</p> </dd>
+</dl> <dl class="function"> <dt>
+<code>prototype(vtbl_index, name[, paramflags[, iid]])</code> </dt> <dd>
+<p>Returns a foreign function that will call a COM method. <em>vtbl_index</em> is the index into the virtual function table, a small non-negative integer. <em>name</em> is name of the COM method. <em>iid</em> is an optional pointer to the interface identifier which is used in extended error reporting.</p> <p>COM methods use a special calling convention: They require a pointer to the COM interface as first argument, in addition to those parameters that are specified in the <code>argtypes</code> tuple.</p> </dd>
+</dl> <p>The optional <em>paramflags</em> parameter creates foreign function wrappers with much more functionality than the features described above.</p> <p><em>paramflags</em> must be a tuple of the same length as <code>argtypes</code>.</p> <p>Each item in this tuple contains further information about a parameter, it must be a tuple containing one, two, or three items.</p> <p>The first item is an integer containing a combination of direction flags for the parameter:</p>  <dl class="simple"> <dt>1</dt>
+<dd>
+<p>Specifies an input parameter to the function.</p> </dd> <dt>2</dt>
+<dd>
+<p>Output parameter. The foreign function fills in a value.</p> </dd> <dt>4</dt>
+<dd>
+<p>Input parameter which defaults to the integer zero.</p> </dd> </dl>  <p>The optional second item is the parameter name as string. If this is specified, the foreign function can be called with named parameters.</p> <p>The optional third item is the default value for this parameter.</p>  <p>This example demonstrates how to wrap the Windows <code>MessageBoxW</code> function so that it supports default parameters and named arguments. The C declaration from the windows header file is this:</p> <pre data-language="python">WINUSERAPI int WINAPI
+MessageBoxW(
+    HWND hWnd,
+    LPCWSTR lpText,
+    LPCWSTR lpCaption,
+    UINT uType);
+</pre> <p>Here is the wrapping with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import c_int, WINFUNCTYPE, windll
+&gt;&gt;&gt; from ctypes.wintypes import HWND, LPCWSTR, UINT
+&gt;&gt;&gt; prototype = WINFUNCTYPE(c_int, HWND, LPCWSTR, LPCWSTR, UINT)
+&gt;&gt;&gt; paramflags = (1, "hwnd", 0), (1, "text", "Hi"), (1, "caption", "Hello from ctypes"), (1, "flags", 0)
+&gt;&gt;&gt; MessageBox = prototype(("MessageBoxW", windll.user32), paramflags)
+</pre> <p>The <code>MessageBox</code> foreign function can now be called in these ways:</p> <pre data-language="python">&gt;&gt;&gt; MessageBox()
+&gt;&gt;&gt; MessageBox(text="Spam, spam, spam")
+&gt;&gt;&gt; MessageBox(flags=2, text="foo bar")
+</pre> <p>A second example demonstrates output parameters. The win32 <code>GetWindowRect</code> function retrieves the dimensions of a specified window by copying them into <code>RECT</code> structure that the caller has to supply. Here is the C declaration:</p> <pre data-language="python">WINUSERAPI BOOL WINAPI
+GetWindowRect(
+     HWND hWnd,
+     LPRECT lpRect);
+</pre> <p>Here is the wrapping with <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from ctypes import POINTER, WINFUNCTYPE, windll, WinError
+&gt;&gt;&gt; from ctypes.wintypes import BOOL, HWND, RECT
+&gt;&gt;&gt; prototype = WINFUNCTYPE(BOOL, HWND, POINTER(RECT))
+&gt;&gt;&gt; paramflags = (1, "hwnd"), (2, "lprect")
+&gt;&gt;&gt; GetWindowRect = prototype(("GetWindowRect", windll.user32), paramflags)
+&gt;&gt;&gt;
+</pre> <p>Functions with output parameters will automatically return the output parameter value if there is a single one, or a tuple containing the output parameter values when there are more than one, so the GetWindowRect function now returns a RECT instance, when called.</p> <p>Output parameters can be combined with the <code>errcheck</code> protocol to do further output processing and error checking. The win32 <code>GetWindowRect</code> api function returns a <code>BOOL</code> to signal success or failure, so this function could do the error checking, and raises an exception when the api call failed:</p> <pre data-language="python">&gt;&gt;&gt; def errcheck(result, func, args):
+...     if not result:
+...         raise WinError()
+...     return args
+...
+&gt;&gt;&gt; GetWindowRect.errcheck = errcheck
+&gt;&gt;&gt;
+</pre> <p>If the <code>errcheck</code> function returns the argument tuple it receives unchanged, <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> continues the normal processing it does on the output parameters. If you want to return a tuple of window coordinates instead of a <code>RECT</code> instance, you can retrieve the fields in the function and return them instead, the normal processing will no longer take place:</p> <pre data-language="python">&gt;&gt;&gt; def errcheck(result, func, args):
+...     if not result:
+...         raise WinError()
+...     rc = args[1]
+...     return rc.left, rc.top, rc.bottom, rc.right
+...
+&gt;&gt;&gt; GetWindowRect.errcheck = errcheck
+&gt;&gt;&gt;
+</pre>   <h3 id="ctypes-utility-functions">Utility functions</h3> <dl class="function" id="utility-functions"> <dt id="ctypes.addressof">
+<code>ctypes.addressof(obj)</code> </dt> <dd>
+<p>Returns the address of the memory buffer as integer. <em>obj</em> must be an instance of a ctypes type.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.addressof</code> with argument <code>obj</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.alignment">
+<code>ctypes.alignment(obj_or_type)</code> </dt> <dd>
+<p>Returns the alignment requirements of a ctypes type. <em>obj_or_type</em> must be a ctypes type or instance.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.byref">
+<code>ctypes.byref(obj[, offset])</code> </dt> <dd>
+<p>Returns a light-weight pointer to <em>obj</em>, which must be an instance of a ctypes type. <em>offset</em> defaults to zero, and must be an integer that will be added to the internal pointer value.</p> <p><code>byref(obj, offset)</code> corresponds to this C code:</p> <pre data-language="python">(((char *)&amp;obj) + offset)
+</pre> <p>The returned object can only be used as a foreign function call parameter. It behaves similar to <code>pointer(obj)</code>, but the construction is a lot faster.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.cast">
+<code>ctypes.cast(obj, type)</code> </dt> <dd>
+<p>This function is similar to the cast operator in C. It returns a new instance of <em>type</em> which points to the same memory block as <em>obj</em>. <em>type</em> must be a pointer type, and <em>obj</em> must be an object that can be interpreted as a pointer.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.create_string_buffer">
+<code>ctypes.create_string_buffer(init_or_size, size=None)</code> </dt> <dd>
+<p>This function creates a mutable character buffer. The returned object is a ctypes array of <a class="reference internal" href="#ctypes.c_char" title="ctypes.c_char"><code>c_char</code></a>.</p> <p><em>init_or_size</em> must be an integer which specifies the size of the array, or a bytes object which will be used to initialize the array items.</p> <p>If a bytes object is specified as first argument, the buffer is made one item larger than its length so that the last element in the array is a NUL termination character. An integer can be passed as second argument which allows specifying the size of the array if the length of the bytes should not be used.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.create_string_buffer</code> with arguments <code>init</code>, <code>size</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.create_unicode_buffer">
+<code>ctypes.create_unicode_buffer(init_or_size, size=None)</code> </dt> <dd>
+<p>This function creates a mutable unicode character buffer. The returned object is a ctypes array of <a class="reference internal" href="#ctypes.c_wchar" title="ctypes.c_wchar"><code>c_wchar</code></a>.</p> <p><em>init_or_size</em> must be an integer which specifies the size of the array, or a string which will be used to initialize the array items.</p> <p>If a string is specified as first argument, the buffer is made one item larger than the length of the string so that the last element in the array is a NUL termination character. An integer can be passed as second argument which allows specifying the size of the array if the length of the string should not be used.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.create_unicode_buffer</code> with arguments <code>init</code>, <code>size</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.DllCanUnloadNow">
+<code>ctypes.DllCanUnloadNow()</code> </dt> <dd>
+<p>Windows only: This function is a hook which allows implementing in-process COM servers with ctypes. It is called from the DllCanUnloadNow function that the _ctypes extension dll exports.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.DllGetClassObject">
+<code>ctypes.DllGetClassObject()</code> </dt> <dd>
+<p>Windows only: This function is a hook which allows implementing in-process COM servers with ctypes. It is called from the DllGetClassObject function that the <code>_ctypes</code> extension dll exports.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.util.find_library">
+<code>ctypes.util.find_library(name)</code> </dt> <dd>
+<p>Try to find a library and return a pathname. <em>name</em> is the library name without any prefix like <code>lib</code>, suffix like <code>.so</code>, <code>.dylib</code> or version number (this is the form used for the posix linker option <code>-l</code>). If no library can be found, returns <code>None</code>.</p> <p>The exact functionality is system dependent.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.util.find_msvcrt">
+<code>ctypes.util.find_msvcrt()</code> </dt> <dd>
+<p>Windows only: return the filename of the VC runtime library used by Python, and by the extension modules. If the name of the library cannot be determined, <code>None</code> is returned.</p> <p>If you need to free memory, for example, allocated by an extension module with a call to the <code>free(void *)</code>, it is important that you use the function in the same library that allocated the memory.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.FormatError">
+<code>ctypes.FormatError([code])</code> </dt> <dd>
+<p>Windows only: Returns a textual description of the error code <em>code</em>. If no error code is specified, the last error code is used by calling the Windows api function GetLastError.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.GetLastError">
+<code>ctypes.GetLastError()</code> </dt> <dd>
+<p>Windows only: Returns the last error code set by Windows in the calling thread. This function calls the Windows <code>GetLastError()</code> function directly, it does not return the ctypes-private copy of the error code.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.get_errno">
+<code>ctypes.get_errno()</code> </dt> <dd>
+<p>Returns the current value of the ctypes-private copy of the system <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> variable in the calling thread.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.get_errno</code> with no arguments.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.get_last_error">
+<code>ctypes.get_last_error()</code> </dt> <dd>
+<p>Windows only: returns the current value of the ctypes-private copy of the system <code>LastError</code> variable in the calling thread.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.get_last_error</code> with no arguments.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.memmove">
+<code>ctypes.memmove(dst, src, count)</code> </dt> <dd>
+<p>Same as the standard C memmove library function: copies <em>count</em> bytes from <em>src</em> to <em>dst</em>. <em>dst</em> and <em>src</em> must be integers or ctypes instances that can be converted to pointers.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.memset">
+<code>ctypes.memset(dst, c, count)</code> </dt> <dd>
+<p>Same as the standard C memset library function: fills the memory block at address <em>dst</em> with <em>count</em> bytes of value <em>c</em>. <em>dst</em> must be an integer specifying an address, or a ctypes instance.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.POINTER">
+<code>ctypes.POINTER(type)</code> </dt> <dd>
+<p>This factory function creates and returns a new ctypes pointer type. Pointer types are cached and reused internally, so calling this function repeatedly is cheap. <em>type</em> must be a ctypes type.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.pointer">
+<code>ctypes.pointer(obj)</code> </dt> <dd>
+<p>This function creates a new pointer instance, pointing to <em>obj</em>. The returned object is of the type <code>POINTER(type(obj))</code>.</p> <p>Note: If you just want to pass a pointer to an object to a foreign function call, you should use <code>byref(obj)</code> which is much faster.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.resize">
+<code>ctypes.resize(obj, size)</code> </dt> <dd>
+<p>This function resizes the internal memory buffer of <em>obj</em>, which must be an instance of a ctypes type. It is not possible to make the buffer smaller than the native size of the objects type, as given by <code>sizeof(type(obj))</code>, but it is possible to enlarge the buffer.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.set_errno">
+<code>ctypes.set_errno(value)</code> </dt> <dd>
+<p>Set the current value of the ctypes-private copy of the system <a class="reference internal" href="errno#module-errno" title="errno: Standard errno system symbols."><code>errno</code></a> variable in the calling thread to <em>value</em> and return the previous value.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.set_errno</code> with argument <code>errno</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.set_last_error">
+<code>ctypes.set_last_error(value)</code> </dt> <dd>
+<p>Windows only: set the current value of the ctypes-private copy of the system <code>LastError</code> variable in the calling thread to <em>value</em> and return the previous value.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.set_last_error</code> with argument <code>error</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.sizeof">
+<code>ctypes.sizeof(obj_or_type)</code> </dt> <dd>
+<p>Returns the size in bytes of a ctypes type or instance memory buffer. Does the same as the C <code>sizeof</code> operator.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.string_at">
+<code>ctypes.string_at(address, size=-1)</code> </dt> <dd>
+<p>This function returns the C string starting at memory address <em>address</em> as a bytes object. If size is specified, it is used as size, otherwise the string is assumed to be zero-terminated.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.string_at</code> with arguments <code>address</code>, <code>size</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="ctypes.WinError">
+<code>ctypes.WinError(code=None, descr=None)</code> </dt> <dd>
+<p>Windows only: this function is probably the worst-named thing in ctypes. It creates an instance of OSError. If <em>code</em> is not specified, <code>GetLastError</code> is called to determine the error code. If <em>descr</em> is not specified, <a class="reference internal" href="#ctypes.FormatError" title="ctypes.FormatError"><code>FormatError()</code></a> is called to get a textual description of the error.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.3: </span>An instance of <a class="reference internal" href="exceptions#WindowsError" title="WindowsError"><code>WindowsError</code></a> used to be created.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="ctypes.wstring_at">
+<code>ctypes.wstring_at(address, size=-1)</code> </dt> <dd>
+<p>This function returns the wide character string starting at memory address <em>address</em> as a string. If <em>size</em> is specified, it is used as the number of characters of the string, otherwise the string is assumed to be zero-terminated.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.wstring_at</code> with arguments <code>address</code>, <code>size</code>.</p> </dd>
+</dl>   <h3 id="ctypes-data-types">Data types</h3> <dl class="class" id="data-types"> <dt id="ctypes._CData">
+<code>class ctypes._CData</code> </dt> <dd>
+<p>This non-public class is the common base class of all ctypes data types. Among other things, all ctypes type instances contain a memory block that hold C compatible data; the address of the memory block is returned by the <a class="reference internal" href="#ctypes.addressof" title="ctypes.addressof"><code>addressof()</code></a> helper function. Another instance variable is exposed as <a class="reference internal" href="#ctypes._CData._objects" title="ctypes._CData._objects"><code>_objects</code></a>; this contains other Python objects that need to be kept alive in case the memory block contains pointers.</p> <p>Common methods of ctypes data types, these are all class methods (to be exact, they are methods of the <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-metaclass"><span class="xref std std-term">metaclass</span></a>):</p> <dl class="method"> <dt id="ctypes._CData.from_buffer">
+<code>from_buffer(source[, offset])</code> </dt> <dd>
+<p>This method returns a ctypes instance that shares the buffer of the <em>source</em> object. The <em>source</em> object must support the writeable buffer interface. The optional <em>offset</em> parameter specifies an offset into the source buffer in bytes; the default is zero. If the source buffer is not large enough a <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> is raised.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.cdata/buffer</code> with arguments <code>pointer</code>, <code>size</code>, <code>offset</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="ctypes._CData.from_buffer_copy">
+<code>from_buffer_copy(source[, offset])</code> </dt> <dd>
+<p>This method creates a ctypes instance, copying the buffer from the <em>source</em> object buffer which must be readable. The optional <em>offset</em> parameter specifies an offset into the source buffer in bytes; the default is zero. If the source buffer is not large enough a <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> is raised.</p> <p class="audit-hook">Raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.cdata/buffer</code> with arguments <code>pointer</code>, <code>size</code>, <code>offset</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="ctypes._CData.from_address">
+<code>from_address(address)</code> </dt> <dd>
+<p>This method returns a ctypes type instance using the memory specified by <em>address</em> which must be an integer.</p> 
+<p>This method, and others that indirectly call this method, raises an <a class="reference internal" href="sys#auditing"><span class="std std-ref">auditing event</span></a> <code>ctypes.cdata</code> with argument <code>address</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="ctypes._CData.from_param">
+<code>from_param(obj)</code> </dt> <dd>
+<p>This method adapts <em>obj</em> to a ctypes type. It is called with the actual object used in a foreign function call when the type is present in the foreign function’s <code>argtypes</code> tuple; it must return an object that can be used as a function call parameter.</p> <p>All ctypes data types have a default implementation of this classmethod that normally returns <em>obj</em> if that is an instance of the type. Some types accept other objects as well.</p> </dd>
+</dl> <dl class="method"> <dt id="ctypes._CData.in_dll">
+<code>in_dll(library, name)</code> </dt> <dd>
+<p>This method returns a ctypes type instance exported by a shared library. <em>name</em> is the name of the symbol that exports the data, <em>library</em> is the loaded shared library.</p> </dd>
+</dl> <p>Common instance variables of ctypes data types:</p> <dl class="attribute"> <dt id="ctypes._CData._b_base_">
+<code>_b_base_</code> </dt> <dd>
+<p>Sometimes ctypes data instances do not own the memory block they contain, instead they share part of the memory block of a base object. The <a class="reference internal" href="#ctypes._CData._b_base_" title="ctypes._CData._b_base_"><code>_b_base_</code></a> read-only member is the root ctypes object that owns the memory block.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes._CData._b_needsfree_">
+<code>_b_needsfree_</code> </dt> <dd>
+<p>This read-only variable is true when the ctypes data instance has allocated the memory block itself, false otherwise.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes._CData._objects">
+<code>_objects</code> </dt> <dd>
+<p>This member is either <code>None</code> or a dictionary containing Python objects that need to be kept alive so that the memory block contents is kept valid. This object is only exposed for debugging; never modify the contents of this dictionary.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="id1">Fundamental data types</h3> <dl class="class" id="ctypes-fundamental-data-types-2"> <dt id="ctypes._SimpleCData">
+<code>class ctypes._SimpleCData</code> </dt> <dd>
+<p>This non-public class is the base class of all fundamental ctypes data types. It is mentioned here because it contains the common attributes of the fundamental ctypes data types. <a class="reference internal" href="#ctypes._SimpleCData" title="ctypes._SimpleCData"><code>_SimpleCData</code></a> is a subclass of <a class="reference internal" href="#ctypes._CData" title="ctypes._CData"><code>_CData</code></a>, so it inherits their methods and attributes. ctypes data types that are not and do not contain pointers can now be pickled.</p> <p>Instances have a single attribute:</p> <dl class="attribute"> <dt id="ctypes._SimpleCData.value">
+<code>value</code> </dt> <dd>
+<p>This attribute contains the actual value of the instance. For integer and pointer types, it is an integer, for character types, it is a single character bytes object or string, for character pointer types it is a Python bytes object or string.</p> <p>When the <code>value</code> attribute is retrieved from a ctypes instance, usually a new object is returned each time. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> does <em>not</em> implement original object return, always a new object is constructed. The same is true for all other ctypes object instances.</p> </dd>
+</dl> </dd>
+</dl> <p>Fundamental data types, when returned as foreign function call results, or, for example, by retrieving structure field members or array items, are transparently converted to native Python types. In other words, if a foreign function has a <code>restype</code> of <a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a>, you will always receive a Python bytes object, <em>not</em> a <a class="reference internal" href="#ctypes.c_char_p" title="ctypes.c_char_p"><code>c_char_p</code></a> instance.</p> <p>Subclasses of fundamental data types do <em>not</em> inherit this behavior. So, if a foreign functions <code>restype</code> is a subclass of <a class="reference internal" href="#ctypes.c_void_p" title="ctypes.c_void_p"><code>c_void_p</code></a>, you will receive an instance of this subclass from the function call. Of course, you can get the value of the pointer by accessing the <code>value</code> attribute.</p> <p>These are the fundamental ctypes data types:</p> <dl class="class"> <dt id="ctypes.c_byte">
+<code>class ctypes.c_byte</code> </dt> <dd>
+<p>Represents the C <code>signed char</code> datatype, and interprets the value as small integer. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_char">
+<code>class ctypes.c_char</code> </dt> <dd>
+<p>Represents the C <code>char</code> datatype, and interprets the value as a single character. The constructor accepts an optional string initializer, the length of the string must be exactly one character.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_char_p">
+<code>class ctypes.c_char_p</code> </dt> <dd>
+<p>Represents the C <code>char *</code> datatype when it points to a zero-terminated string. For a general character pointer that may also point to binary data, <code>POINTER(c_char)</code> must be used. The constructor accepts an integer address, or a bytes object.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_double">
+<code>class ctypes.c_double</code> </dt> <dd>
+<p>Represents the C <code>double</code> datatype. The constructor accepts an optional float initializer.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_longdouble">
+<code>class ctypes.c_longdouble</code> </dt> <dd>
+<p>Represents the C <code>long double</code> datatype. The constructor accepts an optional float initializer. On platforms where <code>sizeof(long double) ==
+sizeof(double)</code> it is an alias to <a class="reference internal" href="#ctypes.c_double" title="ctypes.c_double"><code>c_double</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_float">
+<code>class ctypes.c_float</code> </dt> <dd>
+<p>Represents the C <code>float</code> datatype. The constructor accepts an optional float initializer.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_int">
+<code>class ctypes.c_int</code> </dt> <dd>
+<p>Represents the C <code>signed int</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done. On platforms where <code>sizeof(int) == sizeof(long)</code> it is an alias to <a class="reference internal" href="#ctypes.c_long" title="ctypes.c_long"><code>c_long</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_int8">
+<code>class ctypes.c_int8</code> </dt> <dd>
+<p>Represents the C 8-bit <code>signed int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_byte" title="ctypes.c_byte"><code>c_byte</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_int16">
+<code>class ctypes.c_int16</code> </dt> <dd>
+<p>Represents the C 16-bit <code>signed int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_short" title="ctypes.c_short"><code>c_short</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_int32">
+<code>class ctypes.c_int32</code> </dt> <dd>
+<p>Represents the C 32-bit <code>signed int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_int64">
+<code>class ctypes.c_int64</code> </dt> <dd>
+<p>Represents the C 64-bit <code>signed int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_longlong" title="ctypes.c_longlong"><code>c_longlong</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_long">
+<code>class ctypes.c_long</code> </dt> <dd>
+<p>Represents the C <code>signed long</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_longlong">
+<code>class ctypes.c_longlong</code> </dt> <dd>
+<p>Represents the C <code>signed long long</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_short">
+<code>class ctypes.c_short</code> </dt> <dd>
+<p>Represents the C <code>signed short</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_size_t">
+<code>class ctypes.c_size_t</code> </dt> <dd>
+<p>Represents the C <code>size_t</code> datatype.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_ssize_t">
+<code>class ctypes.c_ssize_t</code> </dt> <dd>
+<p>Represents the C <code>ssize_t</code> datatype.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.2.</span></p> </div> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_ubyte">
+<code>class ctypes.c_ubyte</code> </dt> <dd>
+<p>Represents the C <code>unsigned char</code> datatype, it interprets the value as small integer. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_uint">
+<code>class ctypes.c_uint</code> </dt> <dd>
+<p>Represents the C <code>unsigned int</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done. On platforms where <code>sizeof(int) == sizeof(long)</code> it is an alias for <a class="reference internal" href="#ctypes.c_ulong" title="ctypes.c_ulong"><code>c_ulong</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_uint8">
+<code>class ctypes.c_uint8</code> </dt> <dd>
+<p>Represents the C 8-bit <code>unsigned int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_ubyte" title="ctypes.c_ubyte"><code>c_ubyte</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_uint16">
+<code>class ctypes.c_uint16</code> </dt> <dd>
+<p>Represents the C 16-bit <code>unsigned int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_ushort" title="ctypes.c_ushort"><code>c_ushort</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_uint32">
+<code>class ctypes.c_uint32</code> </dt> <dd>
+<p>Represents the C 32-bit <code>unsigned int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_uint" title="ctypes.c_uint"><code>c_uint</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_uint64">
+<code>class ctypes.c_uint64</code> </dt> <dd>
+<p>Represents the C 64-bit <code>unsigned int</code> datatype. Usually an alias for <a class="reference internal" href="#ctypes.c_ulonglong" title="ctypes.c_ulonglong"><code>c_ulonglong</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_ulong">
+<code>class ctypes.c_ulong</code> </dt> <dd>
+<p>Represents the C <code>unsigned long</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_ulonglong">
+<code>class ctypes.c_ulonglong</code> </dt> <dd>
+<p>Represents the C <code>unsigned long long</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_ushort">
+<code>class ctypes.c_ushort</code> </dt> <dd>
+<p>Represents the C <code>unsigned short</code> datatype. The constructor accepts an optional integer initializer; no overflow checking is done.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_void_p">
+<code>class ctypes.c_void_p</code> </dt> <dd>
+<p>Represents the C <code>void *</code> type. The value is represented as integer. The constructor accepts an optional integer initializer.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_wchar">
+<code>class ctypes.c_wchar</code> </dt> <dd>
+<p>Represents the C <code>wchar_t</code> datatype, and interprets the value as a single character unicode string. The constructor accepts an optional string initializer, the length of the string must be exactly one character.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_wchar_p">
+<code>class ctypes.c_wchar_p</code> </dt> <dd>
+<p>Represents the C <code>wchar_t *</code> datatype, which must be a pointer to a zero-terminated wide character string. The constructor accepts an integer address, or a string.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.c_bool">
+<code>class ctypes.c_bool</code> </dt> <dd>
+<p>Represent the C <code>bool</code> datatype (more accurately, <code>_Bool</code> from C99). Its value can be <code>True</code> or <code>False</code>, and the constructor accepts any object that has a truth value.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.HRESULT">
+<code>class ctypes.HRESULT</code> </dt> <dd>
+<p>Windows only: Represents a <code>HRESULT</code> value, which contains success or error information for a function or method call.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.py_object">
+<code>class ctypes.py_object</code> </dt> <dd>
+<p>Represents the C <a class="reference internal" href="https://docs.python.org/3.9/c-api/structures.html#c.PyObject" title="PyObject"><code>PyObject *</code></a> datatype. Calling this without an argument creates a <code>NULL</code> <a class="reference internal" href="https://docs.python.org/3.9/c-api/structures.html#c.PyObject" title="PyObject"><code>PyObject *</code></a> pointer.</p> </dd>
+</dl> <p>The <code>ctypes.wintypes</code> module provides quite some other Windows specific data types, for example <code>HWND</code>, <code>WPARAM</code>, or <code>DWORD</code>. Some useful structures like <code>MSG</code> or <code>RECT</code> are also defined.</p>   <h3 id="ctypes-structured-data-types">Structured data types</h3> <dl class="class" id="structured-data-types"> <dt id="ctypes.Union">
+<code>class ctypes.Union(*args, **kw)</code> </dt> <dd>
+<p>Abstract base class for unions in native byte order.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.BigEndianStructure">
+<code>class ctypes.BigEndianStructure(*args, **kw)</code> </dt> <dd>
+<p>Abstract base class for structures in <em>big endian</em> byte order.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes.LittleEndianStructure">
+<code>class ctypes.LittleEndianStructure(*args, **kw)</code> </dt> <dd>
+<p>Abstract base class for structures in <em>little endian</em> byte order.</p> </dd>
+</dl> <p>Structures with non-native byte order cannot contain pointer type fields, or any other data types containing pointer type fields.</p> <dl class="class"> <dt id="ctypes.Structure">
+<code>class ctypes.Structure(*args, **kw)</code> </dt> <dd>
+<p>Abstract base class for structures in <em>native</em> byte order.</p> <p>Concrete structure and union types must be created by subclassing one of these types, and at least define a <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> class variable. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> will create <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-descriptor"><span class="xref std std-term">descriptor</span></a>s which allow reading and writing the fields by direct attribute accesses. These are the</p> <dl class="attribute"> <dt id="ctypes.Structure._fields_">
+<code>_fields_</code> </dt> <dd>
+<p>A sequence defining the structure fields. The items must be 2-tuples or 3-tuples. The first item is the name of the field, the second item specifies the type of the field; it can be any ctypes data type.</p> <p>For integer type fields like <a class="reference internal" href="#ctypes.c_int" title="ctypes.c_int"><code>c_int</code></a>, a third optional item can be given. It must be a small positive integer defining the bit width of the field.</p> <p>Field names must be unique within one structure or union. This is not checked, only one field can be accessed when names are repeated.</p> <p>It is possible to define the <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> class variable <em>after</em> the class statement that defines the Structure subclass, this allows creating data types that directly or indirectly reference themselves:</p> <pre data-language="python">class List(Structure):
+    pass
+List._fields_ = [("pnext", POINTER(List)),
+                 ...
+                ]
+</pre> <p>The <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> class variable must, however, be defined before the type is first used (an instance is created, <a class="reference internal" href="#ctypes.sizeof" title="ctypes.sizeof"><code>sizeof()</code></a> is called on it, and so on). Later assignments to the <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> class variable will raise an AttributeError.</p> <p>It is possible to define sub-subclasses of structure types, they inherit the fields of the base class plus the <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> defined in the sub-subclass, if any.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes.Structure._pack_">
+<code>_pack_</code> </dt> <dd>
+<p>An optional small integer that allows overriding the alignment of structure fields in the instance. <a class="reference internal" href="#ctypes.Structure._pack_" title="ctypes.Structure._pack_"><code>_pack_</code></a> must already be defined when <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> is assigned, otherwise it will have no effect.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes.Structure._anonymous_">
+<code>_anonymous_</code> </dt> <dd>
+<p>An optional sequence that lists the names of unnamed (anonymous) fields. <a class="reference internal" href="#ctypes.Structure._anonymous_" title="ctypes.Structure._anonymous_"><code>_anonymous_</code></a> must be already defined when <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> is assigned, otherwise it will have no effect.</p> <p>The fields listed in this variable must be structure or union type fields. <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> will create descriptors in the structure type that allows accessing the nested fields directly, without the need to create the structure or union field.</p> <p>Here is an example type (Windows):</p> <pre data-language="python">class _U(Union):
+    _fields_ = [("lptdesc", POINTER(TYPEDESC)),
+                ("lpadesc", POINTER(ARRAYDESC)),
+                ("hreftype", HREFTYPE)]
+
+class TYPEDESC(Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("u", _U),
+                ("vt", VARTYPE)]
+</pre> <p>The <code>TYPEDESC</code> structure describes a COM data type, the <code>vt</code> field specifies which one of the union fields is valid. Since the <code>u</code> field is defined as anonymous field, it is now possible to access the members directly off the TYPEDESC instance. <code>td.lptdesc</code> and <code>td.u.lptdesc</code> are equivalent, but the former is faster since it does not need to create a temporary union instance:</p> <pre data-language="python">td = TYPEDESC()
+td.vt = VT_PTR
+td.lptdesc = POINTER(some_type)
+td.u.lptdesc = POINTER(some_type)
+</pre> </dd>
+</dl> <p>It is possible to define sub-subclasses of structures, they inherit the fields of the base class. If the subclass definition has a separate <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> variable, the fields specified in this are appended to the fields of the base class.</p> <p>Structure and union constructors accept both positional and keyword arguments. Positional arguments are used to initialize member fields in the same order as they are appear in <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a>. Keyword arguments in the constructor are interpreted as attribute assignments, so they will initialize <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a> with the same name, or create new attributes for names not present in <a class="reference internal" href="#ctypes.Structure._fields_" title="ctypes.Structure._fields_"><code>_fields_</code></a>.</p> </dd>
+</dl>   <h3 id="ctypes-arrays-pointers">Arrays and pointers</h3> <dl class="class" id="arrays-and-pointers"> <dt id="ctypes.Array">
+<code>class ctypes.Array(*args)</code> </dt> <dd>
+<p>Abstract base class for arrays.</p> <p>The recommended way to create concrete array types is by multiplying any <a class="reference internal" href="#module-ctypes" title="ctypes: A foreign function library for Python."><code>ctypes</code></a> data type with a positive integer. Alternatively, you can subclass this type and define <a class="reference internal" href="#ctypes.Array._length_" title="ctypes.Array._length_"><code>_length_</code></a> and <a class="reference internal" href="#ctypes.Array._type_" title="ctypes.Array._type_"><code>_type_</code></a> class variables. Array elements can be read and written using standard subscript and slice accesses; for slice reads, the resulting object is <em>not</em> itself an <a class="reference internal" href="#ctypes.Array" title="ctypes.Array"><code>Array</code></a>.</p> <dl class="attribute"> <dt id="ctypes.Array._length_">
+<code>_length_</code> </dt> <dd>
+<p>A positive integer specifying the number of elements in the array. Out-of-range subscripts result in an <a class="reference internal" href="exceptions#IndexError" title="IndexError"><code>IndexError</code></a>. Will be returned by <a class="reference internal" href="functions#len" title="len"><code>len()</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes.Array._type_">
+<code>_type_</code> </dt> <dd>
+<p>Specifies the type of each element in the array.</p> </dd>
+</dl> <p>Array subclass constructors accept positional arguments, used to initialize the elements in order.</p> </dd>
+</dl> <dl class="class"> <dt id="ctypes._Pointer">
+<code>class ctypes._Pointer</code> </dt> <dd>
+<p>Private, abstract base class for pointers.</p> <p>Concrete pointer types are created by calling <a class="reference internal" href="#ctypes.POINTER" title="ctypes.POINTER"><code>POINTER()</code></a> with the type that will be pointed to; this is done automatically by <a class="reference internal" href="#ctypes.pointer" title="ctypes.pointer"><code>pointer()</code></a>.</p> <p>If a pointer points to an array, its elements can be read and written using standard subscript and slice accesses. Pointer objects have no size, so <a class="reference internal" href="functions#len" title="len"><code>len()</code></a> will raise <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a>. Negative subscripts will read from the memory <em>before</em> the pointer (as in C), and out-of-range subscripts will probably crash with an access violation (if you’re lucky).</p> <dl class="attribute"> <dt id="ctypes._Pointer._type_">
+<code>_type_</code> </dt> <dd>
+<p>Specifies the type pointed to.</p> </dd>
+</dl> <dl class="attribute"> <dt id="ctypes._Pointer.contents">
+<code>contents</code> </dt> <dd>
+<p>Returns the object to which to pointer points. Assigning to this attribute changes the pointer to point to the assigned object.</p> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/ctypes.html" class="_attribution-link">https://docs.python.org/3.9/library/ctypes.html</a>
+  </p>
+</div>

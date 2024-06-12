@@ -1,0 +1,453 @@
+<h1 id="customizing-authentication-in-django">Customizing authentication in Django</h1> <p id="s-customizing-authentication-in-django">The authentication that comes with Django is good enough for most common cases, but you may have needs not met by the out-of-the-box defaults. Customizing authentication in your projects requires understanding what points of the provided system are extensible or replaceable. This document provides details about how the auth system can be customized.</p> <p><a class="reference internal" href="#authentication-backends"><span class="std std-ref">Authentication backends</span></a> provide an extensible system for when a username and password stored with the user model need to be authenticated against a different service than Django’s default.</p> <p>You can give your models <a class="reference internal" href="#custom-permissions"><span class="std std-ref">custom permissions</span></a> that can be checked through Django’s authorization system.</p> <p>You can <a class="reference internal" href="#extending-user"><span class="std std-ref">extend</span></a> the default <code>User</code> model, or <a class="reference internal" href="#auth-custom-user"><span class="std std-ref">substitute</span></a> a completely customized model.</p>  <h2 id="authentication-backends">Other authentication sources</h2> <p id="s-other-authentication-sources">There may be times you have the need to hook into another authentication source – that is, another source of usernames and passwords or authentication methods.</p> <p>For example, your company may already have an LDAP setup that stores a username and password for every employee. It’d be a hassle for both the network administrator and the users themselves if users had separate accounts in LDAP and the Django-based applications.</p> <p>So, to handle situations like this, the Django authentication system lets you plug in other authentication sources. You can override Django’s default database-based scheme, or you can use the default system in tandem with other systems.</p> <p>See the <a class="reference internal" href="../../ref/contrib/auth#authentication-backends-reference"><span class="std std-ref">authentication backend reference</span></a> for information on the authentication backends included with Django.</p>  <h3 id="specifying-authentication-backends">Specifying authentication backends</h3> <p id="s-specifying-authentication-backends">Behind the scenes, Django maintains a list of “authentication backends” that it checks for authentication. When somebody calls <a class="reference internal" href="default#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>django.contrib.auth.authenticate()</code></a> – as described in <a class="reference internal" href="default#how-to-log-a-user-in"><span class="std std-ref">How to log a user in</span></a> – Django tries authenticating across all of its authentication backends. If the first authentication method fails, Django tries the second one, and so on, until all backends have been attempted.</p> <p>The list of authentication backends to use is specified in the <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> setting. This should be a list of Python path names that point to Python classes that know how to authenticate. These classes can be anywhere on your Python path.</p> <p>By default, <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> is set to:</p> <pre data-language="python">['django.contrib.auth.backends.ModelBackend']
+</pre> <p>That’s the basic authentication backend that checks the Django users database and queries the built-in permissions. It does not provide protection against brute force attacks via any rate limiting mechanism. You may either implement your own rate limiting mechanism in a custom auth backend, or use the mechanisms provided by most web servers.</p> <p>The order of <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> matters, so if the same username and password is valid in multiple backends, Django will stop processing at the first positive match.</p> <p>If a backend raises a <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a> exception, authentication will immediately fail. Django won’t check the backends that follow.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Once a user has authenticated, Django stores which backend was used to authenticate the user in the user’s session, and re-uses the same backend for the duration of that session whenever access to the currently authenticated user is needed. This effectively means that authentication sources are cached on a per-session basis, so if you change <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a>, you’ll need to clear out session data if you need to force users to re-authenticate using different methods. A simple way to do that is to execute <code>Session.objects.all().delete()</code>.</p> </div>   <h3 id="writing-an-authentication-backend">Writing an authentication backend</h3> <p id="s-writing-an-authentication-backend">An authentication backend is a class that implements two required methods: <code>get_user(user_id)</code> and <code>authenticate(request, **credentials)</code>, as well as a set of optional permission related <a class="reference internal" href="#authorization-methods"><span class="std std-ref">authorization methods</span></a>.</p> <p>The <code>get_user</code> method takes a <code>user_id</code> – which could be a username, database ID or whatever, but has to be the primary key of your user object – and returns a user object or <code>None</code>.</p> <p>The <code>authenticate</code> method takes a <code>request</code> argument and credentials as keyword arguments. Most of the time, it’ll look like this:</p> <pre data-language="python">from django.contrib.auth.backends import BaseBackend
+
+class MyBackend(BaseBackend):
+    def authenticate(self, request, username=None, password=None):
+        # Check the username/password and return a user.
+        ...
+</pre> <p>But it could also authenticate a token, like so:</p> <pre data-language="python">from django.contrib.auth.backends import BaseBackend
+
+class MyBackend(BaseBackend):
+    def authenticate(self, request, token=None):
+        # Check the token and return a user.
+        ...
+</pre> <p>Either way, <code>authenticate()</code> should check the credentials it gets and return a user object that matches those credentials if the credentials are valid. If they’re not valid, it should return <code>None</code>.</p> <p><code>request</code> is an <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> and may be <code>None</code> if it wasn’t provided to <a class="reference internal" href="default#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>authenticate()</code></a> (which passes it on to the backend).</p> <p>The Django admin is tightly coupled to the Django <a class="reference internal" href="default#user-objects"><span class="std std-ref">User object</span></a>. The best way to deal with this is to create a Django <code>User</code> object for each user that exists for your backend (e.g., in your LDAP directory, your external SQL database, etc.) You can either write a script to do this in advance, or your <code>authenticate</code> method can do it the first time a user logs in.</p> <p>Here’s an example backend that authenticates against a username and password variable defined in your <code>settings.py</code> file and creates a Django <code>User</code> object the first time a user authenticates:</p> <pre data-language="python">from django.conf import settings
+from django.contrib.auth.backends import BaseBackend
+from django.contrib.auth.hashers import check_password
+from django.contrib.auth.models import User
+
+class SettingsBackend(BaseBackend):
+    """
+    Authenticate against the settings ADMIN_LOGIN and ADMIN_PASSWORD.
+
+    Use the login name and a hash of the password. For example:
+
+    ADMIN_LOGIN = 'admin'
+    ADMIN_PASSWORD = 'pbkdf2_sha256$30000$Vo0VlMnkR4Bk$qEvtdyZRWTcOsCnI/oQ7fVOu1XAURIZYoOZ3iq8Dr4M='
+    """
+
+    def authenticate(self, request, username=None, password=None):
+        login_valid = (settings.ADMIN_LOGIN == username)
+        pwd_valid = check_password(password, settings.ADMIN_PASSWORD)
+        if login_valid and pwd_valid:
+            try:
+                user = User.objects.get(username=username)
+            except User.DoesNotExist:
+                # Create a new user. There's no need to set a password
+                # because only the password from settings.py is checked.
+                user = User(username=username)
+                user.is_staff = True
+                user.is_superuser = True
+                user.save()
+            return user
+        return None
+
+    def get_user(self, user_id):
+        try:
+            return User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return None
+</pre>   <h3 id="authorization-methods">Handling authorization in custom backends</h3> <p id="s-handling-authorization-in-custom-backends">Custom auth backends can provide their own permissions.</p> <p>The user model and its manager will delegate permission lookup functions (<a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.get_user_permissions" title="django.contrib.auth.models.User.get_user_permissions"><code>get_user_permissions()</code></a>, <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.get_group_permissions" title="django.contrib.auth.models.User.get_group_permissions"><code>get_group_permissions()</code></a>, <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.get_all_permissions" title="django.contrib.auth.models.User.get_all_permissions"><code>get_all_permissions()</code></a>, <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_perm" title="django.contrib.auth.models.User.has_perm"><code>has_perm()</code></a>, <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_module_perms" title="django.contrib.auth.models.User.has_module_perms"><code>has_module_perms()</code></a>, and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.UserManager.with_perm" title="django.contrib.auth.models.UserManager.with_perm"><code>with_perm()</code></a>) to any authentication backend that implements these functions.</p> <p>The permissions given to the user will be the superset of all permissions returned by all backends. That is, Django grants a permission to a user that any one backend grants.</p> <p>If a backend raises a <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a> exception in <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_perm" title="django.contrib.auth.models.User.has_perm"><code>has_perm()</code></a> or <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_module_perms" title="django.contrib.auth.models.User.has_module_perms"><code>has_module_perms()</code></a>, the authorization will immediately fail and Django won’t check the backends that follow.</p> <p>A backend could implement permissions for the magic admin like this:</p> <pre data-language="python">from django.contrib.auth.backends import BaseBackend
+
+class MagicAdminBackend(BaseBackend):
+    def has_perm(self, user_obj, perm, obj=None):
+        return user_obj.username == settings.ADMIN_LOGIN
+</pre> <p>This gives full permissions to the user granted access in the above example. Notice that in addition to the same arguments given to the associated <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>django.contrib.auth.models.User</code></a> functions, the backend auth functions all take the user object, which may be an anonymous user, as an argument.</p> <p>A full authorization implementation can be found in the <code>ModelBackend</code> class in <a class="reference external" href="https://github.com/django/django/blob/main/django/contrib/auth/backends.py">django/contrib/auth/backends.py</a>, which is the default backend and queries the <code>auth_permission</code> table most of the time.</p>  <h4 id="anonymous-auth">Authorization for anonymous users</h4> <p id="s-authorization-for-anonymous-users">An anonymous user is one that is not authenticated i.e. they have provided no valid authentication details. However, that does not necessarily mean they are not authorized to do anything. At the most basic level, most websites authorize anonymous users to browse most of the site, and many allow anonymous posting of comments etc.</p> <p>Django’s permission framework does not have a place to store permissions for anonymous users. However, the user object passed to an authentication backend may be an <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.AnonymousUser" title="django.contrib.auth.models.AnonymousUser"><code>django.contrib.auth.models.AnonymousUser</code></a> object, allowing the backend to specify custom authorization behavior for anonymous users. This is especially useful for the authors of re-usable apps, who can delegate all questions of authorization to the auth backend, rather than needing settings, for example, to control anonymous access.</p>   <h4 id="inactive-auth">Authorization for inactive users</h4> <p id="s-authorization-for-inactive-users">An inactive user is one that has its <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_active" title="django.contrib.auth.models.User.is_active"><code>is_active</code></a> field set to <code>False</code>. The <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.ModelBackend" title="django.contrib.auth.backends.ModelBackend"><code>ModelBackend</code></a> and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.RemoteUserBackend" title="django.contrib.auth.backends.RemoteUserBackend"><code>RemoteUserBackend</code></a> authentication backends prohibits these users from authenticating. If a custom user model doesn’t have an <a class="reference internal" href="#django.contrib.auth.models.CustomUser.is_active" title="django.contrib.auth.models.CustomUser.is_active"><code>is_active</code></a> field, all users will be allowed to authenticate.</p> <p>You can use <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.AllowAllUsersModelBackend" title="django.contrib.auth.backends.AllowAllUsersModelBackend"><code>AllowAllUsersModelBackend</code></a> or <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.AllowAllUsersRemoteUserBackend" title="django.contrib.auth.backends.AllowAllUsersRemoteUserBackend"><code>AllowAllUsersRemoteUserBackend</code></a> if you want to allow inactive users to authenticate.</p> <p>The support for anonymous users in the permission system allows for a scenario where anonymous users have permissions to do something while inactive authenticated users do not.</p> <p>Do not forget to test for the <code>is_active</code> attribute of the user in your own backend permission methods.</p>   <h4 id="handling-object-permissions">Handling object permissions</h4> <p id="s-handling-object-permissions">Django’s permission framework has a foundation for object permissions, though there is no implementation for it in the core. That means that checking for object permissions will always return <code>False</code> or an empty list (depending on the check performed). An authentication backend will receive the keyword parameters <code>obj</code> and <code>user_obj</code> for each object related authorization method and can return the object level permission as appropriate.</p>     <h2 id="id1">Custom permissions</h2> <p id="s-custom-permissions">To create custom permissions for a given model object, use the <code>permissions</code> <a class="reference internal" href="../db/models#meta-options"><span class="std std-ref">model Meta attribute</span></a>.</p> <p>This example <code>Task</code> model creates two custom permissions, i.e., actions users can or cannot do with <code>Task</code> instances, specific to your application:</p> <pre data-language="python">class Task(models.Model):
+    ...
+    class Meta:
+        permissions = [
+            ("change_task_status", "Can change the status of tasks"),
+            ("close_task", "Can remove a task by setting its status as closed"),
+        ]
+</pre> <p>The only thing this does is create those extra permissions when you run <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>manage.py migrate</code></a> (the function that creates permissions is connected to the <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> signal). Your code is in charge of checking the value of these permissions when a user is trying to access the functionality provided by the application (changing the status of tasks or closing tasks.) Continuing the above example, the following checks if a user may close tasks:</p> <pre data-language="python">user.has_perm('app.close_task')
+</pre>   <h2 id="extending-user">Extending the existing <code>User</code> model</h2> <p id="s-extending-the-existing-user-model">There are two ways to extend the default <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> model without substituting your own model. If the changes you need are purely behavioral, and don’t require any change to what is stored in the database, you can create a <a class="reference internal" href="../db/models#proxy-models"><span class="std std-ref">proxy model</span></a> based on <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a>. This allows for any of the features offered by proxy models including default ordering, custom managers, or custom model methods.</p> <p>If you wish to store information related to <code>User</code>, you can use a <a class="reference internal" href="../../ref/models/fields#django.db.models.OneToOneField" title="django.db.models.OneToOneField"><code>OneToOneField</code></a> to a model containing the fields for additional information. This one-to-one model is often called a profile model, as it might store non-auth related information about a site user. For example you might create an Employee model:</p> <pre data-language="python">from django.contrib.auth.models import User
+
+class Employee(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    department = models.CharField(max_length=100)
+</pre> <p>Assuming an existing Employee Fred Smith who has both a User and Employee model, you can access the related information using Django’s standard related model conventions:</p> <pre data-language="python">&gt;&gt;&gt; u = User.objects.get(username='fsmith')
+&gt;&gt;&gt; freds_department = u.employee.department
+</pre> <p>To add a profile model’s fields to the user page in the admin, define an <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.InlineModelAdmin" title="django.contrib.admin.InlineModelAdmin"><code>InlineModelAdmin</code></a> (for this example, we’ll use a <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.StackedInline" title="django.contrib.admin.StackedInline"><code>StackedInline</code></a>) in your app’s <code>admin.py</code> and add it to a <code>UserAdmin</code> class which is registered with the <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> class:</p> <pre data-language="python">from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.models import User
+
+from my_user_profile_app.models import Employee
+
+# Define an inline admin descriptor for Employee model
+# which acts a bit like a singleton
+class EmployeeInline(admin.StackedInline):
+    model = Employee
+    can_delete = False
+    verbose_name_plural = 'employee'
+
+# Define a new User admin
+class UserAdmin(BaseUserAdmin):
+    inlines = (EmployeeInline,)
+
+# Re-register UserAdmin
+admin.site.unregister(User)
+admin.site.register(User, UserAdmin)
+</pre> <p>These profile models are not special in any way - they are just Django models that happen to have a one-to-one link with a user model. As such, they aren’t auto created when a user is created, but a <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_save" title="django.db.models.signals.post_save"><code>django.db.models.signals.post_save</code></a> could be used to create or update related models as appropriate.</p> <p>Using related models results in additional queries or joins to retrieve the related data. Depending on your needs, a custom user model that includes the related fields may be your better option, however, existing relations to the default user model within your project’s apps may justify the extra database load.</p>   <h2 id="auth-custom-user">Substituting a custom <code>User</code> model</h2> <p id="s-substituting-a-custom-user-model">Some kinds of projects may have authentication requirements for which Django’s built-in <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> model is not always appropriate. For instance, on some sites it makes more sense to use an email address as your identification token instead of a username.</p> <p>Django allows you to override the default user model by providing a value for the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting that references a custom model:</p> <pre data-language="python">AUTH_USER_MODEL = 'myapp.MyUser'
+</pre> <p>This dotted pair describes the <a class="reference internal" href="../../ref/applications#django.apps.AppConfig.label" title="django.apps.AppConfig.label"><code>label</code></a> of the Django app (which must be in your <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>), and the name of the Django model that you wish to use as your user model.</p>  <h3 id="using-a-custom-user-model-when-starting-a-project">Using a custom user model when starting a project</h3> <p id="s-using-a-custom-user-model-when-starting-a-project">If you’re starting a new project, it’s highly recommended to set up a custom user model, even if the default <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> model is sufficient for you. This model behaves identically to the default user model, but you’ll be able to customize it in the future if the need arises:</p> <pre data-language="python">from django.contrib.auth.models import AbstractUser
+
+class User(AbstractUser):
+    pass
+</pre> <p>Don’t forget to point <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> to it. Do this before creating any migrations or running <code>manage.py migrate</code> for the first time.</p> <p>Also, register the model in the app’s <code>admin.py</code>:</p> <pre data-language="python">from django.contrib import admin
+from django.contrib.auth.admin import UserAdmin
+from .models import User
+
+admin.site.register(User, UserAdmin)
+</pre>   <h3 id="changing-to-a-custom-user-model-mid-project">Changing to a custom user model mid-project</h3> <p id="s-changing-to-a-custom-user-model-mid-project">Changing <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> after you’ve created database tables is significantly more difficult since it affects foreign keys and many-to-many relationships, for example.</p> <p>This change can’t be done automatically and requires manually fixing your schema, moving your data from the old user table, and possibly manually reapplying some migrations. See <a class="reference external" href="https://code.djangoproject.com/ticket/25313">#25313</a> for an outline of the steps.</p> <p>Due to limitations of Django’s dynamic dependency feature for swappable models, the model referenced by <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> must be created in the first migration of its app (usually called <code>0001_initial</code>); otherwise, you’ll have dependency issues.</p> <p>In addition, you may run into a <code>CircularDependencyError</code> when running your migrations as Django won’t be able to automatically break the dependency loop due to the dynamic dependency. If you see this error, you should break the loop by moving the models depended on by your user model into a second migration. (You can try making two normal models that have a <code>ForeignKey</code> to each other and seeing how <code>makemigrations</code> resolves that circular dependency if you want to see how it’s usually done.)</p>   <h3 id="reusable-apps-and-auth-user-model">Reusable apps and <code>AUTH_USER_MODEL</code>
+</h3> <p id="s-reusable-apps-and-auth-user-model">Reusable apps shouldn’t implement a custom user model. A project may use many apps, and two reusable apps that implemented a custom user model couldn’t be used together. If you need to store per user information in your app, use a <a class="reference internal" href="../../ref/models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a> or <a class="reference internal" href="../../ref/models/fields#django.db.models.OneToOneField" title="django.db.models.OneToOneField"><code>OneToOneField</code></a> to <code>settings.AUTH_USER_MODEL</code> as described below.</p>   <h3 id="referencing-the-user-model">Referencing the <code>User</code> model</h3> <p id="s-referencing-the-user-model">If you reference <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> directly (for example, by referring to it in a foreign key), your code will not work in projects where the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting has been changed to a different user model.</p> <dl class="function"> <dt id="django.contrib.auth.get_user_model">
+<code>get_user_model()</code> </dt> <dd>
+<p>Instead of referring to <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> directly, you should reference the user model using <code>django.contrib.auth.get_user_model()</code>. This method will return the currently active user model – the custom user model if one is specified, or <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> otherwise.</p> <p>When you define a foreign key or many-to-many relations to the user model, you should specify the custom model using the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting. For example:</p> <pre data-language="python">from django.conf import settings
+from django.db import models
+
+class Article(models.Model):
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+    )
+</pre> <p>When connecting to signals sent by the user model, you should specify the custom model using the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting. For example:</p> <pre data-language="python">from django.conf import settings
+from django.db.models.signals import post_save
+
+def post_save_receiver(sender, instance, created, **kwargs):
+    pass
+
+post_save.connect(post_save_receiver, sender=settings.AUTH_USER_MODEL)
+</pre> <p>Generally speaking, it’s easiest to refer to the user model with the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting in code that’s executed at import time, however, it’s also possible to call <code>get_user_model()</code> while Django is importing models, so you could use <code>models.ForeignKey(get_user_model(), ...)</code>.</p> <p>If your app is tested with multiple user models, using <code>@override_settings(AUTH_USER_MODEL=...)</code> for example, and you cache the result of <code>get_user_model()</code> in a module-level variable, you may need to listen to the <a class="reference internal" href="../../ref/signals#django.test.signals.setting_changed" title="django.test.signals.setting_changed"><code>setting_changed</code></a> signal to clear the cache. For example:</p> <pre data-language="python">from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core.signals import setting_changed
+from django.dispatch import receiver
+
+@receiver(setting_changed)
+def user_model_swapped(**kwargs):
+    if kwargs['setting'] == 'AUTH_USER_MODEL':
+        apps.clear_cache()
+        from myapp import some_module
+        some_module.UserModel = get_user_model()
+</pre> </dd>
+</dl>   <h3 id="specifying-custom-user-model">Specifying a custom user model</h3> <p id="s-specifying-a-custom-user-model">When you start your project with a custom user model, stop to consider if this is the right choice for your project.</p> <p>Keeping all user related information in one model removes the need for additional or more complex database queries to retrieve related models. On the other hand, it may be more suitable to store app-specific user information in a model that has a relation with your custom user model. That allows each app to specify its own user data requirements without potentially conflicting or breaking assumptions by other apps. It also means that you would keep your user model as simple as possible, focused on authentication, and following the minimum requirements Django expects custom user models to meet.</p> <p>If you use the default authentication backend, then your model must have a single unique field that can be used for identification purposes. This can be a username, an email address, or any other unique attribute. A non-unique username field is allowed if you use a custom authentication backend that can support it.</p> <p>The easiest way to construct a compliant custom user model is to inherit from <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a>. <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a> provides the core implementation of a user model, including hashed passwords and tokenized password resets. You must then provide some key implementation details:</p> <dl class="class"> <dt id="django.contrib.auth.models.CustomUser">
+<code>class models.CustomUser</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.auth.models.CustomUser.USERNAME_FIELD">
+<code>USERNAME_FIELD</code> </dt> <dd>
+<p>A string describing the name of the field on the user model that is used as the unique identifier. This will usually be a username of some kind, but it can also be an email address, or any other unique identifier. The field <em>must</em> be unique (i.e., have <code>unique=True</code> set in its definition), unless you use a custom authentication backend that can support non-unique usernames.</p> <p>In the following example, the field <code>identifier</code> is used as the identifying field:</p> <pre data-language="python">class MyUser(AbstractBaseUser):
+    identifier = models.CharField(max_length=40, unique=True)
+    ...
+    USERNAME_FIELD = 'identifier'
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.models.CustomUser.EMAIL_FIELD">
+<code>EMAIL_FIELD</code> </dt> <dd>
+<p>A string describing the name of the email field on the <code>User</code> model. This value is returned by <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.get_email_field_name" title="django.contrib.auth.models.AbstractBaseUser.get_email_field_name"><code>get_email_field_name()</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.models.CustomUser.REQUIRED_FIELDS">
+<code>REQUIRED_FIELDS</code> </dt> <dd>
+<p>A list of the field names that will be prompted for when creating a user via the <a class="reference internal" href="../../ref/django-admin#django-admin-createsuperuser"><code>createsuperuser</code></a> management command. The user will be prompted to supply a value for each of these fields. It must include any field for which <a class="reference internal" href="../../ref/models/fields#django.db.models.Field.blank" title="django.db.models.Field.blank"><code>blank</code></a> is <code>False</code> or undefined and may include additional fields you want prompted for when a user is created interactively. <code>REQUIRED_FIELDS</code> has no effect in other parts of Django, like creating a user in the admin.</p> <p>For example, here is the partial definition for a user model that defines two required fields - a date of birth and height:</p> <pre data-language="python">class MyUser(AbstractBaseUser):
+    ...
+    date_of_birth = models.DateField()
+    height = models.FloatField()
+    ...
+    REQUIRED_FIELDS = ['date_of_birth', 'height']
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last"><code>REQUIRED_FIELDS</code> must contain all required fields on your user model, but should <em>not</em> contain the <code>USERNAME_FIELD</code> or <code>password</code> as these fields will always be prompted for.</p> </div> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.models.CustomUser.is_active">
+<code>is_active</code> </dt> <dd>
+<p>A boolean attribute that indicates whether the user is considered “active”. This attribute is provided as an attribute on <code>AbstractBaseUser</code> defaulting to <code>True</code>. How you choose to implement it will depend on the details of your chosen auth backends. See the documentation of the <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_active" title="django.contrib.auth.models.User.is_active"><code>is_active attribute on the built-in
+user model</code></a> for details.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.CustomUser.get_full_name">
+<code>get_full_name()</code> </dt> <dd>
+<p>Optional. A longer formal identifier for the user such as their full name. If implemented, this appears alongside the username in an object’s history in <a class="reference internal" href="../../ref/contrib/admin/index#module-django.contrib.admin" title="django.contrib.admin: Django's admin site."><code>django.contrib.admin</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.CustomUser.get_short_name">
+<code>get_short_name()</code> </dt> <dd>
+<p>Optional. A short, informal identifier for the user such as their first name. If implemented, this replaces the username in the greeting to the user in the header of <a class="reference internal" href="../../ref/contrib/admin/index#module-django.contrib.admin" title="django.contrib.admin: Django's admin site."><code>django.contrib.admin</code></a>.</p> </dd>
+</dl> <div class="admonition-importing-abstractbaseuser admonition"> <p class="first admonition-title">Importing <code>AbstractBaseUser</code></p> <p class="last"><code>AbstractBaseUser</code> and <code>BaseUserManager</code> are importable from <code>django.contrib.auth.base_user</code> so that they can be imported without including <code>django.contrib.auth</code> in <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>.</p> </div> </dd>
+</dl> <p>The following attributes and methods are available on any subclass of <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a>:</p> <dl class="class"> <dt id="django.contrib.auth.models.AbstractBaseUser">
+<code>class models.AbstractBaseUser</code> </dt> <dd>
+<dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.get_username">
+<code>get_username()</code> </dt> <dd>
+<p>Returns the value of the field nominated by <code>USERNAME_FIELD</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.clean">
+<code>clean()</code> </dt> <dd>
+<p>Normalizes the username by calling <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.normalize_username" title="django.contrib.auth.models.AbstractBaseUser.normalize_username"><code>normalize_username()</code></a>. If you override this method, be sure to call <code>super()</code> to retain the normalization.</p> </dd>
+</dl> <dl class="classmethod"> <dt id="django.contrib.auth.models.AbstractBaseUser.get_email_field_name">
+<code>classmethod get_email_field_name()</code> </dt> <dd>
+<p>Returns the name of the email field specified by the <a class="reference internal" href="#django.contrib.auth.models.CustomUser.EMAIL_FIELD" title="django.contrib.auth.models.CustomUser.EMAIL_FIELD"><code>EMAIL_FIELD</code></a> attribute. Defaults to <code>'email'</code> if <code>EMAIL_FIELD</code> isn’t specified.</p> </dd>
+</dl> <dl class="classmethod"> <dt id="django.contrib.auth.models.AbstractBaseUser.normalize_username">
+<code>classmethod normalize_username(username)</code> </dt> <dd>
+<p>Applies NFKC Unicode normalization to usernames so that visually identical characters with different Unicode code points are considered identical.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.models.AbstractBaseUser.is_authenticated">
+<code>is_authenticated</code> </dt> <dd>
+<p>Read-only attribute which is always <code>True</code> (as opposed to <code>AnonymousUser.is_authenticated</code> which is always <code>False</code>). This is a way to tell if the user has been authenticated. This does not imply any permissions and doesn’t check if the user is active or has a valid session. Even though normally you will check this attribute on <code>request.user</code> to find out whether it has been populated by the <a class="reference internal" href="../../ref/middleware#django.contrib.auth.middleware.AuthenticationMiddleware" title="django.contrib.auth.middleware.AuthenticationMiddleware"><code>AuthenticationMiddleware</code></a> (representing the currently logged-in user), you should know this attribute is <code>True</code> for any <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> instance.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.models.AbstractBaseUser.is_anonymous">
+<code>is_anonymous</code> </dt> <dd>
+<p>Read-only attribute which is always <code>False</code>. This is a way of differentiating <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.AnonymousUser" title="django.contrib.auth.models.AnonymousUser"><code>AnonymousUser</code></a> objects. Generally, you should prefer using <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_authenticated" title="django.contrib.auth.models.User.is_authenticated"><code>is_authenticated</code></a> to this attribute.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.set_password">
+<code>set_password(raw_password)</code> </dt> <dd>
+<p>Sets the user’s password to the given raw string, taking care of the password hashing. Doesn’t save the <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a> object.</p> <p>When the raw_password is <code>None</code>, the password will be set to an unusable password, as if <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.set_unusable_password" title="django.contrib.auth.models.AbstractBaseUser.set_unusable_password"><code>set_unusable_password()</code></a> were used.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.check_password">
+<code>check_password(raw_password)</code> </dt> <dd>
+<p>Returns <code>True</code> if the given raw string is the correct password for the user. (This takes care of the password hashing in making the comparison.)</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.set_unusable_password">
+<code>set_unusable_password()</code> </dt> <dd>
+<p>Marks the user as having no password set. This isn’t the same as having a blank string for a password. <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.check_password" title="django.contrib.auth.models.AbstractBaseUser.check_password"><code>check_password()</code></a> for this user will never return <code>True</code>. Doesn’t save the <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a> object.</p> <p>You may need this if authentication for your application takes place against an existing external source such as an LDAP directory.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.has_usable_password">
+<code>has_usable_password()</code> </dt> <dd>
+<p>Returns <code>False</code> if <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.set_unusable_password" title="django.contrib.auth.models.AbstractBaseUser.set_unusable_password"><code>set_unusable_password()</code></a> has been called for this user.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash">
+<code>get_session_auth_hash()</code> </dt> <dd>
+<p>Returns an HMAC of the password field. Used for <a class="reference internal" href="default#session-invalidation-on-password-change"><span class="std std-ref">Session invalidation on password change</span></a>.</p> </dd>
+</dl> </dd>
+</dl> <p><a class="reference internal" href="#django.contrib.auth.models.AbstractUser" title="django.contrib.auth.models.AbstractUser"><code>AbstractUser</code></a> subclasses <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a>:</p> <dl class="class"> <dt id="django.contrib.auth.models.AbstractUser">
+<code>class models.AbstractUser</code> </dt> <dd>
+<dl class="method"> <dt id="django.contrib.auth.models.AbstractUser.clean">
+<code>clean()</code> </dt> <dd>
+<p>Normalizes the email by calling <a class="reference internal" href="#django.contrib.auth.models.BaseUserManager.normalize_email" title="django.contrib.auth.models.BaseUserManager.normalize_email"><code>BaseUserManager.normalize_email()</code></a>. If you override this method, be sure to call <code>super()</code> to retain the normalization.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="writing-a-manager-for-a-custom-user-model">Writing a manager for a custom user model</h3> <p id="s-writing-a-manager-for-a-custom-user-model">You should also define a custom manager for your user model. If your user model defines <code>username</code>, <code>email</code>, <code>is_staff</code>, <code>is_active</code>, <code>is_superuser</code>, <code>last_login</code>, and <code>date_joined</code> fields the same as Django’s default user, you can install Django’s <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.UserManager" title="django.contrib.auth.models.UserManager"><code>UserManager</code></a>; however, if your user model defines different fields, you’ll need to define a custom manager that extends <a class="reference internal" href="#django.contrib.auth.models.BaseUserManager" title="django.contrib.auth.models.BaseUserManager"><code>BaseUserManager</code></a> providing two additional methods:</p> <dl class="class"> <dt id="django.contrib.auth.models.CustomUserManager">
+<code>class models.CustomUserManager</code> </dt> <dd>
+<dl class="method"> <dt id="django.contrib.auth.models.CustomUserManager.create_user">
+<code>create_user(username_field, password=None, **other_fields)</code> </dt> <dd>
+<p>The prototype of <code>create_user()</code> should accept the username field, plus all required fields as arguments. For example, if your user model uses <code>email</code> as the username field, and has <code>date_of_birth</code> as a required field, then <code>create_user</code> should be defined as:</p> <pre data-language="python">def create_user(self, email, date_of_birth, password=None):
+    # create user here
+    ...
+</pre> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.CustomUserManager.create_superuser">
+<code>create_superuser(username_field, password=None, **other_fields)</code> </dt> <dd>
+<p>The prototype of <code>create_superuser()</code> should accept the username field, plus all required fields as arguments. For example, if your user model uses <code>email</code> as the username field, and has <code>date_of_birth</code> as a required field, then <code>create_superuser</code> should be defined as:</p> <pre data-language="python">def create_superuser(self, email, date_of_birth, password=None):
+    # create superuser here
+    ...
+</pre> </dd>
+</dl> </dd>
+</dl> <p>For a <a class="reference internal" href="../../ref/models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a> in <a class="reference internal" href="#django.contrib.auth.models.CustomUser.USERNAME_FIELD" title="django.contrib.auth.models.CustomUser.USERNAME_FIELD"><code>USERNAME_FIELD</code></a> or <a class="reference internal" href="#django.contrib.auth.models.CustomUser.REQUIRED_FIELDS" title="django.contrib.auth.models.CustomUser.REQUIRED_FIELDS"><code>REQUIRED_FIELDS</code></a>, these methods receive the value of the <a class="reference internal" href="../../ref/models/fields#django.db.models.ForeignKey.to_field" title="django.db.models.ForeignKey.to_field"><code>to_field</code></a> (the <a class="reference internal" href="../../ref/models/fields#django.db.models.Field.primary_key" title="django.db.models.Field.primary_key"><code>primary_key</code></a> by default) of an existing instance.</p> <p><a class="reference internal" href="#django.contrib.auth.models.BaseUserManager" title="django.contrib.auth.models.BaseUserManager"><code>BaseUserManager</code></a> provides the following utility methods:</p> <dl class="class"> <dt id="django.contrib.auth.models.BaseUserManager">
+<code>class models.BaseUserManager</code> </dt> <dd>
+<dl class="classmethod"> <dt id="django.contrib.auth.models.BaseUserManager.normalize_email">
+<code>classmethod normalize_email(email)</code> </dt> <dd>
+<p>Normalizes email addresses by lowercasing the domain portion of the email address.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.BaseUserManager.get_by_natural_key">
+<code>get_by_natural_key(username)</code> </dt> <dd>
+<p>Retrieves a user instance using the contents of the field nominated by <code>USERNAME_FIELD</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.BaseUserManager.make_random_password">
+<code>make_random_password(length=10, allowed_chars='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789')</code> </dt> <dd>
+<p>Returns a random password with the given length and given string of allowed characters. Note that the default value of <code>allowed_chars</code> doesn’t contain letters that can cause user confusion, including:</p> <ul class="simple"> <li>
+<code>i</code>, <code>l</code>, <code>I</code>, and <code>1</code> (lowercase letter i, lowercase letter L, uppercase letter i, and the number one)</li> <li>
+<code>o</code>, <code>O</code>, and <code>0</code> (lowercase letter o, uppercase letter o, and zero)</li> </ul> </dd>
+</dl> </dd>
+</dl>   <h3 id="extending-django-s-default-user">Extending Django’s default <code>User</code>
+</h3> <p id="s-extending-django-s-default-user">If you’re entirely happy with Django’s <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> model, but you want to add some additional profile information, you could subclass <a class="reference internal" href="#django.contrib.auth.models.AbstractUser" title="django.contrib.auth.models.AbstractUser"><code>django.contrib.auth.models.AbstractUser</code></a> and add your custom profile fields, although we’d recommend a separate model as described in the “Model design considerations” note of <a class="reference internal" href="#specifying-custom-user-model"><span class="std std-ref">Specifying a custom user model</span></a>. <code>AbstractUser</code> provides the full implementation of the default <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> as an <a class="reference internal" href="../db/models#abstract-base-classes"><span class="std std-ref">abstract model</span></a>.</p>   <h3 id="id2">Custom users and the built-in auth forms</h3> <p id="s-custom-users-and-the-built-in-auth-forms">Django’s built-in <a class="reference internal" href="default#built-in-auth-forms"><span class="std std-ref">forms</span></a> and <a class="reference internal" href="default#built-in-auth-views"><span class="std std-ref">views</span></a> make certain assumptions about the user model that they are working with.</p> <p>The following forms are compatible with any subclass of <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a>:</p> <ul class="simple"> <li>
+<a class="reference internal" href="default#django.contrib.auth.forms.AuthenticationForm" title="django.contrib.auth.forms.AuthenticationForm"><code>AuthenticationForm</code></a>: Uses the username field specified by <a class="reference internal" href="#django.contrib.auth.models.CustomUser.USERNAME_FIELD" title="django.contrib.auth.models.CustomUser.USERNAME_FIELD"><code>USERNAME_FIELD</code></a>.</li> <li><a class="reference internal" href="default#django.contrib.auth.forms.SetPasswordForm" title="django.contrib.auth.forms.SetPasswordForm"><code>SetPasswordForm</code></a></li> <li><a class="reference internal" href="default#django.contrib.auth.forms.PasswordChangeForm" title="django.contrib.auth.forms.PasswordChangeForm"><code>PasswordChangeForm</code></a></li> <li><a class="reference internal" href="default#django.contrib.auth.forms.AdminPasswordChangeForm" title="django.contrib.auth.forms.AdminPasswordChangeForm"><code>AdminPasswordChangeForm</code></a></li> </ul> <p>The following forms make assumptions about the user model and can be used as-is if those assumptions are met:</p> <ul class="simple"> <li>
+<a class="reference internal" href="default#django.contrib.auth.forms.PasswordResetForm" title="django.contrib.auth.forms.PasswordResetForm"><code>PasswordResetForm</code></a>: Assumes that the user model has a field that stores the user’s email address with the name returned by <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser.get_email_field_name" title="django.contrib.auth.models.AbstractBaseUser.get_email_field_name"><code>get_email_field_name()</code></a> (<code>email</code> by default) that can be used to identify the user and a boolean field named <code>is_active</code> to prevent password resets for inactive users.</li> </ul> <p>Finally, the following forms are tied to <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> and need to be rewritten or extended to work with a custom user model:</p> <ul class="simple"> <li><a class="reference internal" href="default#django.contrib.auth.forms.UserCreationForm" title="django.contrib.auth.forms.UserCreationForm"><code>UserCreationForm</code></a></li> <li><a class="reference internal" href="default#django.contrib.auth.forms.UserChangeForm" title="django.contrib.auth.forms.UserChangeForm"><code>UserChangeForm</code></a></li> </ul> <p>If your custom user model is a subclass of <code>AbstractUser</code>, then you can extend these forms in this manner:</p> <pre data-language="python">from django.contrib.auth.forms import UserCreationForm
+from myapp.models import CustomUser
+
+class CustomUserCreationForm(UserCreationForm):
+
+    class Meta(UserCreationForm.Meta):
+        model = CustomUser
+        fields = UserCreationForm.Meta.fields + ('custom_field',)
+</pre>   <h3 id="custom-users-and-django-contrib-admin">Custom users and <a class="reference internal" href="../../ref/contrib/admin/index#module-django.contrib.admin" title="django.contrib.admin: Django's admin site."><code>django.contrib.admin</code></a>
+</h3> <p id="s-custom-users-and-django-contrib-admin">If you want your custom user model to also work with the admin, your user model must define some additional attributes and methods. These methods allow the admin to control access of the user to admin content:</p> <dl class="class"> <dt>
+<code>class models.CustomUser</code> </dt> 
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.is_staff">
+<code>is_staff</code> </dt> <dd>
+<p>Returns <code>True</code> if the user is allowed to have access to the admin site.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.is_active">
+<code>is_active</code> </dt> <dd>
+<p>Returns <code>True</code> if the user account is currently active.</p> </dd>
+</dl> <dl class="method"> <dt>
+<code>has_perm(perm, obj=None):</code> </dt> <dd>
+<p>Returns <code>True</code> if the user has the named permission. If <code>obj</code> is provided, the permission needs to be checked against a specific object instance.</p> </dd>
+</dl> <dl class="method"> <dt>
+<code>has_module_perms(app_label):</code> </dt> <dd>
+<p>Returns <code>True</code> if the user has permission to access models in the given app.</p> </dd>
+</dl> <p>You will also need to register your custom user model with the admin. If your custom user model extends <code>django.contrib.auth.models.AbstractUser</code>, you can use Django’s existing <code>django.contrib.auth.admin.UserAdmin</code> class. However, if your user model extends <a class="reference internal" href="#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a>, you’ll need to define a custom <code>ModelAdmin</code> class. It may be possible to subclass the default <code>django.contrib.auth.admin.UserAdmin</code>; however, you’ll need to override any of the definitions that refer to fields on <code>django.contrib.auth.models.AbstractUser</code> that aren’t on your custom user class.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>If you are using a custom <code>ModelAdmin</code> which is a subclass of <code>django.contrib.auth.admin.UserAdmin</code>, then you need to add your custom fields to <code>fieldsets</code> (for fields to be used in editing users) and to <code>add_fieldsets</code> (for fields to be used when creating a user). For example:</p> <pre data-language="python">from django.contrib.auth.admin import UserAdmin
+
+class CustomUserAdmin(UserAdmin):
+    ...
+    fieldsets = UserAdmin.fieldsets + (
+        (None, {'fields': ('custom_field',)}),
+    )
+    add_fieldsets = UserAdmin.add_fieldsets + (
+        (None, {'fields': ('custom_field',)}),
+    )
+</pre> <p class="last">See <a class="reference internal" href="#custom-users-admin-full-example"><span class="std std-ref">a full example</span></a> for more details.</p> </div>   <h3 id="custom-users-and-permissions">Custom users and permissions</h3> <p id="s-custom-users-and-permissions">To make it easy to include Django’s permission framework into your own user class, Django provides <a class="reference internal" href="#django.contrib.auth.models.PermissionsMixin" title="django.contrib.auth.models.PermissionsMixin"><code>PermissionsMixin</code></a>. This is an abstract model you can include in the class hierarchy for your user model, giving you all the methods and database fields necessary to support Django’s permission model.</p> <p><a class="reference internal" href="#django.contrib.auth.models.PermissionsMixin" title="django.contrib.auth.models.PermissionsMixin"><code>PermissionsMixin</code></a> provides the following methods and attributes:</p> <dl class="class"> <dt id="django.contrib.auth.models.PermissionsMixin">
+<code>class models.PermissionsMixin</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.auth.models.PermissionsMixin.is_superuser">
+<code>is_superuser</code> </dt> <dd>
+<p>Boolean. Designates that this user has all permissions without explicitly assigning them.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.get_user_permissions">
+<code>get_user_permissions(obj=None)</code> </dt> <dd>
+<p>Returns a set of permission strings that the user has directly.</p> <p>If <code>obj</code> is passed in, only returns the user permissions for this specific object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.get_group_permissions">
+<code>get_group_permissions(obj=None)</code> </dt> <dd>
+<p>Returns a set of permission strings that the user has, through their groups.</p> <p>If <code>obj</code> is passed in, only returns the group permissions for this specific object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.get_all_permissions">
+<code>get_all_permissions(obj=None)</code> </dt> <dd>
+<p>Returns a set of permission strings that the user has, both through group and user permissions.</p> <p>If <code>obj</code> is passed in, only returns the permissions for this specific object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.has_perm">
+<code>has_perm(perm, obj=None)</code> </dt> <dd>
+<p>Returns <code>True</code> if the user has the specified permission, where <code>perm</code> is in the format <code>"&lt;app label&gt;.&lt;permission codename&gt;"</code> (see <a class="reference internal" href="default#topic-authorization"><span class="std std-ref">permissions</span></a>). If <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_active" title="django.contrib.auth.models.User.is_active"><code>User.is_active</code></a> and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_superuser" title="django.contrib.auth.models.User.is_superuser"><code>is_superuser</code></a> are both <code>True</code>, this method always returns <code>True</code>.</p> <p>If <code>obj</code> is passed in, this method won’t check for a permission for the model, but for this specific object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.has_perms">
+<code>has_perms(perm_list, obj=None)</code> </dt> <dd>
+<p>Returns <code>True</code> if the user has each of the specified permissions, where each perm is in the format <code>"&lt;app label&gt;.&lt;permission codename&gt;"</code>. If <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_active" title="django.contrib.auth.models.User.is_active"><code>User.is_active</code></a> and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_superuser" title="django.contrib.auth.models.User.is_superuser"><code>is_superuser</code></a> are both <code>True</code>, this method always returns <code>True</code>.</p> <p>If <code>obj</code> is passed in, this method won’t check for permissions for the model, but for the specific object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.models.PermissionsMixin.has_module_perms">
+<code>has_module_perms(package_name)</code> </dt> <dd>
+<p>Returns <code>True</code> if the user has any permissions in the given package (the Django app label). If <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_active" title="django.contrib.auth.models.User.is_active"><code>User.is_active</code></a> and <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_superuser" title="django.contrib.auth.models.User.is_superuser"><code>is_superuser</code></a> are both <code>True</code>, this method always returns <code>True</code>.</p> </dd>
+</dl> </dd>
+</dl> <div class="admonition-permissionsmixin-and-modelbackend admonition"> <p class="first admonition-title"><code>PermissionsMixin</code> and <code>ModelBackend</code></p> <p class="last">If you don’t include the <a class="reference internal" href="#django.contrib.auth.models.PermissionsMixin" title="django.contrib.auth.models.PermissionsMixin"><code>PermissionsMixin</code></a>, you must ensure you don’t invoke the permissions methods on <code>ModelBackend</code>. <code>ModelBackend</code> assumes that certain fields are available on your user model. If your user model doesn’t provide those fields, you’ll receive database errors when you check permissions.</p> </div>   <h3 id="custom-users-and-proxy-models">Custom users and proxy models</h3> <p id="s-custom-users-and-proxy-models">One limitation of custom user models is that installing a custom user model will break any proxy model extending <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a>. Proxy models must be based on a concrete base class; by defining a custom user model, you remove the ability of Django to reliably identify the base class.</p> <p>If your project uses proxy models, you must either modify the proxy to extend the user model that’s in use in your project, or merge your proxy’s behavior into your <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> subclass.</p>   <h3 id="custom-users-admin-full-example">A full example</h3> <p id="s-a-full-example">Here is an example of an admin-compliant custom user app. This user model uses an email address as the username, and has a required date of birth; it provides no permission checking beyond an <code>admin</code> flag on the user account. This model would be compatible with all the built-in auth forms and views, except for the user creation forms. This example illustrates how most of the components work together, but is not intended to be copied directly into projects for production use.</p> <p>This code would all live in a <code>models.py</code> file for a custom authentication app:</p> <pre data-language="python">from django.db import models
+from django.contrib.auth.models import (
+    BaseUserManager, AbstractBaseUser
+)
+
+
+class MyUserManager(BaseUserManager):
+    def create_user(self, email, date_of_birth, password=None):
+        """
+        Creates and saves a User with the given email, date of
+        birth and password.
+        """
+        if not email:
+            raise ValueError('Users must have an email address')
+
+        user = self.model(
+            email=self.normalize_email(email),
+            date_of_birth=date_of_birth,
+        )
+
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, email, date_of_birth, password=None):
+        """
+        Creates and saves a superuser with the given email, date of
+        birth and password.
+        """
+        user = self.create_user(
+            email,
+            password=password,
+            date_of_birth=date_of_birth,
+        )
+        user.is_admin = True
+        user.save(using=self._db)
+        return user
+
+
+class MyUser(AbstractBaseUser):
+    email = models.EmailField(
+        verbose_name='email address',
+        max_length=255,
+        unique=True,
+    )
+    date_of_birth = models.DateField()
+    is_active = models.BooleanField(default=True)
+    is_admin = models.BooleanField(default=False)
+
+    objects = MyUserManager()
+
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['date_of_birth']
+
+    def __str__(self):
+        return self.email
+
+    def has_perm(self, perm, obj=None):
+        "Does the user have a specific permission?"
+        # Simplest possible answer: Yes, always
+        return True
+
+    def has_module_perms(self, app_label):
+        "Does the user have permissions to view the app `app_label`?"
+        # Simplest possible answer: Yes, always
+        return True
+
+    @property
+    def is_staff(self):
+        "Is the user a member of staff?"
+        # Simplest possible answer: All admins are staff
+        return self.is_admin
+</pre> <p>Then, to register this custom user model with Django’s admin, the following code would be required in the app’s <code>admin.py</code> file:</p> <pre data-language="python">from django import forms
+from django.contrib import admin
+from django.contrib.auth.models import Group
+from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.forms import ReadOnlyPasswordHashField
+from django.core.exceptions import ValidationError
+
+from customauth.models import MyUser
+
+
+class UserCreationForm(forms.ModelForm):
+    """A form for creating new users. Includes all the required
+    fields, plus a repeated password."""
+    password1 = forms.CharField(label='Password', widget=forms.PasswordInput)
+    password2 = forms.CharField(label='Password confirmation', widget=forms.PasswordInput)
+
+    class Meta:
+        model = MyUser
+        fields = ('email', 'date_of_birth')
+
+    def clean_password2(self):
+        # Check that the two password entries match
+        password1 = self.cleaned_data.get("password1")
+        password2 = self.cleaned_data.get("password2")
+        if password1 and password2 and password1 != password2:
+            raise ValidationError("Passwords don't match")
+        return password2
+
+    def save(self, commit=True):
+        # Save the provided password in hashed format
+        user = super().save(commit=False)
+        user.set_password(self.cleaned_data["password1"])
+        if commit:
+            user.save()
+        return user
+
+
+class UserChangeForm(forms.ModelForm):
+    """A form for updating users. Includes all the fields on
+    the user, but replaces the password field with admin's
+    disabled password hash display field.
+    """
+    password = ReadOnlyPasswordHashField()
+
+    class Meta:
+        model = MyUser
+        fields = ('email', 'password', 'date_of_birth', 'is_active', 'is_admin')
+
+
+class UserAdmin(BaseUserAdmin):
+    # The forms to add and change user instances
+    form = UserChangeForm
+    add_form = UserCreationForm
+
+    # The fields to be used in displaying the User model.
+    # These override the definitions on the base UserAdmin
+    # that reference specific fields on auth.User.
+    list_display = ('email', 'date_of_birth', 'is_admin')
+    list_filter = ('is_admin',)
+    fieldsets = (
+        (None, {'fields': ('email', 'password')}),
+        ('Personal info', {'fields': ('date_of_birth',)}),
+        ('Permissions', {'fields': ('is_admin',)}),
+    )
+    # add_fieldsets is not a standard ModelAdmin attribute. UserAdmin
+    # overrides get_fieldsets to use this attribute when creating a user.
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': ('email', 'date_of_birth', 'password1', 'password2'),
+        }),
+    )
+    search_fields = ('email',)
+    ordering = ('email',)
+    filter_horizontal = ()
+
+
+# Now register the new UserAdmin...
+admin.site.register(MyUser, UserAdmin)
+# ... and, since we're not using Django's built-in permissions,
+# unregister the Group model from admin.
+admin.site.unregister(Group)
+</pre> <p>Finally, specify the custom model as the default user model for your project using the <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> setting in your <code>settings.py</code>:</p> <pre data-language="python">AUTH_USER_MODEL = 'customauth.MyUser'
+</pre> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>In older versions, <code>ReadOnlyPasswordHashField</code> is not <a class="reference internal" href="../../ref/forms/fields#django.forms.Field.disabled" title="django.forms.Field.disabled"><code>disabled</code></a> by default and <code>UserChangeForm.clean_password()</code> is required to return the initial value, whatever the user provides.</p> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/auth/customizing/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/auth/customizing/</a>
+  </p>
+</div>

@@ -1,0 +1,225 @@
+<h1 id="id1">torch.ao.ns._numeric_suite_fx</h1> <div class="admonition warning" id="torch-ao-ns-numeric-suite-fx"> <p class="admonition-title">Warning</p> <p>This module is an early prototype and is subject to change.</p> </div> <p id="module-torch.ao.ns._numeric_suite_fx">This module contains tooling to compare weights and activations across models. Example usage:</p> <pre data-language="python">import copy
+import torch
+import torch.ao.quantization.quantize_fx as quantize_fx
+import torch.ao.ns._numeric_suite_fx as ns
+
+m = torch.nn.Sequential(torch.nn.Conv2d(1, 1, 1)).eval()
+mp = quantize_fx.prepare_fx(m, {'': torch.ao.quantization.default_qconfig})
+# We convert a copy because we need the original prepared model
+# to be available for comparisons, and `quantize_fx.convert_fx` is inplace.
+mq = quantize_fx.convert_fx(copy.deepcopy(mp))
+
+#
+# Comparing weights
+#
+
+# extract weight pairs
+weight_comparison = ns.extract_weights('a', mp, 'b', mq)
+
+# add SQNR for each comparison, inplace
+ns.extend_logger_results_with_comparison(
+    weight_comparison, 'a', 'b', torch.ao.ns.fx.utils.compute_sqnr,
+    'sqnr')
+
+# weight_comparison contains the weights from `mp` and `mq` stored
+# in pairs, and can be used for further analysis.
+
+
+#
+# Comparing activations, with error propagation
+#
+
+# add loggers
+mp_ns, mq_ns = ns.add_loggers(
+    'a', copy.deepcopy(mp),
+    'b', copy.deepcopy(mq),
+    ns.OutputLogger)
+
+# send an example datum to capture intermediate activations
+datum = torch.randn(1, 1, 1, 1)
+mp_ns(datum)
+mq_ns(datum)
+
+# extract intermediate activations
+act_comparison = ns.extract_logger_info(
+    mp_ns, mq_ns, ns.OutputLogger, 'b')
+
+# add SQNR for each comparison, inplace
+ns.extend_logger_results_with_comparison(
+    act_comparison, 'a', 'b', torch.ao.ns.fx.utils.compute_sqnr,
+    'sqnr')
+
+# act_comparison contains the activations from `mp_ns` and `mq_ns` stored
+# in pairs, and can be used for further analysis.
+
+#
+# Comparing activations, without error propagation
+#
+
+# create shadow model
+mp_shadows_mq = ns.add_shadow_loggers(
+    'a', copy.deepcopy(mp),
+    'b', copy.deepcopy(mq),
+    ns.OutputLogger)
+
+# send an example datum to capture intermediate activations
+datum = torch.randn(1, 1, 1, 1)
+mp_shadows_mq(datum)
+
+# extract intermediate activations
+shadow_act_comparison = ns.extract_shadow_logger_info(
+    mp_shadows_mq, ns.OutputLogger, 'b')
+
+# add SQNR for each comparison, inplace
+ns.extend_logger_results_with_comparison(
+    shadow_act_comparison, 'a', 'b', torch.ao.ns.fx.utils.compute_sqnr,
+    'sqnr')
+
+# shadow_act_comparison contains the activations from `mp_ns` and `mq_ns` stored
+# in pairs, and can be used for further analysis.
+</pre> <dl class="py class"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.OutputLogger">
+<code>class torch.ao.ns._numeric_suite_fx.OutputLogger(ref_node_name, prev_node_name, model_name, ref_name, prev_node_target_type, ref_node_target_type, results_type, index_within_arg, index_of_arg, fqn, qconfig_str='')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#OutputLogger"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Base class for capturing intermediate values.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.OutputLogger.forward">
+<code>forward(x)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#OutputLogger.forward"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.OutputComparisonLogger">
+<code>class torch.ao.ns._numeric_suite_fx.OutputComparisonLogger(*args, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#OutputComparisonLogger"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Same as OutputLogger, but also requires the original activation in order to calculate the comparison at calibration time</p> <dl class="py method"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.OutputComparisonLogger.forward">
+<code>forward(x, x_ref)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#OutputComparisonLogger.forward"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.NSTracer">
+<code>class torch.ao.ns._numeric_suite_fx.NSTracer(skipped_module_names, skipped_module_classes)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#NSTracer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Just like a regular FX quantization tracer, but treats observers and fake_quantize modules as leaf modules.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.NSTracer.is_leaf_module">
+<code>is_leaf_module(m, module_qualified_name)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#NSTracer.is_leaf_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.extract_weights">
+<code>torch.ao.ns._numeric_suite_fx.extract_weights(model_name_a, model_a, model_name_b, model_b, base_name_to_sets_of_related_ops=None, unmatchable_types_map=None, op_to_type_to_weight_extraction_fn=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#extract_weights"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Extract weights from model A and model B, and return a comparison.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>model_name_a</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model A to use in results</li> <li>
+<strong>model_a</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model A</li> <li>
+<strong>model_name_b</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model B to use in results</li> <li>
+<strong>model_b</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model B</li> <li>
+<strong>base_name_to_sets_of_related_ops</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of subgraph base nodes, subject to change</li> <li>
+<strong>unmatchable_types_map</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of unmatchable types, subject to change</li> <li>
+<strong>op_to_type_to_weight_extraction_fn</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>]</em><em>]</em><em>]</em>) – optional override of function which extracts weight from a type, subject to change</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>NSResultsType, containing the weight comparisons</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>]]]]]</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.add_loggers">
+<code>torch.ao.ns._numeric_suite_fx.add_loggers(name_a, model_a, name_b, model_b, logger_cls, should_log_inputs=False, base_name_to_sets_of_related_ops=None, unmatchable_types_map=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#add_loggers"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Instrument model A and model B with loggers.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name_a</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model A to use in results</li> <li>
+<strong>model_a</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model A</li> <li>
+<strong>name_b</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model B to use in results</li> <li>
+<strong>model_b</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model B</li> <li>
+<strong>logger_cls</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>) – class of Logger to use</li> <li>
+<strong>base_name_to_sets_of_related_ops</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of subgraph base nodes, subject to change</li> <li>
+<strong>unmatchable_types_map</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of unmatchable types, subject to change</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a tuple of (model_a_with_loggers, model_b_with_loggers). Modifies both models inplace.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a>[<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>, <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.extract_logger_info">
+<code>torch.ao.ns._numeric_suite_fx.extract_logger_info(model_a, model_b, logger_cls, model_name_to_use_for_layer_names)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#extract_logger_info"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Traverse all loggers in <code>model_a</code> and <code>model_b</code>, and extract the logged information.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>model_a</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model A</li> <li>
+<strong>model_b</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model B</li> <li>
+<strong>logger_cls</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>) – class of Logger to use</li> <li>
+<strong>model_name_to_use_for_layer_names</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model to use for layer names in the output</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>NSResultsType, containing the logged comparisons</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>]]]]]</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.add_shadow_loggers">
+<code>torch.ao.ns._numeric_suite_fx.add_shadow_loggers(name_a, model_a, name_b, model_b, logger_cls, should_log_inputs=False, base_name_to_sets_of_related_ops=None, node_type_to_io_type_map=None, unmatchable_types_map=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#add_shadow_loggers"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Instrument model A and model B with shadow loggers.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name_a</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model A to use in results</li> <li>
+<strong>model_a</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model A</li> <li>
+<strong>name_b</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model B to use in results</li> <li>
+<strong>model_b</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – model B</li> <li>
+<strong>logger_cls</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>) – class of Logger to use</li> <li>
+<strong>should_log_inputs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – whether to log inputs</li> <li>
+<strong>base_name_to_sets_of_related_ops</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of subgraph base nodes, subject to change</li> <li>
+<strong>unmatchable_types_map</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Set" title="(in Python v3.12)">Set</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em><em>]</em><em>]</em>) – optional override of unmatchable types, subject to change</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+
+
+<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.extract_shadow_logger_info">
+<code>torch.ao.ns._numeric_suite_fx.extract_shadow_logger_info(model_a_shadows_b, logger_cls, model_name_to_use_for_layer_names)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#extract_shadow_logger_info"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Traverse all loggers in a shadow model, and extract the logged information.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>model_a_shadows_b</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – shadow model</li> <li>
+<strong>logger_cls</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>) – class of Logger to use</li> <li>
+<strong>model_name_to_use_for_layer_names</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model to use for layer names in the output</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>NSResultsType, containing the logged comparisons</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>]]]]]</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.extend_logger_results_with_comparison">
+<code>torch.ao.ns._numeric_suite_fx.extend_logger_results_with_comparison(results, model_name_1, model_name_2, comparison_fn, comparison_name)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#extend_logger_results_with_comparison"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Compares the logged values from <code>model_name_2</code> against the corresponding values in <code>model_name_1</code>, using <code>comparison_fn</code>. Records the result in <code>model_name_2</code>’s results under <code>comparison_name</code>. Modifies <code>results</code> inplace.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>results</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – the result data structure from <code>extract_logger_info</code> or <code>extract_shadow_logger_info</code>.</li> <li>
+<strong>model_name_1</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model 1</li> <li>
+<strong>model_name_2</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model 2</li> <li>
+<strong>comparison_fn</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>[</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>, </em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em><em>, </em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – function to compare two Tensors</li> <li>
+<strong>comparison_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – string name of model to use for layer names in the output</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.prepare_n_shadows_model">
+<code>torch.ao.ns._numeric_suite_fx.prepare_n_shadows_model(model, example_inputs, qconfig_multi_mapping, backend_config, custom_prepare_fn=None, custom_prepare_kwargs=None, custom_tracer=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#prepare_n_shadows_model"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Given a model with a graph with M ops such as</p>  <p>args_kwargs_m -&gt; op_m -&gt; output_m</p>  <p>And a set of N qconfigs for each op, creates a new model, with each of the subgraph of <code>op_m</code> transformed into</p> <pre data-language="python">     |---------&gt; op_m_n -&gt; log_m_n
+     |                     /
+args_kwargs_m ---------&gt; op_m -&gt; log_m_0
+</pre> <p>Where op_m_n is op_m wrapped in a submodule and transformed with qconfig_n, and its inner graph looks like</p> <pre data-language="python">args_m -------- op_m_prepared_with_qconfig_n -&gt; out_m_n
+            /
+kwargs_m ---
+</pre> <p>This is useful for testing different quantization of multiple layers in a single pass through the model.</p> <p>High level TODOs for future PRs: * figure out a better way to name the output structure * return a results data structure instead of printing it out * add examples to docblocks</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="fx#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.loggers_set_enabled">
+<code>torch.ao.ns._numeric_suite_fx.loggers_set_enabled(model, enabled)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#loggers_set_enabled"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Sets the <code>enabled</code> setting on a <code>model</code>’s loggers</p>  </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.loggers_set_save_activations">
+<code>torch.ao.ns._numeric_suite_fx.loggers_set_save_activations(model, save_activations)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#loggers_set_save_activations"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Sets the <code>save_activations</code> setting on a <code>model</code>’s loggers</p>  </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.convert_n_shadows_model">
+<code>torch.ao.ns._numeric_suite_fx.convert_n_shadows_model(model, custom_convert_fn=None, custom_convert_kwargs=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#convert_n_shadows_model"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Given a model from <code>prepare_n_shadows_model</code>, runs <code>convert_fx</code> on each shadow submodule.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="fx#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.extract_results_n_shadows_model">
+<code>torch.ao.ns._numeric_suite_fx.extract_results_n_shadows_model(model)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#extract_results_n_shadows_model"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Extracts logger results from <code>model</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>]]]]]</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns._numeric_suite_fx.print_comparisons_n_shadows_model">
+<code>torch.ao.ns._numeric_suite_fx.print_comparisons_n_shadows_model(results)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/_numeric_suite_fx.html#print_comparisons_n_shadows_model"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Prints a summary of extracted <code>results</code>.</p>  </dd>
+</dl>   <h1 id="torch-ao-ns-fx-utils">torch.ao.ns.fx.utils</h1> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This module is an early prototype and is subject to change.</p> </div> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns.fx.utils.compute_sqnr">
+<code>torch.ao.ns.fx.utils.compute_sqnr(x, y)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/fx/utils.html#compute_sqnr"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns.fx.utils.compute_normalized_l2_error">
+<code>torch.ao.ns.fx.utils.compute_normalized_l2_error(x, y)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/fx/utils.html#compute_normalized_l2_error"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.ao.ns.fx.utils.compute_cosine_similarity">
+<code>torch.ao.ns.fx.utils.compute_cosine_similarity(x, y)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/ao/ns/fx/utils.html#compute_cosine_similarity"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch.ao.ns._numeric_suite_fx.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch.ao.ns._numeric_suite_fx.html</a>
+  </p>
+</div>

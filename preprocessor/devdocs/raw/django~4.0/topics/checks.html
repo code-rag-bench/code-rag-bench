@@ -1,0 +1,86 @@
+<h1 id="system-check-framework">System check framework</h1> <p id="s-module-django.core.checks">The system check framework is a set of static checks for validating Django projects. It detects common problems and provides hints for how to fix them. The framework is extensible so you can easily add your own checks.</p> <p>Checks can be triggered explicitly via the <a class="reference internal" href="../ref/django-admin#django-admin-check"><code>check</code></a> command. Checks are triggered implicitly before most commands, including <a class="reference internal" href="../ref/django-admin#django-admin-runserver"><code>runserver</code></a> and <a class="reference internal" href="../ref/django-admin#django-admin-migrate"><code>migrate</code></a>. For performance reasons, checks are not run as part of the WSGI stack that is used in deployment. If you need to run system checks on your deployment server, trigger them explicitly using <a class="reference internal" href="../ref/django-admin#django-admin-check"><code>check</code></a>.</p> <p>Serious errors will prevent Django commands (such as <a class="reference internal" href="../ref/django-admin#django-admin-runserver"><code>runserver</code></a>) from running at all. Minor problems are reported to the console. If you have inspected the cause of a warning and are happy to ignore it, you can hide specific warnings using the <a class="reference internal" href="../ref/settings#std:setting-SILENCED_SYSTEM_CHECKS"><code>SILENCED_SYSTEM_CHECKS</code></a> setting in your project settings file.</p> <p>A full list of all checks that can be raised by Django can be found in the <a class="reference internal" href="../ref/checks"><span class="doc">System check reference</span></a>.</p>  <h2 id="writing-your-own-checks">Writing your own checks</h2> <p id="s-writing-your-own-checks">The framework is flexible and allows you to write functions that perform any other kind of check you may require. The following is an example stub check function:</p> <pre data-language="python">from django.core.checks import Error, register
+
+@register()
+def example_check(app_configs, **kwargs):
+    errors = []
+    # ... your check logic here
+    if check_failed:
+        errors.append(
+            Error(
+                'an error',
+                hint='A hint.',
+                obj=checked_object,
+                id='myapp.E001',
+            )
+        )
+    return errors
+</pre> <p>The check function <em>must</em> accept an <code>app_configs</code> argument; this argument is the list of applications that should be inspected. If <code>None</code>, the check must be run on <em>all</em> installed apps in the project.</p> <p>The check will receive a <code>databases</code> keyword argument. This is a list of database aliases whose connections may be used to inspect database level configuration. If <code>databases</code> is <code>None</code>, the check must not use any database connections.</p> <p>The <code>**kwargs</code> argument is required for future expansion.</p>  <h3 id="messages">Messages</h3> <p id="s-messages">The function must return a list of messages. If no problems are found as a result of the check, the check function must return an empty list.</p> <p>The warnings and errors raised by the check method must be instances of <a class="reference internal" href="../ref/checks#django.core.checks.CheckMessage" title="django.core.checks.CheckMessage"><code>CheckMessage</code></a>. An instance of <a class="reference internal" href="../ref/checks#django.core.checks.CheckMessage" title="django.core.checks.CheckMessage"><code>CheckMessage</code></a> encapsulates a single reportable error or warning. It also provides context and hints applicable to the message, and a unique identifier that is used for filtering purposes.</p> <p>The concept is very similar to messages from the <a class="reference internal" href="../ref/contrib/messages"><span class="doc">message framework</span></a> or the <a class="reference internal" href="logging"><span class="doc">logging framework</span></a>. Messages are tagged with a <code>level</code> indicating the severity of the message.</p> <p>There are also shortcuts to make creating messages with common levels easier. When using these classes you can omit the <code>level</code> argument because it is implied by the class name.</p> <ul class="simple"> <li><a class="reference internal" href="../ref/checks#django.core.checks.Debug" title="django.core.checks.Debug"><code>Debug</code></a></li> <li><a class="reference internal" href="../ref/checks#django.core.checks.Info" title="django.core.checks.Info"><code>Info</code></a></li> <li><a class="reference internal" href="../ref/checks#django.core.checks.Warning" title="django.core.checks.Warning"><code>Warning</code></a></li> <li><a class="reference internal" href="../ref/checks#django.core.checks.Error" title="django.core.checks.Error"><code>Error</code></a></li> <li><a class="reference internal" href="../ref/checks#django.core.checks.Critical" title="django.core.checks.Critical"><code>Critical</code></a></li> </ul>   <h3 id="registering-labeling-checks">Registering and labeling checks</h3> <p id="s-registering-and-labeling-checks">Lastly, your check function must be registered explicitly with system check registry. Checks should be registered in a file that’s loaded when your application is loaded; for example, in the <a class="reference internal" href="../ref/applications#django.apps.AppConfig.ready" title="django.apps.AppConfig.ready"><code>AppConfig.ready()</code></a> method.</p> <dl class="function"> <dt id="django.core.checks.register">
+<code>register(*tags)(function)</code> </dt> 
+</dl> <p>You can pass as many tags to <code>register</code> as you want in order to label your check. Tagging checks is useful since it allows you to run only a certain group of checks. For example, to register a compatibility check, you would make the following call:</p> <pre data-language="python">from django.core.checks import register, Tags
+
+@register(Tags.compatibility)
+def my_check(app_configs, **kwargs):
+    # ... perform compatibility checks and collect errors
+    return errors
+</pre> <p>You can register “deployment checks” that are only relevant to a production settings file like this:</p> <pre data-language="python">@register(Tags.security, deploy=True)
+def my_check(app_configs, **kwargs):
+    ...
+</pre> <p>These checks will only be run if the <a class="reference internal" href="../ref/django-admin#cmdoption-check-deploy"><code>check --deploy</code></a> option is used.</p> <p>You can also use <code>register</code> as a function rather than a decorator by passing a callable object (usually a function) as the first argument to <code>register</code>.</p> <p>The code below is equivalent to the code above:</p> <pre data-language="python">def my_check(app_configs, **kwargs):
+    ...
+register(my_check, Tags.security, deploy=True)
+</pre>   <h3 id="field-checking">Field, model, manager, and database checks</h3> <p id="s-field-model-manager-and-database-checks">In some cases, you won’t need to register your check function – you can piggyback on an existing registration.</p> <p>Fields, models, model managers, and database backends all implement a <code>check()</code> method that is already registered with the check framework. If you want to add extra checks, you can extend the implementation on the base class, perform any extra checks you need, and append any messages to those generated by the base class. It’s recommended that you delegate each check to separate methods.</p> <p>Consider an example where you are implementing a custom field named <code>RangedIntegerField</code>. This field adds <code>min</code> and <code>max</code> arguments to the constructor of <code>IntegerField</code>. You may want to add a check to ensure that users provide a min value that is less than or equal to the max value. The following code snippet shows how you can implement this check:</p> <pre data-language="python">from django.core import checks
+from django.db import models
+
+class RangedIntegerField(models.IntegerField):
+    def __init__(self, min=None, max=None, **kwargs):
+        super().__init__(**kwargs)
+        self.min = min
+        self.max = max
+
+    def check(self, **kwargs):
+        # Call the superclass
+        errors = super().check(**kwargs)
+
+        # Do some custom checks and add messages to `errors`:
+        errors.extend(self._check_min_max_values(**kwargs))
+
+        # Return all errors and warnings
+        return errors
+
+    def _check_min_max_values(self, **kwargs):
+        if (self.min is not None and
+                self.max is not None and
+                self.min &gt; self.max):
+            return [
+                checks.Error(
+                    'min greater than max.',
+                    hint='Decrease min or increase max.',
+                    obj=self,
+                    id='myapp.E001',
+                )
+            ]
+        # When no error, return an empty list
+        return []
+</pre> <p>If you wanted to add checks to a model manager, you would take the same approach on your subclass of <a class="reference internal" href="db/managers#django.db.models.Manager" title="django.db.models.Manager"><code>Manager</code></a>.</p> <p>If you want to add a check to a model class, the approach is <em>almost</em> the same: the only difference is that the check is a classmethod, not an instance method:</p> <pre data-language="python">class MyModel(models.Model):
+    @classmethod
+    def check(cls, **kwargs):
+        errors = super().check(**kwargs)
+        # ... your own checks ...
+        return errors
+</pre>   <h3 id="writing-tests">Writing tests</h3> <p id="s-writing-tests">Messages are comparable. That allows you to easily write tests:</p> <pre data-language="python">from django.core.checks import Error
+errors = checked_object.check()
+expected_errors = [
+    Error(
+        'an error',
+        hint='A hint.',
+        obj=checked_object,
+        id='myapp.E001',
+    )
+]
+self.assertEqual(errors, expected_errors)
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/checks/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/checks/</a>
+  </p>
+</div>

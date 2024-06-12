@@ -1,0 +1,130 @@
+<h1 class="devsite-page-title">tf.experimental.tensorrt.Converter</h1>       <p>An offline converter for TF-TRT transformation for TF 2.0 SavedModels.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.experimental.tensorrt.Converter(
+    input_saved_model_dir=None, input_saved_model_tags=None,
+    input_saved_model_signature_key=None, conversion_params=None
+)
+</pre>  <p>Currently this is not available on Windows platform.</p> <p>Note that in V2, is_dynamic_op=False is not supported, meaning TRT engines will be built only when the corresponding TRTEngineOp is executed. But we still provide a way to avoid the cost of building TRT engines during inference (see more below).</p> <p>There are several ways to run the conversion:</p> <ol> <li>
+<p>FP32/FP16 precision</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">params = tf.experimental.tensorrt.ConversionParams(
+    precision_mode='FP16')
+converter = tf.experimental.tensorrt.Converter(
+    input_saved_model_dir="my_dir", conversion_params=params)
+converter.convert()
+converter.save(output_saved_model_dir)
+</pre> <p>In this case, no TRT engines will be built or saved in the converted SavedModel. But if input data is available during conversion, we can still build and save the TRT engines to reduce the cost during inference (see option 2 below).</p>
+</li> <li>
+<p>FP32/FP16 precision with pre-built engines</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">params = tf.experimental.tensorrt.ConversionParams(
+    precision_mode='FP16',
+    # Set this to a large enough number so it can cache all the engines.
+    maximum_cached_engines=16)
+converter = tf.experimental.tensorrt.Converter(
+    input_saved_model_dir="my_dir", conversion_params=params)
+converter.convert()
+
+# Define a generator function that yields input data, and use it to execute
+# the graph to build TRT engines.
+# With TensorRT 5.1, different engines will be built (and saved later) for
+# different input shapes to the TRTEngineOp.
+def my_input_fn():
+  for _ in range(num_runs):
+    inp1, inp2 = ...
+    yield inp1, inp2
+
+converter.build(input_fn=my_input_fn)  # Generate corresponding TRT engines
+converter.save(output_saved_model_dir)  # Generated engines will be saved.
+</pre> <p>In this way, one engine will be built/saved for each unique input shapes of the TRTEngineOp. This is good for applications that cannot afford building engines during inference but have access to input data that is similar to the one used in production (for example, that has the same input shapes). Also, the generated TRT engines is platform dependent, so we need to run <code translate="no" dir="ltr">build()</code> in an environment that is similar to production (e.g. with same type of GPU).</p>
+</li> <li>
+<p>INT8 precision and calibration with pre-built engines</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">params = tf.experimental.tensorrt.ConversionParams(
+    precision_mode='INT8',
+    # Currently only one INT8 engine is supported in this mode.
+    maximum_cached_engines=1,
+    use_calibration=True)
+converter = tf.experimental.tensorrt.Converter(
+    input_saved_model_dir="my_dir", conversion_params=params)
+
+# Define a generator function that yields input data, and run INT8
+# calibration with the data. All input data should have the same shape.
+# At the end of convert(), the calibration stats (e.g. range information)
+# will be saved and can be used to generate more TRT engines with different
+# shapes. Also, one TRT engine will be generated (with the same shape as
+# the calibration data) for save later.
+def my_calibration_input_fn():
+  for _ in range(num_runs):
+    inp1, inp2 = ...
+    yield inp1, inp2
+
+converter.convert(calibration_input_fn=my_calibration_input_fn)
+
+# (Optional) Generate more TRT engines offline (same as the previous
+# option), to avoid the cost of generating them during inference.
+def my_input_fn():
+  for _ in range(num_runs):
+    inp1, inp2 = ...
+    yield inp1, inp2
+converter.build(input_fn=my_input_fn)
+
+# Save the TRT engine and the engines.
+converter.save(output_saved_model_dir)
+</pre>
+</li> </ol>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">input_saved_model_dir</code> </td> <td> the directory to load the SavedModel which contains the input graph to transforms. Used only when input_graph_def is None. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">input_saved_model_tags</code> </td> <td> list of tags to load the SavedModel. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">input_saved_model_signature_key</code> </td> <td> the key of the signature to optimize the graph for. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">conversion_params</code> </td> <td> a TrtConversionParams instance. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if the combination of the parameters is invalid. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="build" data-text="build"><code translate="no" dir="ltr">build</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/compiler/tensorrt/trt_convert.py#L1139-L1200">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+build(
+    input_fn
+)
+</pre> <p>Run inference with converted graph in order to build TensorRT engines.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">input_fn</code> </td> <td> a generator function that yields input data as a list or tuple, which will be used to execute the converted signature to generate TRT engines. Example: `def input_fn(): <h1 id="lets_assume_a_network_with_2_input_tensors_we_generate_3_sets" class="page-title" data-text="Let's assume a network with 2 input tensors. We generate 3 sets">Let's assume a network with 2 input tensors. We generate 3 sets</h1> <h1 id="of_dummy_input_data" class="page-title" data-text="of dummy input data:">of dummy input data:</h1> <p>input_shapes = [[(1, 16), (2, 16)], # 1st input list [(2, 32), (4, 32)], # 2nd list of two tensors [(4, 32), (8, 32)]] # 3rd input list for shapes in input_shapes:</p> <h1 id="return_a_list_of_input_tensors" class="page-title" data-text="return a list of input tensors">return a list of input tensors</h1> <p>yield [np.zeros(x).astype(np.float32) for x in shapes]` </p>
+</td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">NotImplementedError</code> </td> <td> build() is already called. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">RuntimeError</code> </td> <td> the input_fx is None. </td> </tr> </table> <h3 id="convert" data-text="convert"><code translate="no" dir="ltr">convert</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/compiler/tensorrt/trt_convert.py#L1069-L1137">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+convert(
+    calibration_input_fn=None
+)
+</pre> <p>Convert the input SavedModel in 2.0 format.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">calibration_input_fn</code> </td> <td> a generator function that yields input data as a list or tuple, which will be used to execute the converted signature for calibration. All the returned input data should have the same shape. Example: <code translate="no" dir="ltr">def input_fn(): yield input1, input2, input3</code> </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if the input combination is invalid. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> The TF-TRT converted Function. </td> </tr> 
+</table> <h3 id="save" data-text="save"><code translate="no" dir="ltr">save</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/compiler/tensorrt/trt_convert.py#L1202-L1281">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+save(
+    output_saved_model_dir
+)
+</pre> <p>Save the converted SavedModel.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">output_saved_model_dir</code> </td> <td> directory to saved the converted SavedModel. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/experimental/tensorrt/Converter" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/experimental/tensorrt/Converter</a>
+  </p>
+</div>

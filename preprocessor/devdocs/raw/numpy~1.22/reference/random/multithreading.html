@@ -1,0 +1,67 @@
+<h1>Multithreaded Generation</h1> <p>The four core distributions (<a class="reference internal" href="generated/numpy.random.generator.random#numpy.random.Generator.random" title="numpy.random.Generator.random"><code>random</code></a>, <a class="reference internal" href="generated/numpy.random.generator.standard_normal#numpy.random.Generator.standard_normal" title="numpy.random.Generator.standard_normal"><code>standard_normal</code></a>, <a class="reference internal" href="generated/numpy.random.generator.standard_exponential#numpy.random.Generator.standard_exponential" title="numpy.random.Generator.standard_exponential"><code>standard_exponential</code></a>, and <a class="reference internal" href="generated/numpy.random.generator.standard_gamma#numpy.random.Generator.standard_gamma" title="numpy.random.Generator.standard_gamma"><code>standard_gamma</code></a>) all allow existing arrays to be filled using the <code>out</code> keyword argument. Existing arrays need to be contiguous and well-behaved (writable and aligned). Under normal circumstances, arrays created using the common constructors such as <a class="reference internal" href="../generated/numpy.empty#numpy.empty" title="numpy.empty"><code>numpy.empty</code></a> will satisfy these requirements.</p> <p>This example makes use of Python 3 <a class="reference external" href="https://docs.python.org/dev/library/concurrent.futures.html#module-concurrent.futures" title="(in Python v3.11)"><code>concurrent.futures</code></a> to fill an array using multiple threads. Threads are long-lived so that repeated calls do not require any additional overheads from thread creation.</p> <p>The random numbers generated are reproducible in the sense that the same seed will produce the same outputs, given that the number of threads does not change.</p> <pre data-language="python">from numpy.random import default_rng, SeedSequence
+import multiprocessing
+import concurrent.futures
+import numpy as np
+
+class MultithreadedRNG:
+    def __init__(self, n, seed=None, threads=None):
+        if threads is None:
+            threads = multiprocessing.cpu_count()
+        self.threads = threads
+
+        seq = SeedSequence(seed)
+        self._random_generators = [default_rng(s)
+                                   for s in seq.spawn(threads)]
+
+        self.n = n
+        self.executor = concurrent.futures.ThreadPoolExecutor(threads)
+        self.values = np.empty(n)
+        self.step = np.ceil(n / threads).astype(np.int_)
+
+    def fill(self):
+        def _fill(random_state, out, first, last):
+            random_state.standard_normal(out=out[first:last])
+
+        futures = {}
+        for i in range(self.threads):
+            args = (_fill,
+                    self._random_generators[i],
+                    self.values,
+                    i * self.step,
+                    (i + 1) * self.step)
+            futures[self.executor.submit(*args)] = i
+        concurrent.futures.wait(futures)
+
+    def __del__(self):
+        self.executor.shutdown(False)
+</pre> <p>The multithreaded random number generator can be used to fill an array. The <code>values</code> attributes shows the zero-value before the fill and the random value after.</p> <pre data-language="python">In [2]: mrng = MultithreadedRNG(10000000, seed=12345)
+   ...: print(mrng.values[-1])
+Out[2]: 0.0
+
+In [3]: mrng.fill()
+   ...: print(mrng.values[-1])
+Out[3]: 2.4545724517479104
+</pre> <p>The time required to produce using multiple threads can be compared to the time required to generate using a single thread.</p> <pre data-language="python">In [4]: print(mrng.threads)
+   ...: %timeit mrng.fill()
+
+Out[4]: 4
+   ...: 32.8 ms ± 2.71 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre> <p>The single threaded call directly uses the BitGenerator.</p> <pre data-language="python">In [5]: values = np.empty(10000000)
+   ...: rg = default_rng()
+   ...: %timeit rg.standard_normal(out=values)
+
+Out[5]: 99.6 ms ± 222 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre> <p>The gains are substantial and the scaling is reasonable even for arrays that are only moderately large. The gains are even larger when compared to a call that does not use an existing array due to array creation overhead.</p> <pre data-language="python">In [6]: rg = default_rng()
+   ...: %timeit rg.standard_normal(10000000)
+
+Out[6]: 125 ms ± 309 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre> <p>Note that if <code>threads</code> is not set by the user, it will be determined by <code>multiprocessing.cpu_count()</code>.</p> <pre data-language="python">In [7]: # simulate the behavior for `threads=None`, if the machine had only one thread
+   ...: mrng = MultithreadedRNG(10000000, seed=12345, threads=1)
+   ...: print(mrng.values[-1])
+Out[7]: 1.1800150052158556
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/reference/random/multithreading.html" class="_attribution-link">https://numpy.org/doc/1.22/reference/random/multithreading.html</a>
+  </p>
+</div>

@@ -1,0 +1,56 @@
+<h1 id="database-instrumentation">Database instrumentation</h1> <p id="s-database-instrumentation">To help you understand and control the queries issued by your code, Django provides a hook for installing wrapper functions around the execution of database queries. For example, wrappers can count queries, measure query duration, log queries, or even prevent query execution (e.g. to make sure that no queries are issued while rendering a template with prefetched data).</p> <p>The wrappers are modeled after <a class="reference internal" href="../http/middleware"><span class="doc">middleware</span></a> – they are callables which take another callable as one of their arguments. They call that callable to invoke the (possibly wrapped) database query, and they can do what they want around that call. They are, however, created and installed by user code, and so don’t need a separate factory like middleware do.</p> <p>Installing a wrapper is done in a context manager – so the wrappers are temporary and specific to some flow in your code.</p> <p>As mentioned above, an example of a wrapper is a query execution blocker. It could look like this:</p> <pre data-language="python">def blocker(*args):
+    raise Exception('No database access allowed here.')
+</pre> <p>And it would be used in a view to block queries from the template like so:</p> <pre data-language="python">from django.db import connection
+from django.shortcuts import render
+
+def my_view(request):
+    context = {...}  # Code to generate context with all data.
+    template_name = ...
+    with connection.execute_wrapper(blocker):
+        return render(request, template_name, context)
+</pre> <p>The parameters sent to the wrappers are:</p> <ul class="simple"> <li>
+<code>execute</code> – a callable, which should be invoked with the rest of the parameters in order to execute the query.</li> <li>
+<code>sql</code> – a <code>str</code>, the SQL query to be sent to the database.</li> <li>
+<code>params</code> – a list/tuple of parameter values for the SQL command, or a list/tuple of lists/tuples if the wrapped call is <code>executemany()</code>.</li> <li>
+<code>many</code> – a <code>bool</code> indicating whether the ultimately invoked call is <code>execute()</code> or <code>executemany()</code> (and whether <code>params</code> is expected to be a sequence of values, or a sequence of sequences of values).</li> <li>
+<code>context</code> – a dictionary with further data about the context of invocation. This includes the connection and cursor.</li> </ul> <p>Using the parameters, a slightly more complex version of the blocker could include the connection name in the error message:</p> <pre data-language="python">def blocker(execute, sql, params, many, context):
+    alias = context['connection'].alias
+    raise Exception("Access to database '{}' blocked here".format(alias))
+</pre> <p>For a more complete example, a query logger could look like this:</p> <pre data-language="python">import time
+
+class QueryLogger:
+
+    def __init__(self):
+        self.queries = []
+
+    def __call__(self, execute, sql, params, many, context):
+        current_query = {'sql': sql, 'params': params, 'many': many}
+        start = time.monotonic()
+        try:
+            result = execute(sql, params, many, context)
+        except Exception as e:
+            current_query['status'] = 'error'
+            current_query['exception'] = e
+            raise
+        else:
+            current_query['status'] = 'ok'
+            return result
+        finally:
+            duration = time.monotonic() - start
+            current_query['duration'] = duration
+            self.queries.append(current_query)
+</pre> <p>To use this, you would create a logger object and install it as a wrapper:</p> <pre data-language="python">from django.db import connection
+
+ql = QueryLogger()
+with connection.execute_wrapper(ql):
+    do_queries()
+# Now we can print the log.
+print(ql.queries)
+</pre>  <h2 id="connection-execute-wrapper"><code>connection.execute_wrapper()</code></h2> <dl class="method" id="s-connection-execute-wrapper"> <dt id="django.db.backends.base.DatabaseWrapper.execute_wrapper">
+<code>execute_wrapper(wrapper)</code> </dt> 
+</dl> <p>Returns a context manager which, when entered, installs a wrapper around database query executions, and when exited, removes the wrapper. The wrapper is installed on the thread-local connection object.</p> <p><code>wrapper</code> is a callable taking five arguments. It is called for every query execution in the scope of the context manager, with arguments <code>execute</code>, <code>sql</code>, <code>params</code>, <code>many</code>, and <code>context</code> as described above. It’s expected to call <code>execute(sql, params, many, context)</code> and return the return value of that call.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/db/instrumentation/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/db/instrumentation/</a>
+  </p>
+</div>

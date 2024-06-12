@@ -1,0 +1,554 @@
+# Classification of text documents using sparse features
+
+This is an example showing how scikit-learn can be used to classify documents
+by topics using a bag-of-words approach. This example uses a scipy.sparse
+matrix to store the features and demonstrates various classifiers that can
+efficiently handle sparse matrices.
+
+The dataset used in this example is the 20 newsgroups dataset. It will be
+automatically downloaded, then cached.
+
+    
+    # Author: Peter Prettenhofer <peter.prettenhofer@gmail.com>
+    #         Olivier Grisel <olivier.grisel@ensta.org>
+    #         Mathieu Blondel <mathieu@mblondel.org>
+    #         Lars Buitinck
+    # License: BSD 3 clause
+    import logging
+    import numpy as np
+    from optparse import OptionParser
+    import sys
+    from time import time
+    import matplotlib.pyplot as plt
+    
+    from sklearn.datasets import fetch_20newsgroups
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.feature_extraction.text import HashingVectorizer
+    from sklearn.feature_selection import SelectFromModel
+    from sklearn.feature_selection import SelectKBest, chi2
+    from sklearn.linear_model import RidgeClassifier
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import LinearSVC
+    from sklearn.linear_model import SGDClassifier
+    from sklearn.linear_model import Perceptron
+    from sklearn.linear_model import PassiveAggressiveClassifier
+    from sklearn.naive_bayes import BernoulliNB, ComplementNB, MultinomialNB
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.neighbors import NearestCentroid
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.utils.extmath import density
+    from sklearn import metrics
+    
+    
+    # Display progress logs on stdout
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(message)s')
+    
+    op = OptionParser()
+    op.add_option("--report",
+                  action="store_true", dest="print_report",
+                  help="Print a detailed classification report.")
+    op.add_option("--chi2_select",
+                  action="store", type="int", dest="select_chi2",
+                  help="Select some number of features using a chi-squared test")
+    op.add_option("--confusion_matrix",
+                  action="store_true", dest="print_cm",
+                  help="Print the confusion matrix.")
+    op.add_option("--top10",
+                  action="store_true", dest="print_top10",
+                  help="Print ten most discriminative terms per class"
+                       " for every classifier.")
+    op.add_option("--all_categories",
+                  action="store_true", dest="all_categories",
+                  help="Whether to use all categories or not.")
+    op.add_option("--use_hashing",
+                  action="store_true",
+                  help="Use a hashing vectorizer.")
+    op.add_option("--n_features",
+                  action="store", type=int, default=2 ** 16,
+                  help="n_features when using the hashing vectorizer.")
+    op.add_option("--filtered",
+                  action="store_true",
+                  help="Remove newsgroup information that is easily overfit: "
+                       "headers, signatures, and quoting.")
+    
+    
+    def is_interactive():
+        return not hasattr(sys.modules['__main__'], '__file__')
+    
+    
+    # work-around for Jupyter notebook and IPython console
+    argv = [] if is_interactive() else sys.argv[1:]
+    (opts, args) = op.parse_args(argv)
+    if len(args) > 0:
+        op.error("this script takes no arguments.")
+        sys.exit(1)
+    
+    print(__doc__)
+    op.print_help()
+    print()
+    
+Out:
+
+    
+    Usage: plot_document_classification_20newsgroups.py [options]
+    
+    Options:
+      -h, --help            show this help message and exit
+      --report              Print a detailed classification report.
+      --chi2_select=SELECT_CHI2
+                            Select some number of features using a chi-squared
+                            test
+      --confusion_matrix    Print the confusion matrix.
+      --top10               Print ten most discriminative terms per class for
+                            every classifier.
+      --all_categories      Whether to use all categories or not.
+      --use_hashing         Use a hashing vectorizer.
+      --n_features=N_FEATURES
+                            n_features when using the hashing vectorizer.
+      --filtered            Remove newsgroup information that is easily overfit:
+                            headers, signatures, and quoting.
+    
+## Load data from the training set
+
+Let’s load data from the newsgroups dataset which comprises around 18000
+newsgroups posts on 20 topics split in two subsets: one for training (or
+development) and the other one for testing (or for performance evaluation).
+
+    
+    if opts.all_categories:
+        categories = None
+    else:
+        categories = [
+            'alt.atheism',
+            'talk.religion.misc',
+            'comp.graphics',
+            'sci.space',
+        ]
+    
+    if opts.filtered:
+        remove = ('headers', 'footers', 'quotes')
+    else:
+        remove = ()
+    
+    print("Loading 20 newsgroups dataset for categories:")
+    print(categories if categories else "all")
+    
+    data_train = fetch_20newsgroups(subset='train', categories=categories,
+                                    shuffle=True, random_state=42,
+                                    remove=remove)
+    
+    data_test = fetch_20newsgroups(subset='test', categories=categories,
+                                   shuffle=True, random_state=42,
+                                   remove=remove)
+    print('data loaded')
+    
+    # order of labels in `target_names` can be different from `categories`
+    target_names = data_train.target_names
+    
+    
+    def size_mb(docs):
+        return sum(len(s.encode('utf-8')) for s in docs) / 1e6
+    
+    
+    data_train_size_mb = size_mb(data_train.data)
+    data_test_size_mb = size_mb(data_test.data)
+    
+    print("%d documents - %0.3fMB (training set)" % (
+        len(data_train.data), data_train_size_mb))
+    print("%d documents - %0.3fMB (test set)" % (
+        len(data_test.data), data_test_size_mb))
+    print("%d categories" % len(target_names))
+    print()
+    
+    # split a training set and a test set
+    y_train, y_test = data_train.target, data_test.target
+    
+    print("Extracting features from the training data using a sparse vectorizer")
+    t0 = time()
+    if opts.use_hashing:
+        vectorizer = HashingVectorizer(stop_words='english', alternate_sign=False,
+                                       n_features=opts.n_features)
+        X_train = vectorizer.transform(data_train.data)
+    else:
+        vectorizer = TfidfVectorizer(sublinear_tf=True, max_df=0.5,
+                                     stop_words='english')
+        X_train = vectorizer.fit_transform(data_train.data)
+    duration = time() - t0
+    print("done in %fs at %0.3fMB/s" % (duration, data_train_size_mb / duration))
+    print("n_samples: %d, n_features: %d" % X_train.shape)
+    print()
+    
+    print("Extracting features from the test data using the same vectorizer")
+    t0 = time()
+    X_test = vectorizer.transform(data_test.data)
+    duration = time() - t0
+    print("done in %fs at %0.3fMB/s" % (duration, data_test_size_mb / duration))
+    print("n_samples: %d, n_features: %d" % X_test.shape)
+    print()
+    
+    # mapping from integer feature name to original token string
+    if opts.use_hashing:
+        feature_names = None
+    else:
+        feature_names = vectorizer.get_feature_names()
+    
+    if opts.select_chi2:
+        print("Extracting %d best features by a chi-squared test" %
+              opts.select_chi2)
+        t0 = time()
+        ch2 = SelectKBest(chi2, k=opts.select_chi2)
+        X_train = ch2.fit_transform(X_train, y_train)
+        X_test = ch2.transform(X_test)
+        if feature_names:
+            # keep selected feature names
+            feature_names = [feature_names[i] for i
+                             in ch2.get_support(indices=True)]
+        print("done in %fs" % (time() - t0))
+        print()
+    
+    if feature_names:
+        feature_names = np.asarray(feature_names)
+    
+    
+    def trim(s):
+        """Trim string to fit on terminal (assuming 80-column display)"""
+        return s if len(s) <= 80 else s[:77] + "..."
+    
+Out:
+
+    
+    Loading 20 newsgroups dataset for categories:
+    ['alt.atheism', 'talk.religion.misc', 'comp.graphics', 'sci.space']
+    data loaded
+    2034 documents - 3.980MB (training set)
+    1353 documents - 2.867MB (test set)
+    4 categories
+    
+    Extracting features from the training data using a sparse vectorizer
+    done in 0.770200s at 5.167MB/s
+    n_samples: 2034, n_features: 33809
+    
+    Extracting features from the test data using the same vectorizer
+    done in 0.425909s at 6.733MB/s
+    n_samples: 1353, n_features: 33809
+    
+## Benchmark classifiers
+
+We train and test the datasets with 15 different classification models and get
+performance results for each model.
+
+    
+    def benchmark(clf):
+        print('_' * 80)
+        print("Training: ")
+        print(clf)
+        t0 = time()
+        clf.fit(X_train, y_train)
+        train_time = time() - t0
+        print("train time: %0.3fs" % train_time)
+    
+        t0 = time()
+        pred = clf.predict(X_test)
+        test_time = time() - t0
+        print("test time:  %0.3fs" % test_time)
+    
+        score = metrics.accuracy_score(y_test, pred)
+        print("accuracy:   %0.3f" % score)
+    
+        if hasattr(clf, 'coef_'):
+            print("dimensionality: %d" % clf.coef_.shape[1])
+            print("density: %f" % density(clf.coef_))
+    
+            if opts.print_top10 and feature_names is not None:
+                print("top 10 keywords per class:")
+                for i, label in enumerate(target_names):
+                    top10 = np.argsort(clf.coef_[i])[-10:]
+                    print(trim("%s: %s" % (label, " ".join(feature_names[top10]))))
+            print()
+    
+        if opts.print_report:
+            print("classification report:")
+            print(metrics.classification_report(y_test, pred,
+                                                target_names=target_names))
+    
+        if opts.print_cm:
+            print("confusion matrix:")
+            print(metrics.confusion_matrix(y_test, pred))
+    
+        print()
+        clf_descr = str(clf).split('(')[0]
+        return clf_descr, score, train_time, test_time
+    
+    
+    results = []
+    for clf, name in (
+            (RidgeClassifier(tol=1e-2, solver="sag"), "Ridge Classifier"),
+            (Perceptron(max_iter=50), "Perceptron"),
+            (PassiveAggressiveClassifier(max_iter=50),
+             "Passive-Aggressive"),
+            (KNeighborsClassifier(n_neighbors=10), "kNN"),
+            (RandomForestClassifier(), "Random forest")):
+        print('=' * 80)
+        print(name)
+        results.append(benchmark(clf))
+    
+    for penalty in ["l2", "l1"]:
+        print('=' * 80)
+        print("%s penalty" % penalty.upper())
+        # Train Liblinear model
+        results.append(benchmark(LinearSVC(penalty=penalty, dual=False,
+                                           tol=1e-3)))
+    
+        # Train SGD model
+        results.append(benchmark(SGDClassifier(alpha=.0001, max_iter=50,
+                                               penalty=penalty)))
+    
+    # Train SGD with Elastic Net penalty
+    print('=' * 80)
+    print("Elastic-Net penalty")
+    results.append(benchmark(SGDClassifier(alpha=.0001, max_iter=50,
+                                           penalty="elasticnet")))
+    
+    # Train NearestCentroid without threshold
+    print('=' * 80)
+    print("NearestCentroid (aka Rocchio classifier)")
+    results.append(benchmark(NearestCentroid()))
+    
+    # Train sparse Naive Bayes classifiers
+    print('=' * 80)
+    print("Naive Bayes")
+    results.append(benchmark(MultinomialNB(alpha=.01)))
+    results.append(benchmark(BernoulliNB(alpha=.01)))
+    results.append(benchmark(ComplementNB(alpha=.1)))
+    
+    print('=' * 80)
+    print("LinearSVC with L1-based feature selection")
+    # The smaller C, the stronger the regularization.
+    # The more regularization, the more sparsity.
+    results.append(benchmark(Pipeline([
+      ('feature_selection', SelectFromModel(LinearSVC(penalty="l1", dual=False,
+                                                      tol=1e-3))),
+      ('classification', LinearSVC(penalty="l2"))])))
+    
+Out:
+
+    
+    ================================================================================
+    Ridge Classifier
+    ________________________________________________________________________________
+    Training:
+    RidgeClassifier(solver='sag', tol=0.01)
+    /home/circleci/project/sklearn/linear_model/_ridge.py:555: UserWarning: "sag" solver requires many iterations to fit an intercept with sparse inputs. Either set the solver to "auto" or "sparse_cg", or set a low "tol" and a high "max_iter" (especially if inputs are not standardized).
+      warnings.warn(
+    train time: 0.295s
+    test time:  0.001s
+    accuracy:   0.897
+    dimensionality: 33809
+    density: 1.000000
+    
+    
+    ================================================================================
+    Perceptron
+    ________________________________________________________________________________
+    Training:
+    Perceptron(max_iter=50)
+    train time: 0.016s
+    test time:  0.002s
+    accuracy:   0.888
+    dimensionality: 33809
+    density: 0.255302
+    
+    
+    ================================================================================
+    Passive-Aggressive
+    ________________________________________________________________________________
+    Training:
+    PassiveAggressiveClassifier(max_iter=50)
+    train time: 0.072s
+    test time:  0.002s
+    accuracy:   0.902
+    dimensionality: 33809
+    density: 0.692841
+    
+    
+    ================================================================================
+    kNN
+    ________________________________________________________________________________
+    Training:
+    KNeighborsClassifier(n_neighbors=10)
+    train time: 0.001s
+    test time:  0.222s
+    accuracy:   0.858
+    
+    ================================================================================
+    Random forest
+    ________________________________________________________________________________
+    Training:
+    RandomForestClassifier()
+    train time: 2.700s
+    test time:  0.118s
+    accuracy:   0.837
+    
+    ================================================================================
+    L2 penalty
+    ________________________________________________________________________________
+    Training:
+    LinearSVC(dual=False, tol=0.001)
+    train time: 0.161s
+    test time:  0.001s
+    accuracy:   0.900
+    dimensionality: 33809
+    density: 1.000000
+    
+    
+    ________________________________________________________________________________
+    Training:
+    SGDClassifier(max_iter=50)
+    train time: 0.022s
+    test time:  0.004s
+    accuracy:   0.899
+    dimensionality: 33809
+    density: 0.569944
+    
+    
+    ================================================================================
+    L1 penalty
+    ________________________________________________________________________________
+    Training:
+    LinearSVC(dual=False, penalty='l1', tol=0.001)
+    train time: 0.358s
+    test time:  0.002s
+    accuracy:   0.873
+    dimensionality: 33809
+    density: 0.005561
+    
+    
+    ________________________________________________________________________________
+    Training:
+    SGDClassifier(max_iter=50, penalty='l1')
+    train time: 0.134s
+    test time:  0.004s
+    accuracy:   0.888
+    dimensionality: 33809
+    density: 0.022982
+    
+    
+    ================================================================================
+    Elastic-Net penalty
+    ________________________________________________________________________________
+    Training:
+    SGDClassifier(max_iter=50, penalty='elasticnet')
+    train time: 0.191s
+    test time:  0.005s
+    accuracy:   0.902
+    dimensionality: 33809
+    density: 0.187502
+    
+    
+    ================================================================================
+    NearestCentroid (aka Rocchio classifier)
+    ________________________________________________________________________________
+    Training:
+    NearestCentroid()
+    train time: 0.012s
+    test time:  0.006s
+    accuracy:   0.855
+    
+    ================================================================================
+    Naive Bayes
+    ________________________________________________________________________________
+    Training:
+    MultinomialNB(alpha=0.01)
+    train time: 0.017s
+    test time:  0.005s
+    accuracy:   0.899
+    /home/circleci/project/sklearn/utils/deprecation.py:101: FutureWarning: Attribute coef_ was deprecated in version 0.24 and will be removed in 1.1 (renaming of 0.26).
+      warnings.warn(msg, category=FutureWarning)
+    dimensionality: 33809
+    density: 1.000000
+    
+    
+    ________________________________________________________________________________
+    Training:
+    BernoulliNB(alpha=0.01)
+    train time: 0.010s
+    test time:  0.005s
+    accuracy:   0.884
+    /home/circleci/project/sklearn/utils/deprecation.py:101: FutureWarning: Attribute coef_ was deprecated in version 0.24 and will be removed in 1.1 (renaming of 0.26).
+      warnings.warn(msg, category=FutureWarning)
+    dimensionality: 33809
+    density: 1.000000
+    
+    
+    ________________________________________________________________________________
+    Training:
+    ComplementNB(alpha=0.1)
+    train time: 0.007s
+    test time:  0.001s
+    accuracy:   0.911
+    /home/circleci/project/sklearn/utils/deprecation.py:101: FutureWarning: Attribute coef_ was deprecated in version 0.24 and will be removed in 1.1 (renaming of 0.26).
+      warnings.warn(msg, category=FutureWarning)
+    dimensionality: 33809
+    density: 1.000000
+    
+    
+    ================================================================================
+    LinearSVC with L1-based feature selection
+    ________________________________________________________________________________
+    Training:
+    Pipeline(steps=[('feature_selection',
+                     SelectFromModel(estimator=LinearSVC(dual=False, penalty='l1',
+                                                         tol=0.001))),
+                    ('classification', LinearSVC())])
+    train time: 0.351s
+    test time:  0.005s
+    accuracy:   0.880
+    
+## Add plots
+
+The bar plot indicates the accuracy, training time (normalized) and test time
+(normalized) of each classifier.
+
+    
+    indices = np.arange(len(results))
+    
+    results = [[x[i] for x in results] for i in range(4)]
+    
+    clf_names, score, training_time, test_time = results
+    training_time = np.array(training_time) / np.max(training_time)
+    test_time = np.array(test_time) / np.max(test_time)
+    
+    plt.figure(figsize=(12, 8))
+    plt.title("Score")
+    plt.barh(indices, score, .2, label="score", color='navy')
+    plt.barh(indices + .3, training_time, .2, label="training time",
+             color='c')
+    plt.barh(indices + .6, test_time, .2, label="test time", color='darkorange')
+    plt.yticks(())
+    plt.legend(loc='best')
+    plt.subplots_adjust(left=.25)
+    plt.subplots_adjust(top=.95)
+    plt.subplots_adjust(bottom=.05)
+    
+    for i, c in zip(indices, clf_names):
+        plt.text(-.3, i, c)
+    
+    plt.show()
+    
+![Score](data:image/png;base64,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)
+
+Total running time of the script: ( 0 minutes 6.803 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_document_classification_20newsgroups.py`
+
+`Download Jupyter notebook: plot_document_classification_20newsgroups.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-
+learn.org/0.24/auto_examples/text/plot_document_classification_20newsgroups.html
+

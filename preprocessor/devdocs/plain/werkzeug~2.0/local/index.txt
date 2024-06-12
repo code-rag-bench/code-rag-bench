@@ -1,0 +1,327 @@
+# Context Locals
+
+Sooner or later you have some things you want to have in every single view or
+helper function or whatever. In PHP the way to go are global variables.
+However, that isn’t possible in WSGI applications without a major drawback: As
+soon as you operate on the global namespace your application isn’t thread-safe
+any longer.
+
+The Python standard library has a concept called “thread locals” (or thread-
+local data). A thread local is a global object in which you can put stuff in
+and get back later in a thread-safe and thread-specific way. That means that
+whenever you set or get a value on a thread local object, the thread local
+object checks in which thread you are and retrieves the value corresponding to
+your thread (if one exists). So, you won’t accidentally get another thread’s
+data.
+
+This approach, however, has a few disadvantages. For example, besides threads,
+there are other types of concurrency in Python. A very popular one is
+greenlets. Also, whether every request gets its own thread is not guaranteed
+in WSGI. It could be that a request is reusing a thread from a previous
+request, and hence data is left over in the thread local object.
+
+Werkzeug provides its own implementation of local data storage called
+`werkzeug.local`. This approach provides a similar functionality to thread
+locals but also works with greenlets.
+
+Here’s a simple example of how one could use werkzeug.local:
+
+    
+    from werkzeug.local import Local, LocalManager
+    
+    local = Local()
+    local_manager = LocalManager([local])
+    
+    def application(environ, start_response):
+        local.request = request = Request(environ)
+        ...
+    
+    application = local_manager.make_middleware(application)
+    
+This binds the request to `local.request`. Every other piece of code executed
+after this assignment in the same context can safely access local.request and
+will get the same request object. The `make_middleware` method on the local
+manager ensures that all references to the local objects are cleared up after
+the request.
+
+The same context means the same greenlet (if you’re using greenlets) in the
+same thread and same process.
+
+If a request object is not yet set on the local object and you try to access
+it, you will get an `AttributeError`. You can use `getattr` to avoid that:
+
+    
+    def get_request():
+        return getattr(local, 'request', None)
+    
+This will try to get the request or return `None` if the request is not (yet?)
+available.
+
+Note that local objects cannot manage themselves, for that you need a local
+manager. You can pass a local manager multiple locals or add additionals later
+by appending them to `manager.locals` and every time the manager cleans up it
+will clean up all the data left in the locals for this context.
+
+`werkzeug.local.release_local(local)`
+
+    
+Releases the contents of the local for the current context. This makes it
+possible to use locals without a manager.
+
+Example:
+
+    
+    >>> loc = Local()
+    >>> loc.foo = 42
+    >>> release_local(loc)
+    >>> hasattr(loc, 'foo')
+    False
+    
+With this function one can release `Local` objects as well as `LocalStack`
+objects. However it is not possible to release data held by proxies that way,
+one always has to retain a reference to the underlying local object in order
+to be able to release it.
+
+Changelog
+
+New in version 0.6.1.
+
+Parameters
+
+    
+local (Union[werkzeug.local.Local, werkzeug.local.LocalStack]) –
+
+Return type
+
+    
+None
+
+`class werkzeug.local.LocalManager(locals=None, ident_func=None)`
+
+    
+Local objects cannot manage themselves. For that you need a local manager. You
+can pass a local manager multiple locals or add them later y appending them to
+`manager.locals`. Every time the manager cleans up, it will clean up all the
+data left in the locals for this context.
+
+Changed in version 2.0: `ident_func` is deprecated and will be removed in
+Werkzeug 2.1.
+
+Changelog
+
+Changed in version 0.7: The `ident_func` parameter was added.
+
+Changed in version 0.6.1: The `release_local()` function can be used instead
+of a manager.
+
+Parameters
+
+    
+  * locals (Optional[Iterable[Union[werkzeug.local.Local, werkzeug.local.LocalStack]]]) – 
+  * ident_func (None) – 
+
+Return type
+
+    
+None
+
+`cleanup()`
+
+    
+Manually clean up the data in the locals for this context. Call this at the
+end of the request or use `make_middleware()`.
+
+Return type
+
+    
+None
+
+`get_ident()`
+
+    
+Return the context identifier the local objects use internally for this
+context. You cannot override this method to change the behavior but use it to
+link other context local objects (such as SQLAlchemy’s scoped sessions) to the
+Werkzeug locals.
+
+Deprecated since version 2.0: Will be removed in Werkzeug 2.1.
+
+Changelog
+
+Changed in version 0.7: You can pass a different ident function to the local
+manager that will then be propagated to all the locals passed to the
+constructor.
+
+Return type
+
+    
+int
+
+`make_middleware(app)`
+
+    
+Wrap a WSGI application so that cleaning up happens after request end.
+
+Parameters
+
+    
+app (WSGIApplication) –
+
+Return type
+
+    
+WSGIApplication
+
+`middleware(func)`
+
+    
+Like `make_middleware` but for decorating functions.
+
+Example usage:
+
+    
+    @manager.middleware
+    def application(environ, start_response):
+        ...
+    
+The difference to `make_middleware` is that the function passed will have all
+the arguments copied from the inner application (name, docstring, module).
+
+Parameters
+
+    
+func (WSGIApplication) –
+
+Return type
+
+    
+WSGIApplication
+
+`class werkzeug.local.LocalStack`
+
+    
+This class works similar to a `Local` but keeps a stack of objects instead.
+This is best explained with an example:
+
+    
+    >>> ls = LocalStack()
+    >>> ls.push(42)
+    >>> ls.top
+    42
+    >>> ls.push(23)
+    >>> ls.top
+    23
+    >>> ls.pop()
+    23
+    >>> ls.top
+    42
+    
+They can be force released by using a `LocalManager` or with the
+`release_local()` function but the correct way is to pop the item from the
+stack after using. When the stack is empty it will no longer be bound to the
+current context (and as such released).
+
+By calling the stack without arguments it returns a proxy that resolves to the
+topmost item on the stack.
+
+Changelog
+
+New in version 0.6.1.
+
+Return type
+
+    
+None
+
+`pop()`
+
+    
+Removes the topmost item from the stack, will return the old value or `None`
+if the stack was already empty.
+
+Return type
+
+    
+Any
+
+`push(obj)`
+
+    
+Pushes a new item to the stack
+
+Parameters
+
+    
+obj (Any) –
+
+Return type
+
+    
+List[Any]
+
+`property top: Any`
+
+    
+The topmost item on the stack. If the stack is empty, `None` is returned.
+
+`class werkzeug.local.LocalProxy(local, name=None)`
+
+    
+A proxy to the object bound to a `Local`. All operations on the proxy are
+forwarded to the bound object. If no object is bound, a `RuntimeError` is
+raised.
+
+    
+    from werkzeug.local import Local
+    l = Local()
+    
+    # a proxy to whatever l.user is set to
+    user = l("user")
+    
+    from werkzeug.local import LocalStack
+    _request_stack = LocalStack()
+    
+    # a proxy to _request_stack.top
+    request = _request_stack()
+    
+    # a proxy to the session attribute of the request proxy
+    session = LocalProxy(lambda: request.session)
+    
+`__repr__` and `__class__` are forwarded, so `repr(x)` and `isinstance(x,
+cls)` will look like the proxied object. Use `issubclass(type(x), LocalProxy)`
+to check if an object is a proxy.
+
+    
+    repr(user)  # <User admin>
+    isinstance(user, User)  # True
+    issubclass(type(user), LocalProxy)  # True
+    
+Parameters
+
+    
+  * local – The `Local` or callable that provides the proxied object.
+  * name – The attribute name to look up on a `Local`. Not used if a callable is given.
+
+Changed in version 2.0: Updated proxied attributes and methods to reflect the
+current data model.
+
+Changelog
+
+Changed in version 0.6.1: The class can be instantiated with a callable.
+
+`_get_current_object()`
+
+    
+Return the current object. This is useful if you want the real object behind
+the proxy at a time for performance reasons or because you want to pass the
+object into a different context.
+
+Return type
+
+    
+Any
+
+© 2007–2021 Pallets  
+Licensed under the BSD 3-clause License.  
+https://werkzeug.palletsprojects.com/en/2.0.x/local/
+

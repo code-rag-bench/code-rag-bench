@@ -1,0 +1,168 @@
+<h1 id="named-tensors-doc">Named Tensors</h1> <p id="named-tensors">Named Tensors allow users to give explicit names to tensor dimensions. In most cases, operations that take dimension parameters will accept dimension names, avoiding the need to track dimensions by position. In addition, named tensors use names to automatically check that APIs are being used correctly at runtime, providing extra safety. Names can also be used to rearrange dimensions, for example, to support “broadcasting by name” rather than “broadcasting by position”.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is a prototype feature and subject to change.</p> </div>  <h2 id="creating-named-tensors">Creating named tensors</h2> <p>Factory functions now take a new <code>names</code> argument that associates a name with each dimension.</p> <pre data-language="python">&gt;&gt;&gt; torch.zeros(2, 3, names=('N', 'C'))
+tensor([[0., 0., 0.],
+        [0., 0., 0.]], names=('N', 'C'))
+</pre> <p>Named dimensions, like regular Tensor dimensions, are ordered. <code>tensor.names[i]</code> is the name of dimension <code>i</code> of <code>tensor</code>.</p> <p>The following factory functions support named tensors:</p> <ul class="simple"> <li><a class="reference internal" href="generated/torch.empty#torch.empty" title="torch.empty"><code>torch.empty()</code></a></li> <li><a class="reference internal" href="generated/torch.rand#torch.rand" title="torch.rand"><code>torch.rand()</code></a></li> <li><a class="reference internal" href="generated/torch.randn#torch.randn" title="torch.randn"><code>torch.randn()</code></a></li> <li><a class="reference internal" href="generated/torch.ones#torch.ones" title="torch.ones"><code>torch.ones()</code></a></li> <li><a class="reference internal" href="generated/torch.tensor#torch.tensor" title="torch.tensor"><code>torch.tensor()</code></a></li> <li><a class="reference internal" href="generated/torch.zeros#torch.zeros" title="torch.zeros"><code>torch.zeros()</code></a></li> </ul>   <h2 id="named-dimensions">Named dimensions</h2> <p>See <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> for restrictions on tensor names.</p> <p>Use <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> to access the dimension names of a tensor and <a class="reference internal" href="#torch.Tensor.rename" title="torch.Tensor.rename"><code>rename()</code></a> to rename named dimensions.</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.randn(1, 2, 2, 3 , names=('N', 'C', 'H', 'W'))
+&gt;&gt;&gt; imgs.names
+('N', 'C', 'H', 'W')
+
+&gt;&gt;&gt; renamed_imgs = imgs.rename(H='height', W='width')
+&gt;&gt;&gt; renamed_imgs.names
+('N', 'C', 'height', 'width)
+</pre> <p>Named tensors can coexist with unnamed tensors; named tensors are instances of <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>. Unnamed tensors have <code>None</code>-named dimensions. Named tensors do not require all dimensions to be named.</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.randn(1, 2, 2, 3 , names=(None, 'C', 'H', 'W'))
+&gt;&gt;&gt; imgs.names
+(None, 'C', 'H', 'W')
+</pre>   <h2 id="name-propagation-semantics">Name propagation semantics</h2> <p>Named tensors use names to automatically check that APIs are being called correctly at runtime. This occurs in a process called <em>name inference</em>. More formally, name inference consists of the following two steps:</p> <ul class="simple"> <li>
+<strong>Check names</strong>: an operator may perform automatic checks at runtime that check that certain dimension names must match.</li> <li>
+<strong>Propagate names</strong>: name inference propagates names to output tensors.</li> </ul> <p>All operations that support named tensors propagate names.</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn(3, 3, names=('N', 'C'))
+&gt;&gt;&gt; x.abs().names
+('N', 'C')
+</pre>  <h3 id="match-semantics-doc">match semantics</h3> <p id="match-semantics">Two names <em>match</em> if they are equal (string equality) or if at least one is <code>None</code>. Nones are essentially a special “wildcard” name.</p> <p><code>unify(A, B)</code> determines which of the names <code>A</code> and <code>B</code> to propagate to the outputs. It returns the more <em>specific</em> of the two names, if they match. If the names do not match, then it errors.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>In practice, when working with named tensors, one should avoid having unnamed dimensions because their handling can be complicated. It is recommended to lift all unnamed dimensions to be named dimensions by using <a class="reference internal" href="#torch.Tensor.refine_names" title="torch.Tensor.refine_names"><code>refine_names()</code></a>.</p> </div>   <h3 id="basic-name-inference-rules">Basic name inference rules</h3> <p>Let’s see how <code>match</code> and <code>unify</code> are used in name inference in the case of adding two one-dim tensors with no broadcasting.</p> <pre data-language="python">x = torch.randn(3, names=('X',))
+y = torch.randn(3)
+z = torch.randn(3, names=('Z',))
+</pre> <p><strong>Check names</strong>: check that the names of the two tensors <em>match</em>.</p> <p>For the following examples:</p> <pre data-language="python">&gt;&gt;&gt; # x + y  # match('X', None) is True
+&gt;&gt;&gt; # x + z  # match('X', 'Z') is False
+&gt;&gt;&gt; # x + x  # match('X', 'X') is True
+
+&gt;&gt;&gt; x + z
+Error when attempting to broadcast dims ['X'] and dims ['Z']: dim 'X' and dim 'Z' are at the same position from the right but do not match.
+</pre> <p><strong>Propagate names</strong>: <em>unify</em> the names to select which one to propagate. In the case of <code>x + y</code>, <code>unify('X', None) = 'X'</code> because <code>'X'</code> is more specific than <code>None</code>.</p> <pre data-language="python">&gt;&gt;&gt; (x + y).names
+('X',)
+&gt;&gt;&gt; (x + x).names
+('X',)
+</pre> <p>For a comprehensive list of name inference rules, see <a class="reference internal" href="name_inference#name-inference-reference-doc"><span class="std std-ref">Named Tensors operator coverage</span></a>. Here are two common operations that may be useful to go over:</p> <ul class="simple"> <li>Binary arithmetic ops: <a class="reference internal" href="name_inference#unifies-names-from-inputs-doc"><span class="std std-ref">Unifies names from inputs</span></a>
+</li> <li>Matrix multiplication ops: <a class="reference internal" href="name_inference#contracts-away-dims-doc"><span class="std std-ref">Contracts away dims</span></a>
+</li> </ul>    <h2 id="explicit-alignment-by-names">Explicit alignment by names</h2> <p>Use <a class="reference internal" href="#torch.Tensor.align_as" title="torch.Tensor.align_as"><code>align_as()</code></a> or <a class="reference internal" href="#torch.Tensor.align_to" title="torch.Tensor.align_to"><code>align_to()</code></a> to align tensor dimensions by name to a specified ordering. This is useful for performing “broadcasting by names”.</p> <pre data-language="python"># This function is agnostic to the dimension ordering of `input`,
+# as long as it has a `C` dimension somewhere.
+def scale_channels(input, scale):
+    scale = scale.refine_names('C')
+    return input * scale.align_as(input)
+
+&gt;&gt;&gt; num_channels = 3
+&gt;&gt;&gt; scale = torch.randn(num_channels, names=('C',))
+&gt;&gt;&gt; imgs = torch.rand(3, 3, 3, num_channels, names=('N', 'H', 'W', 'C'))
+&gt;&gt;&gt; more_imgs = torch.rand(3, num_channels, 3, 3, names=('N', 'C', 'H', 'W'))
+&gt;&gt;&gt; videos = torch.randn(3, num_channels, 3, 3, 3, names=('N', 'C', 'H', 'W', 'D')
+
+&gt;&gt;&gt; scale_channels(imgs, scale)
+&gt;&gt;&gt; scale_channels(more_imgs, scale)
+&gt;&gt;&gt; scale_channels(videos, scale)
+</pre>   <h2 id="manipulating-dimensions">Manipulating dimensions</h2> <p>Use <a class="reference internal" href="#torch.Tensor.align_to" title="torch.Tensor.align_to"><code>align_to()</code></a> to permute large amounts of dimensions without mentioning all of them as in required by <a class="reference internal" href="generated/torch.tensor.permute#torch.Tensor.permute" title="torch.Tensor.permute"><code>permute()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; tensor = torch.randn(2, 2, 2, 2, 2, 2)
+&gt;&gt;&gt; named_tensor = tensor.refine_names('A', 'B', 'C', 'D', 'E', 'F')
+
+# Move the F (dim 5) and E dimension (dim 4) to the front while keeping
+# the rest in the same order
+&gt;&gt;&gt; tensor.permute(5, 4, 0, 1, 2, 3)
+&gt;&gt;&gt; named_tensor.align_to('F', 'E', ...)
+</pre> <p>Use <a class="reference internal" href="generated/torch.tensor.flatten#torch.Tensor.flatten" title="torch.Tensor.flatten"><code>flatten()</code></a> and <a class="reference internal" href="generated/torch.tensor.unflatten#torch.Tensor.unflatten" title="torch.Tensor.unflatten"><code>unflatten()</code></a> to flatten and unflatten dimensions, respectively. These methods are more verbose than <a class="reference internal" href="generated/torch.tensor.view#torch.Tensor.view" title="torch.Tensor.view"><code>view()</code></a> and <a class="reference internal" href="generated/torch.tensor.reshape#torch.Tensor.reshape" title="torch.Tensor.reshape"><code>reshape()</code></a>, but have more semantic meaning to someone reading the code.</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.randn(32, 3, 128, 128)
+&gt;&gt;&gt; named_imgs = imgs.refine_names('N', 'C', 'H', 'W')
+
+&gt;&gt;&gt; flat_imgs = imgs.view(32, -1)
+&gt;&gt;&gt; named_flat_imgs = named_imgs.flatten(['C', 'H', 'W'], 'features')
+&gt;&gt;&gt; named_flat_imgs.names
+('N', 'features')
+
+&gt;&gt;&gt; unflattened_named_imgs = named_flat_imgs.unflatten('features', [('C', 3), ('H', 128), ('W', 128)])
+&gt;&gt;&gt; unflattened_named_imgs.names
+('N', 'C', 'H', 'W')
+</pre>   <h2 id="named-tensors-autograd-doc">Autograd support</h2> <p id="autograd-support">Autograd currently supports named tensors in a limited manner: autograd ignores names on all tensors. Gradient computation is still correct but we lose the safety that names give us.</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn(3, names=('D',))
+&gt;&gt;&gt; weight = torch.randn(3, names=('D',), requires_grad=True)
+&gt;&gt;&gt; loss = (x - weight).abs()
+&gt;&gt;&gt; grad_loss = torch.randn(3)
+&gt;&gt;&gt; loss.backward(grad_loss)
+&gt;&gt;&gt; weight.grad  # Unnamed for now. Will be named in the future
+tensor([-1.8107, -0.6357,  0.0783])
+
+&gt;&gt;&gt; weight.grad.zero_()
+&gt;&gt;&gt; grad_loss = grad_loss.refine_names('C')
+&gt;&gt;&gt; loss = (x - weight).abs()
+# Ideally we'd check that the names of loss and grad_loss match but we don't yet.
+&gt;&gt;&gt; loss.backward(grad_loss)
+&gt;&gt;&gt; weight.grad
+tensor([-1.8107, -0.6357,  0.0783])
+</pre>   <h2 id="currently-supported-operations-and-subsystems">Currently supported operations and subsystems</h2>  <h3 id="operators">Operators</h3> <p>See <a class="reference internal" href="name_inference#name-inference-reference-doc"><span class="std std-ref">Named Tensors operator coverage</span></a> for a full list of the supported torch and tensor operations. We do not yet support the following that is not covered by the link:</p> <ul class="simple"> <li>indexing, advanced indexing.</li> </ul> <p>For <code>torch.nn.functional</code> operators, we support the following:</p> <ul class="simple"> <li><a class="reference internal" href="generated/torch.nn.functional.relu#torch.nn.functional.relu" title="torch.nn.functional.relu"><code>torch.nn.functional.relu()</code></a></li> <li><a class="reference internal" href="generated/torch.nn.functional.softmax#torch.nn.functional.softmax" title="torch.nn.functional.softmax"><code>torch.nn.functional.softmax()</code></a></li> <li><a class="reference internal" href="generated/torch.nn.functional.log_softmax#torch.nn.functional.log_softmax" title="torch.nn.functional.log_softmax"><code>torch.nn.functional.log_softmax()</code></a></li> <li><a class="reference internal" href="generated/torch.nn.functional.tanh#torch.nn.functional.tanh" title="torch.nn.functional.tanh"><code>torch.nn.functional.tanh()</code></a></li> <li><a class="reference internal" href="generated/torch.nn.functional.sigmoid#torch.nn.functional.sigmoid" title="torch.nn.functional.sigmoid"><code>torch.nn.functional.sigmoid()</code></a></li> <li><a class="reference internal" href="generated/torch.nn.functional.dropout#torch.nn.functional.dropout" title="torch.nn.functional.dropout"><code>torch.nn.functional.dropout()</code></a></li> </ul>   <h3 id="subsystems">Subsystems</h3> <p>Autograd is supported, see <a class="reference internal" href="#named-tensors-autograd-doc"><span class="std std-ref">Autograd support</span></a>. Because gradients are currently unnamed, optimizers may work but are untested.</p> <p>NN modules are currently unsupported. This can lead to the following when calling modules with named tensor inputs:</p> <ul class="simple"> <li>NN module parameters are unnamed, so outputs may be partially named.</li> <li>NN module forward passes have code that don’t support named tensors and will error out appropriately.</li> </ul> <p>We also do not support the following subsystems, though some may work out of the box:</p> <ul class="simple"> <li>distributions</li> <li>serialization (<a class="reference internal" href="generated/torch.load#torch.load" title="torch.load"><code>torch.load()</code></a>, <a class="reference internal" href="generated/torch.save#torch.save" title="torch.save"><code>torch.save()</code></a>)</li> <li>multiprocessing</li> <li>JIT</li> <li>distributed</li> <li>ONNX</li> </ul> <p>If any of these would help your use case, please <a class="reference external" href="https://github.com/pytorch/pytorch/issues?q=is%3Aopen+is%3Aissue+label%3A%22module%3A+named+tensor%22">search if an issue has already been filed</a> and if not, <a class="reference external" href="https://github.com/pytorch/pytorch/issues/new/choose">file one</a>.</p>    <h2 id="named-tensor-api-reference">Named tensor API reference</h2> <p>In this section please find the documentation for named tensor specific APIs. For a comprehensive reference for how names are propagated through other PyTorch operators, see <a class="reference internal" href="name_inference#name-inference-reference-doc"><span class="std std-ref">Named Tensors operator coverage</span></a>.</p> <dl class="py class"> <dt class="sig sig-object py"> <em class="property">class</em><span class="sig-prename descclassname">torch.</span><span class="sig-name descname">Tensor</span>
+</dt> <dd>
+<dl class="py attribute"> <dt class="sig sig-object py" id="torch.Tensor.names">
+<code>names</code> </dt> <dd>
+<p>Stores names for each of this tensor’s dimensions.</p> <p><code>names[idx]</code> corresponds to the name of tensor dimension <code>idx</code>. Names are either a string if the dimension is named or <code>None</code> if the dimension is unnamed.</p> <p>Dimension names may contain characters or underscore. Furthermore, a dimension name must be a valid Python variable name (i.e., does not start with underscore).</p> <p>Tensors may not have two named dimensions with the same name.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.Tensor.rename">
+<code>rename(*names, **rename_map)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/_tensor.html#Tensor.rename"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Renames dimension names of <code>self</code>.</p> <p>There are two main usages:</p> <p><code>self.rename(**rename_map)</code> returns a view on tensor that has dims renamed as specified in the mapping <code>rename_map</code>.</p> <p><code>self.rename(*names)</code> returns a view on tensor, renaming all dimensions positionally using <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a>. Use <code>self.rename(None)</code> to drop names on a tensor.</p> <p>One cannot specify both positional args <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> and keyword args <code>rename_map</code>.</p> <p>Examples:</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.rand(2, 3, 5, 7, names=('N', 'C', 'H', 'W'))
+&gt;&gt;&gt; renamed_imgs = imgs.rename(N='batch', C='channels')
+&gt;&gt;&gt; renamed_imgs.names
+('batch', 'channels', 'H', 'W')
+
+&gt;&gt;&gt; renamed_imgs = imgs.rename(None)
+&gt;&gt;&gt; renamed_imgs.names
+(None, None, None, None)
+
+&gt;&gt;&gt; renamed_imgs = imgs.rename('batch', 'channel', 'height', 'width')
+&gt;&gt;&gt; renamed_imgs.names
+('batch', 'channel', 'height', 'width')
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.Tensor.rename_">
+<code>rename_(*names, **rename_map)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/_tensor.html#Tensor.rename_"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>In-place version of <a class="reference internal" href="#torch.Tensor.rename" title="torch.Tensor.rename"><code>rename()</code></a>.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.Tensor.refine_names">
+<code>refine_names(*names)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/_tensor.html#Tensor.refine_names"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Refines the dimension names of <code>self</code> according to <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a>.</p> <p>Refining is a special case of renaming that “lifts” unnamed dimensions. A <code>None</code> dim can be refined to have any name; a named dim can only be refined to have the same name.</p> <p>Because named tensors can coexist with unnamed tensors, refining names gives a nice way to write named-tensor-aware code that works with both named and unnamed tensors.</p> <p><a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> may contain up to one Ellipsis (<code>...</code>). The Ellipsis is expanded greedily; it is expanded in-place to fill <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> to the same length as <code>self.dim()</code> using names from the corresponding indices of <code>self.names</code>.</p> <p>Python 2 does not support Ellipsis but one may use a string literal instead (<code>'...'</code>).</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>names</strong> (<em>iterable</em><em> of </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The desired names of the output tensor. May contain up to one Ellipsis.</p> </dd> </dl> <p>Examples:</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.randn(32, 3, 128, 128)
+&gt;&gt;&gt; named_imgs = imgs.refine_names('N', 'C', 'H', 'W')
+&gt;&gt;&gt; named_imgs.names
+('N', 'C', 'H', 'W')
+
+&gt;&gt;&gt; tensor = torch.randn(2, 3, 5, 7, 11)
+&gt;&gt;&gt; tensor = tensor.refine_names('A', ..., 'B', 'C')
+&gt;&gt;&gt; tensor.names
+('A', None, None, 'B', 'C')
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.Tensor.align_as">
+<code>align_as(other) → Tensor</code> </dt> <dd>
+<p>Permutes the dimensions of the <code>self</code> tensor to match the dimension order in the <code>other</code> tensor, adding size-one dims for any new names.</p> <p>This operation is useful for explicit broadcasting by names (see examples).</p> <p>All of the dims of <code>self</code> must be named in order to use this method. The resulting tensor is a view on the original tensor.</p> <p>All dimension names of <code>self</code> must be present in <code>other.names</code>. <code>other</code> may contain named dimensions that are not in <code>self.names</code>; the output tensor has a size-one dimension for each of those new names.</p> <p>To align a tensor to a specific order, use <a class="reference internal" href="#torch.Tensor.align_to" title="torch.Tensor.align_to"><code>align_to()</code></a>.</p> <p>Examples:</p> <pre data-language="python"># Example 1: Applying a mask
+&gt;&gt;&gt; mask = torch.randint(2, [127, 128], dtype=torch.bool).refine_names('W', 'H')
+&gt;&gt;&gt; imgs = torch.randn(32, 128, 127, 3, names=('N', 'H', 'W', 'C'))
+&gt;&gt;&gt; imgs.masked_fill_(mask.align_as(imgs), 0)
+
+
+# Example 2: Applying a per-channel-scale
+&gt;&gt;&gt; def scale_channels(input, scale):
+&gt;&gt;&gt;    scale = scale.refine_names('C')
+&gt;&gt;&gt;    return input * scale.align_as(input)
+
+&gt;&gt;&gt; num_channels = 3
+&gt;&gt;&gt; scale = torch.randn(num_channels, names=('C',))
+&gt;&gt;&gt; imgs = torch.rand(32, 128, 128, num_channels, names=('N', 'H', 'W', 'C'))
+&gt;&gt;&gt; more_imgs = torch.rand(32, num_channels, 128, 128, names=('N', 'C', 'H', 'W'))
+&gt;&gt;&gt; videos = torch.randn(3, num_channels, 128, 128, 128, names=('N', 'C', 'H', 'W', 'D'))
+
+# scale_channels is agnostic to the dimension order of the input
+&gt;&gt;&gt; scale_channels(imgs, scale)
+&gt;&gt;&gt; scale_channels(more_imgs, scale)
+&gt;&gt;&gt; scale_channels(videos, scale)
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.Tensor.align_to">
+<code>align_to(*names)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/_tensor.html#Tensor.align_to"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Permutes the dimensions of the <code>self</code> tensor to match the order specified in <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a>, adding size-one dims for any new names.</p> <p>All of the dims of <code>self</code> must be named in order to use this method. The resulting tensor is a view on the original tensor.</p> <p>All dimension names of <code>self</code> must be present in <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a>. <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> may contain additional names that are not in <code>self.names</code>; the output tensor has a size-one dimension for each of those new names.</p> <p><a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a> may contain up to one Ellipsis (<code>...</code>). The Ellipsis is expanded to be equal to all dimension names of <code>self</code> that are not mentioned in <a class="reference internal" href="#torch.Tensor.names" title="torch.Tensor.names"><code>names</code></a>, in the order that they appear in <code>self</code>.</p> <p>Python 2 does not support Ellipsis but one may use a string literal instead (<code>'...'</code>).</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>names</strong> (<em>iterable</em><em> of </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The desired dimension ordering of the output tensor. May contain up to one Ellipsis that is expanded to all unmentioned dim names of <code>self</code>.</p> </dd> </dl> <p>Examples:</p> <pre data-language="python">&gt;&gt;&gt; tensor = torch.randn(2, 2, 2, 2, 2, 2)
+&gt;&gt;&gt; named_tensor = tensor.refine_names('A', 'B', 'C', 'D', 'E', 'F')
+
+# Move the F and E dims to the front while keeping the rest in order
+&gt;&gt;&gt; named_tensor.align_to('F', 'E', ...)
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py"> <span class="sig-name descname">flatten</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">dims</span></em>, <em class="sig-param"><span class="n">out_dim</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></span></span>
+</dt> <dd>
+<p>Flattens <code>dims</code> into a single dimension with name <code>out_dim</code>.</p> <p>All of <code>dims</code> must be consecutive in order in the <code>self</code> tensor, but not necessary contiguous in memory.</p> <p>Examples:</p> <pre data-language="python">&gt;&gt;&gt; imgs = torch.randn(32, 3, 128, 128, names=('N', 'C', 'H', 'W'))
+&gt;&gt;&gt; flat_imgs = imgs.flatten(['C', 'H', 'W'], 'features')
+&gt;&gt;&gt; flat_imgs.names, flat_imgs.shape
+(('N', 'features'), torch.Size([32, 49152]))
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The named tensor API is experimental and subject to change.</p> </div> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/named_tensor.html" class="_attribution-link">https://pytorch.org/docs/2.1/named_tensor.html</a>
+  </p>
+</div>

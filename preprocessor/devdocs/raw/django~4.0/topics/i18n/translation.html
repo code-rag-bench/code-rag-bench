@@ -1,0 +1,601 @@
+<h1 id="translation">Translation</h1>  <h2 id="overview">Overview</h2> <p id="s-translation">In order to make a Django project translatable, you have to add a minimal number of hooks to your Python code and templates. These hooks are called <a class="reference internal" href="index#term-translation-string"><span class="xref std std-term">translation strings</span></a>. They tell Django: “This text should be translated into the end user’s language, if a translation for this text is available in that language.” It’s your responsibility to mark translatable strings; the system can only translate strings it knows about.</p> <p>Django then provides utilities to extract the translation strings into a <a class="reference internal" href="index#term-message-file"><span class="xref std std-term">message file</span></a>. This file is a convenient way for translators to provide the equivalent of the translation strings in the target language. Once the translators have filled in the message file, it must be compiled. This process relies on the GNU gettext toolset.</p> <p>Once this is done, Django takes care of translating web apps on the fly in each available language, according to users’ language preferences.</p> <p>Django’s internationalization hooks are on by default, and that means there’s a bit of i18n-related overhead in certain places of the framework. If you don’t use internationalization, you should take the two seconds to set <a class="reference internal" href="../../ref/settings#std:setting-USE_I18N"><code>USE_I18N = False</code></a> in your settings file. Then Django will make some optimizations so as not to load the internationalization machinery.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Make sure you’ve activated translation for your project (the fastest way is to check if <a class="reference internal" href="../../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> includes <a class="reference internal" href="../../ref/middleware#django.middleware.locale.LocaleMiddleware" title="django.middleware.locale.LocaleMiddleware"><code>django.middleware.locale.LocaleMiddleware</code></a>). If you haven’t yet, see <a class="reference internal" href="#how-django-discovers-language-preference"><span class="std std-ref">How Django discovers language preference</span></a>.</p> </div>   <h2 id="internationalization-in-python-code">Internationalization: in Python code</h2>  <h3 id="standard-translation">Standard translation</h3> <p id="s-internationalization-in-python-code">Specify a translation string by using the function <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext" title="django.utils.translation.gettext"><code>gettext()</code></a>. It’s convention to import this as a shorter alias, <code>_</code>, to save typing.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>Python’s standard library <code>gettext</code> module installs <code>_()</code> into the global namespace, as an alias for <code>gettext()</code>. In Django, we have chosen not to follow this practice, for a couple of reasons:</p> <ol class="last arabic simple"> <li>Sometimes, you should use <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_lazy" title="django.utils.translation.gettext_lazy"><code>gettext_lazy()</code></a> as the default translation method for a particular file. Without <code>_()</code> in the global namespace, the developer has to think about which is the most appropriate translation function.</li> <li>The underscore character (<code>_</code>) is used to represent “the previous result” in Python’s interactive shell and doctest tests. Installing a global <code>_()</code> function causes interference. Explicitly importing <code>gettext()</code> as <code>_()</code> avoids this problem.</li> </ol> </div> <div class="admonition-what-functions-may-be-aliased-as admonition"> <p class="first admonition-title">What functions may be aliased as <code>_</code>?</p> <p>Because of how <code>xgettext</code> (used by <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a>) works, only functions that take a single string argument can be imported as <code>_</code>:</p> <ul class="last simple"> <li><a class="reference internal" href="../../ref/utils#django.utils.translation.gettext" title="django.utils.translation.gettext"><code>gettext()</code></a></li> <li><a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_lazy" title="django.utils.translation.gettext_lazy"><code>gettext_lazy()</code></a></li> </ul> </div> <p>In this example, the text <code>"Welcome to my site."</code> is marked as a translation string:</p> <pre data-language="python">from django.http import HttpResponse
+from django.utils.translation import gettext as _
+
+def my_view(request):
+    output = _("Welcome to my site.")
+    return HttpResponse(output)
+</pre> <p>You could code this without using the alias. This example is identical to the previous one:</p> <pre data-language="python">from django.http import HttpResponse
+from django.utils.translation import gettext
+
+def my_view(request):
+    output = gettext("Welcome to my site.")
+    return HttpResponse(output)
+</pre> <p>Translation works on computed values. This example is identical to the previous two:</p> <pre data-language="python">def my_view(request):
+    words = ['Welcome', 'to', 'my', 'site.']
+    output = _(' '.join(words))
+    return HttpResponse(output)
+</pre> <p>Translation works on variables. Again, here’s an identical example:</p> <pre data-language="python">def my_view(request):
+    sentence = 'Welcome to my site.'
+    output = _(sentence)
+    return HttpResponse(output)
+</pre> <p>(The caveat with using variables or computed values, as in the previous two examples, is that Django’s translation-string-detecting utility, <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a>, won’t be able to find these strings. More on <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> later.)</p> <p>The strings you pass to <code>_()</code> or <code>gettext()</code> can take placeholders, specified with Python’s standard named-string interpolation syntax. Example:</p> <pre data-language="python">def my_view(request, m, d):
+    output = _('Today is %(month)s %(day)s.') % {'month': m, 'day': d}
+    return HttpResponse(output)
+</pre> <p>This technique lets language-specific translations reorder the placeholder text. For example, an English translation may be <code>"Today is November 26."</code>, while a Spanish translation may be <code>"Hoy es 26 de noviembre."</code> – with the month and the day placeholders swapped.</p> <p>For this reason, you should use named-string interpolation (e.g., <code>%(day)s</code>) instead of positional interpolation (e.g., <code>%s</code> or <code>%d</code>) whenever you have more than a single parameter. If you used positional interpolation, translations wouldn’t be able to reorder placeholder text.</p> <p>Since string extraction is done by the <code>xgettext</code> command, only syntaxes supported by <code>gettext</code> are supported by Django. In particular, Python <a class="reference external" href="https://docs.python.org/3/reference/lexical_analysis.html#f-strings" title="(in Python v3.10)"><span class="xref std std-ref">f-strings</span></a> are not yet supported by <code>xgettext</code>, and JavaScript template strings need <code>gettext</code> 0.21+.</p>   <h3 id="translator-comments">Comments for translators</h3> <p id="s-comments-for-translators">If you would like to give translators hints about a translatable string, you can add a comment prefixed with the <code>Translators</code> keyword on the line preceding the string, e.g.:</p> <pre data-language="python">def my_view(request):
+    # Translators: This message appears on the home page only
+    output = gettext("Welcome to my site.")
+</pre> <p>The comment will then appear in the resulting <code>.po</code> file associated with the translatable construct located below it and should also be displayed by most translation tools.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>Just for completeness, this is the corresponding fragment of the resulting <code>.po</code> file:</p> <pre data-language="po">#. Translators: This message appears on the home page only
+# path/to/python/file.py:123
+msgid "Welcome to my site."
+msgstr ""
+</pre> </div> <p>This also works in templates. See <a class="reference internal" href="#translator-comments-in-templates"><span class="std std-ref">Comments for translators in templates</span></a> for more details.</p>   <h3 id="marking-strings-as-no-op">Marking strings as no-op</h3> <p id="s-marking-strings-as-no-op">Use the function <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_noop" title="django.utils.translation.gettext_noop"><code>django.utils.translation.gettext_noop()</code></a> to mark a string as a translation string without translating it. The string is later translated from a variable.</p> <p>Use this if you have constant strings that should be stored in the source language because they are exchanged over systems or users – such as strings in a database – but should be translated at the last possible point in time, such as when the string is presented to the user.</p>   <h3 id="pluralization">Pluralization</h3> <p id="s-pluralization">Use the function <a class="reference internal" href="../../ref/utils#django.utils.translation.ngettext" title="django.utils.translation.ngettext"><code>django.utils.translation.ngettext()</code></a> to specify pluralized messages.</p> <p><code>ngettext()</code> takes three arguments: the singular translation string, the plural translation string and the number of objects.</p> <p>This function is useful when you need your Django application to be localizable to languages where the number and complexity of <a class="reference external" href="https://www.gnu.org/software/gettext/manual/gettext.html#Plural-forms">plural forms</a> is greater than the two forms used in English (‘object’ for the singular and ‘objects’ for all the cases where <code>count</code> is different from one, irrespective of its value.)</p> <p>For example:</p> <pre data-language="python">from django.http import HttpResponse
+from django.utils.translation import ngettext
+
+def hello_world(request, count):
+    page = ngettext(
+        'there is %(count)d object',
+        'there are %(count)d objects',
+        count,
+    ) % {
+        'count': count,
+    }
+    return HttpResponse(page)
+</pre> <p>In this example the number of objects is passed to the translation languages as the <code>count</code> variable.</p> <p>Note that pluralization is complicated and works differently in each language. Comparing <code>count</code> to 1 isn’t always the correct rule. This code looks sophisticated, but will produce incorrect results for some languages:</p> <pre data-language="python">from django.utils.translation import ngettext
+from myapp.models import Report
+
+count = Report.objects.count()
+if count == 1:
+    name = Report._meta.verbose_name
+else:
+    name = Report._meta.verbose_name_plural
+
+text = ngettext(
+    'There is %(count)d %(name)s available.',
+    'There are %(count)d %(name)s available.',
+    count,
+) % {
+    'count': count,
+    'name': name
+}
+</pre> <p>Don’t try to implement your own singular-or-plural logic; it won’t be correct. In a case like this, consider something like the following:</p> <pre data-language="python">text = ngettext(
+    'There is %(count)d %(name)s object available.',
+    'There are %(count)d %(name)s objects available.',
+    count,
+) % {
+    'count': count,
+    'name': Report._meta.verbose_name,
+}
+</pre> <div class="admonition note" id="pluralization-var-notes"> <p class="first admonition-title">Note</p> <p>When using <code>ngettext()</code>, make sure you use a single name for every extrapolated variable included in the literal. In the examples above, note how we used the <code>name</code> Python variable in both translation strings. This example, besides being incorrect in some languages as noted above, would fail:</p> <pre data-language="python">text = ngettext(
+    'There is %(count)d %(name)s available.',
+    'There are %(count)d %(plural_name)s available.',
+    count,
+) % {
+    'count': Report.objects.count(),
+    'name': Report._meta.verbose_name,
+    'plural_name': Report._meta.verbose_name_plural,
+}
+</pre> <p>You would get an error when running <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin
+compilemessages</code></a>:</p> <pre data-language="python">a format specification for argument 'name', as in 'msgstr[0]', doesn't exist in 'msgid'
+</pre> </div>   <h3 id="id1">Contextual markers</h3> <p id="s-contextual-markers">Sometimes words have several meanings, such as <code>"May"</code> in English, which refers to a month name and to a verb. To enable translators to translate these words correctly in different contexts, you can use the <a class="reference internal" href="../../ref/utils#django.utils.translation.pgettext" title="django.utils.translation.pgettext"><code>django.utils.translation.pgettext()</code></a> function, or the <a class="reference internal" href="../../ref/utils#django.utils.translation.npgettext" title="django.utils.translation.npgettext"><code>django.utils.translation.npgettext()</code></a> function if the string needs pluralization. Both take a context string as the first variable.</p> <p>In the resulting <code>.po</code> file, the string will then appear as often as there are different contextual markers for the same string (the context will appear on the <code>msgctxt</code> line), allowing the translator to give a different translation for each of them.</p> <p>For example:</p> <pre data-language="python">from django.utils.translation import pgettext
+
+month = pgettext("month name", "May")
+</pre> <p>or:</p> <pre data-language="python">from django.db import models
+from django.utils.translation import pgettext_lazy
+
+class MyThing(models.Model):
+    name = models.CharField(help_text=pgettext_lazy(
+        'help text for MyThing model', 'This is the help text'))
+</pre> <p>will appear in the <code>.po</code> file as:</p> <pre data-language="po">msgctxt "month name"
+msgid "May"
+msgstr ""
+</pre> <p>Contextual markers are also supported by the <a class="reference internal" href="#std:templatetag-translate"><code>translate</code></a> and <a class="reference internal" href="#std:templatetag-blocktranslate"><code>blocktranslate</code></a> template tags.</p>   <h3 id="lazy-translations">Lazy translation</h3> <p id="s-lazy-translation">Use the lazy versions of translation functions in <a class="reference internal" href="../../ref/utils#module-django.utils.translation" title="django.utils.translation: Internationalization support."><code>django.utils.translation</code></a> (easily recognizable by the <code>lazy</code> suffix in their names) to translate strings lazily – when the value is accessed rather than when they’re called.</p> <p>These functions store a lazy reference to the string – not the actual translation. The translation itself will be done when the string is used in a string context, such as in template rendering.</p> <p>This is essential when calls to these functions are located in code paths that are executed at module load time.</p> <p>This is something that can easily happen when defining models, forms and model forms, because Django implements these such that their fields are actually class-level attributes. For that reason, make sure to use lazy translations in the following cases:</p>  <h4 id="model-fields-and-relationships-verbose-name-and-help-text-option-values">Model fields and relationships <code>verbose_name</code> and <code>help_text</code> option values</h4> <p id="s-model-fields-and-relationships-verbose-name-and-help-text-option-values">For example, to translate the help text of the <em>name</em> field in the following model, do the following:</p> <pre data-language="python">from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class MyThing(models.Model):
+    name = models.CharField(help_text=_('This is the help text'))
+</pre> <p>You can mark names of <a class="reference internal" href="../../ref/models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a>, <a class="reference internal" href="../../ref/models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a> or <a class="reference internal" href="../../ref/models/fields#django.db.models.OneToOneField" title="django.db.models.OneToOneField"><code>OneToOneField</code></a> relationship as translatable by using their <a class="reference internal" href="../../ref/models/options#django.db.models.Options.verbose_name" title="django.db.models.Options.verbose_name"><code>verbose_name</code></a> options:</p> <pre data-language="python">class MyThing(models.Model):
+    kind = models.ForeignKey(
+        ThingKind,
+        on_delete=models.CASCADE,
+        related_name='kinds',
+        verbose_name=_('kind'),
+    )
+</pre> <p>Just like you would do in <a class="reference internal" href="../../ref/models/options#django.db.models.Options.verbose_name" title="django.db.models.Options.verbose_name"><code>verbose_name</code></a> you should provide a lowercase verbose name text for the relation as Django will automatically titlecase it when required.</p>   <h4 id="model-verbose-names-values">Model verbose names values</h4> <p id="s-model-verbose-names-values">It is recommended to always provide explicit <a class="reference internal" href="../../ref/models/options#django.db.models.Options.verbose_name" title="django.db.models.Options.verbose_name"><code>verbose_name</code></a> and <a class="reference internal" href="../../ref/models/options#django.db.models.Options.verbose_name_plural" title="django.db.models.Options.verbose_name_plural"><code>verbose_name_plural</code></a> options rather than relying on the fallback English-centric and somewhat naïve determination of verbose names Django performs by looking at the model’s class name:</p> <pre data-language="python">from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class MyThing(models.Model):
+    name = models.CharField(_('name'), help_text=_('This is the help text'))
+
+    class Meta:
+        verbose_name = _('my thing')
+        verbose_name_plural = _('my things')
+</pre>   <h4 id="model-methods-description-argument-to-the-display-decorator">Model methods <code>description</code> argument to the <code>@display</code> decorator</h4> <p id="s-model-methods-description-argument-to-the-display-decorator">For model methods, you can provide translations to Django and the admin site with the <code>description</code> argument to the <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.display" title="django.contrib.admin.display"><code>display()</code></a> decorator:</p> <pre data-language="python">from django.contrib import admin
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class MyThing(models.Model):
+    kind = models.ForeignKey(
+        ThingKind,
+        on_delete=models.CASCADE,
+        related_name='kinds',
+        verbose_name=_('kind'),
+    )
+
+    @admin.display(description=_('Is it a mouse?'))
+    def is_mouse(self):
+        return self.kind.type == MOUSE_TYPE
+</pre>    <h3 id="working-with-lazy-translation-objects">Working with lazy translation objects</h3> <p id="s-working-with-lazy-translation-objects">The result of a <code>gettext_lazy()</code> call can be used wherever you would use a string (a <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.10)"><code>str</code></a> object) in other Django code, but it may not work with arbitrary Python code. For example, the following won’t work because the <a class="reference external" href="https://pypi.org/project/requests/">requests</a> library doesn’t handle <code>gettext_lazy</code> objects:</p> <pre data-language="python">body = gettext_lazy("I \u2764 Django")  # (Unicode :heart:)
+requests.post('https://example.com/send', data={'body': body})
+</pre> <p>You can avoid such problems by casting <code>gettext_lazy()</code> objects to text strings before passing them to non-Django code:</p> <pre data-language="python">requests.post('https://example.com/send', data={'body': str(body)})
+</pre> <p>If you don’t like the long <code>gettext_lazy</code> name, you can alias it as <code>_</code> (underscore), like so:</p> <pre data-language="python">from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class MyThing(models.Model):
+    name = models.CharField(help_text=_('This is the help text'))
+</pre> <p>Using <code>gettext_lazy()</code> and <code>ngettext_lazy()</code> to mark strings in models and utility functions is a common operation. When you’re working with these objects elsewhere in your code, you should ensure that you don’t accidentally convert them to strings, because they should be converted as late as possible (so that the correct locale is in effect). This necessitates the use of the helper function described next.</p>  <h4 id="lazy-plural-translations">Lazy translations and plural</h4> <p id="s-lazy-translations-and-plural">When using lazy translation for a plural string (<code>n[p]gettext_lazy</code>), you generally don’t know the <code>number</code> argument at the time of the string definition. Therefore, you are authorized to pass a key name instead of an integer as the <code>number</code> argument. Then <code>number</code> will be looked up in the dictionary under that key during string interpolation. Here’s example:</p> <pre data-language="python">from django import forms
+from django.core.exceptions import ValidationError
+from django.utils.translation import ngettext_lazy
+
+class MyForm(forms.Form):
+    error_message = ngettext_lazy("You only provided %(num)d argument",
+        "You only provided %(num)d arguments", 'num')
+
+    def clean(self):
+        # ...
+        if error:
+            raise ValidationError(self.error_message % {'num': number})
+</pre> <p>If the string contains exactly one unnamed placeholder, you can interpolate directly with the <code>number</code> argument:</p> <pre data-language="python">class MyForm(forms.Form):
+    error_message = ngettext_lazy(
+        "You provided %d argument",
+        "You provided %d arguments",
+    )
+
+    def clean(self):
+        # ...
+        if error:
+            raise ValidationError(self.error_message % number)
+</pre>   <h4 id="formatting-strings-format-lazy">Formatting strings: <code>format_lazy()</code>
+</h4> <p id="s-formatting-strings-format-lazy">Python’s <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str.format" title="(in Python v3.10)"><code>str.format()</code></a> method will not work when either the <code>format_string</code> or any of the arguments to <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str.format" title="(in Python v3.10)"><code>str.format()</code></a> contains lazy translation objects. Instead, you can use <a class="reference internal" href="../../ref/utils#django.utils.text.format_lazy" title="django.utils.text.format_lazy"><code>django.utils.text.format_lazy()</code></a>, which creates a lazy object that runs the <code>str.format()</code> method only when the result is included in a string. For example:</p> <pre data-language="python">from django.utils.text import format_lazy
+from django.utils.translation import gettext_lazy
+...
+name = gettext_lazy('John Lennon')
+instrument = gettext_lazy('guitar')
+result = format_lazy('{name}: {instrument}', name=name, instrument=instrument)
+</pre> <p>In this case, the lazy translations in <code>result</code> will only be converted to strings when <code>result</code> itself is used in a string (usually at template rendering time).</p>   <h4 id="other-uses-of-lazy-in-delayed-translations">Other uses of lazy in delayed translations</h4> <p id="s-other-uses-of-lazy-in-delayed-translations">For any other case where you would like to delay the translation, but have to pass the translatable string as argument to another function, you can wrap this function inside a lazy call yourself. For example:</p> <pre data-language="python">from django.utils.functional import lazy
+from django.utils.safestring import mark_safe
+from django.utils.translation import gettext_lazy as _
+
+mark_safe_lazy = lazy(mark_safe, str)
+</pre> <p>And then later:</p> <pre data-language="python">lazy_string = mark_safe_lazy(_("&lt;p&gt;My &lt;strong&gt;string!&lt;/strong&gt;&lt;/p&gt;"))
+</pre>    <h3 id="localized-names-of-languages">Localized names of languages</h3> <dl class="function" id="s-localized-names-of-languages"> <dt id="django.utils.translation.get_language_info">
+<code>get_language_info()</code> </dt> 
+</dl> <p>The <code>get_language_info()</code> function provides detailed information about languages:</p> <pre data-language="python">&gt;&gt;&gt; from django.utils.translation import activate, get_language_info
+&gt;&gt;&gt; activate('fr')
+&gt;&gt;&gt; li = get_language_info('de')
+&gt;&gt;&gt; print(li['name'], li['name_local'], li['name_translated'], li['bidi'])
+German Deutsch Allemand False
+</pre> <p>The <code>name</code>, <code>name_local</code>, and <code>name_translated</code> attributes of the dictionary contain the name of the language in English, in the language itself, and in your current active language respectively. The <code>bidi</code> attribute is True only for bi-directional languages.</p> <p>The source of the language information is the <code>django.conf.locale</code> module. Similar access to this information is available for template code. See below.</p>    <h2 id="specifying-translation-strings-in-template-code">Internationalization: in template code</h2> <p id="s-internationalization-in-template-code">Translations in <a class="reference internal" href="../../ref/templates/language"><span class="doc">Django templates</span></a> uses two template tags and a slightly different syntax than in Python code. To give your template access to these tags, put <code>{% load i18n %}</code> toward the top of your template. As with all template tags, this tag needs to be loaded in all templates which use translations, even those templates that extend from other templates which have already loaded the <code>i18n</code> tag.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Translated strings will not be escaped when rendered in a template. This allows you to include HTML in translations, for example for emphasis, but potentially dangerous characters (e.g. <code>"</code>) will also be rendered unchanged.</p> </div>  <h3 id="std:templatetag-translate">
+<code>translate</code> template tag</h3> <p id="s-translate-template-tag">The <code>{% translate %}</code> template tag translates either a constant string (enclosed in single or double quotes) or variable content:</p> <pre data-language="markup">&lt;title&gt;{% translate "This is the title." %}&lt;/title&gt;
+&lt;title&gt;{% translate myvar %}&lt;/title&gt;
+</pre> <p>If the <code>noop</code> option is present, variable lookup still takes place but the translation is skipped. This is useful when “stubbing out” content that will require translation in the future:</p> <pre data-language="markup">&lt;title&gt;{% translate "myvar" noop %}&lt;/title&gt;
+</pre> <p>Internally, inline translations use an <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext" title="django.utils.translation.gettext"><code>gettext()</code></a> call.</p> <p>In case a template var (<code>myvar</code> above) is passed to the tag, the tag will first resolve such variable to a string at run-time and then look up that string in the message catalogs.</p> <p>It’s not possible to mix a template variable inside a string within <code>{% translate %}</code>. If your translations require strings with variables (placeholders), use <a class="reference internal" href="#std:templatetag-blocktranslate"><code>{% blocktranslate %}</code></a> instead.</p> <p>If you’d like to retrieve a translated string without displaying it, you can use the following syntax:</p> <pre data-language="markup">{% translate "This is the title" as the_title %}
+
+&lt;title&gt;{{ the_title }}&lt;/title&gt;
+&lt;meta name="description" content="{{ the_title }}"&gt;
+</pre> <p>In practice you’ll use this to get a string you can use in multiple places in a template or so you can use the output as an argument for other template tags or filters:</p> <pre data-language="markup">{% translate "starting point" as start %}
+{% translate "end point" as end %}
+{% translate "La Grande Boucle" as race %}
+
+&lt;h1&gt;
+  &lt;a href="/" title="{% blocktranslate %}Back to '{{ race }}' homepage{% endblocktranslate %}"&gt;{{ race }}&lt;/a&gt;
+&lt;/h1&gt;
+&lt;p&gt;
+{% for stage in tour_stages %}
+    {% cycle start end %}: {{ stage }}{% if forloop.counter|divisibleby:2 %}&lt;br&gt;{% else %}, {% endif %}
+{% endfor %}
+&lt;/p&gt;
+</pre> <p><code>{% translate %}</code> also supports <a class="reference internal" href="#contextual-markers"><span class="std std-ref">contextual markers</span></a> using the <code>context</code> keyword:</p> <pre data-language="markup" id="std:templatetag-blocktrans">{% translate "May" context "month name" %}
+</pre>   <h3 id="std:templatetag-blocktranslate">
+<code>blocktranslate</code> template tag</h3> <p id="s-blocktranslate-template-tag">Contrarily to the <a class="reference internal" href="#std:templatetag-translate"><code>translate</code></a> tag, the <code>blocktranslate</code> tag allows you to mark complex sentences consisting of literals and variable content for translation by making use of placeholders:</p> <pre data-language="markup">{% blocktranslate %}This string will have {{ value }} inside.{% endblocktranslate %}
+</pre> <p>To translate a template expression – say, accessing object attributes or using template filters – you need to bind the expression to a local variable for use within the translation block. Examples:</p> <pre data-language="markup">{% blocktranslate with amount=article.price %}
+That will cost $ {{ amount }}.
+{% endblocktranslate %}
+
+{% blocktranslate with myvar=value|filter %}
+This will have {{ myvar }} inside.
+{% endblocktranslate %}
+</pre> <p>You can use multiple expressions inside a single <code>blocktranslate</code> tag:</p> <pre data-language="markup">{% blocktranslate with book_t=book|title author_t=author|title %}
+This is {{ book_t }} by {{ author_t }}
+{% endblocktranslate %}
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">The previous more verbose format is still supported: <code>{% blocktranslate with book|title as book_t and author|title as author_t %}</code></p> </div> <p>Other block tags (for example <code>{% for %}</code> or <code>{% if %}</code>) are not allowed inside a <code>blocktranslate</code> tag.</p> <p>If resolving one of the block arguments fails, <code>blocktranslate</code> will fall back to the default language by deactivating the currently active language temporarily with the <a class="reference internal" href="../../ref/utils#django.utils.translation.deactivate_all" title="django.utils.translation.deactivate_all"><code>deactivate_all()</code></a> function.</p> <p>This tag also provides for pluralization. To use it:</p> <ul class="simple"> <li>Designate and bind a counter value with the name <code>count</code>. This value will be the one used to select the right plural form.</li> <li>Specify both the singular and plural forms separating them with the <code>{% plural %}</code> tag within the <code>{% blocktranslate %}</code> and <code>{% endblocktranslate %}</code> tags.</li> </ul> <p>An example:</p> <pre data-language="markup">{% blocktranslate count counter=list|length %}
+There is only one {{ name }} object.
+{% plural %}
+There are {{ counter }} {{ name }} objects.
+{% endblocktranslate %}
+</pre> <p>A more complex example:</p> <pre data-language="markup">{% blocktranslate with amount=article.price count years=i.length %}
+That will cost $ {{ amount }} per year.
+{% plural %}
+That will cost $ {{ amount }} per {{ years }} years.
+{% endblocktranslate %}
+</pre> <p>When you use both the pluralization feature and bind values to local variables in addition to the counter value, keep in mind that the <code>blocktranslate</code> construct is internally converted to an <code>ngettext</code> call. This means the same <a class="reference internal" href="#pluralization-var-notes"><span class="std std-ref">notes regarding ngettext variables</span></a> apply.</p> <p>Reverse URL lookups cannot be carried out within the <code>blocktranslate</code> and should be retrieved (and stored) beforehand:</p> <pre data-language="markup">{% url 'path.to.view' arg arg2 as the_url %}
+{% blocktranslate %}
+This is a URL: {{ the_url }}
+{% endblocktranslate %}
+</pre> <p>If you’d like to retrieve a translated string without displaying it, you can use the following syntax:</p> <pre data-language="markup">{% blocktranslate asvar the_title %}The title is {{ title }}.{% endblocktranslate %}
+&lt;title&gt;{{ the_title }}&lt;/title&gt;
+&lt;meta name="description" content="{{ the_title }}"&gt;
+</pre> <p>In practice you’ll use this to get a string you can use in multiple places in a template or so you can use the output as an argument for other template tags or filters.</p> <p><code>{% blocktranslate %}</code> also supports <a class="reference internal" href="#contextual-markers"><span class="std std-ref">contextual markers</span></a> using the <code>context</code> keyword:</p> <pre data-language="markup">{% blocktranslate with name=user.username context "greeting" %}Hi {{ name }}{% endblocktranslate %}
+</pre> <p>Another feature <code>{% blocktranslate %}</code> supports is the <code>trimmed</code> option. This option will remove newline characters from the beginning and the end of the content of the <code>{% blocktranslate %}</code> tag, replace any whitespace at the beginning and end of a line and merge all lines into one using a space character to separate them. This is quite useful for indenting the content of a <code>{% blocktranslate %}</code> tag without having the indentation characters end up in the corresponding entry in the PO file, which makes the translation process easier.</p> <p>For instance, the following <code>{% blocktranslate %}</code> tag:</p> <pre data-language="markup">{% blocktranslate trimmed %}
+  First sentence.
+  Second paragraph.
+{% endblocktranslate %}
+</pre> <p>will result in the entry <code>"First sentence. Second paragraph."</code> in the PO file, compared to <code>"\n  First sentence.\n  Second paragraph.\n"</code>, if the <code>trimmed</code> option had not been specified.</p>   <h3 id="string-literals-passed-to-tags-and-filters">String literals passed to tags and filters</h3> <p id="s-string-literals-passed-to-tags-and-filters">You can translate string literals passed as arguments to tags and filters by using the familiar <code>_()</code> syntax:</p> <pre data-language="markup">{% some_tag _("Page not found") value|yesno:_("yes,no") %}
+</pre> <p>In this case, both the tag and the filter will see the translated string, so they don’t need to be aware of translations.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">In this example, the translation infrastructure will be passed the string <code>"yes,no"</code>, not the individual strings <code>"yes"</code> and <code>"no"</code>. The translated string will need to contain the comma so that the filter parsing code knows how to split up the arguments. For example, a German translator might translate the string <code>"yes,no"</code> as <code>"ja,nein"</code> (keeping the comma intact).</p> </div>   <h3 id="translator-comments-in-templates">Comments for translators in templates</h3> <p id="s-comments-for-translators-in-templates">Just like with <a class="reference internal" href="#translator-comments"><span class="std std-ref">Python code</span></a>, these notes for translators can be specified using comments, either with the <a class="reference internal" href="../../ref/templates/builtins#std:templatetag-comment"><code>comment</code></a> tag:</p> <pre data-language="markup">{% comment %}Translators: View verb{% endcomment %}
+{% translate "View" %}
+
+{% comment %}Translators: Short intro blurb{% endcomment %}
+&lt;p&gt;{% blocktranslate %}A multiline translatable
+literal.{% endblocktranslate %}&lt;/p&gt;
+</pre> <p>or with the <code>{#</code> … <code>#}</code> <a class="reference internal" href="../../ref/templates/language#template-comments"><span class="std std-ref">one-line comment constructs</span></a>:</p> <pre data-language="markup">{# Translators: Label of a button that triggers search #}
+&lt;button type="submit"&gt;{% translate "Go" %}&lt;/button&gt;
+
+{# Translators: This is a text of the base template #}
+{% blocktranslate %}Ambiguous translatable block of text{% endblocktranslate %}
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>Just for completeness, these are the corresponding fragments of the resulting <code>.po</code> file:</p> <pre data-language="po">#. Translators: View verb
+# path/to/template/file.html:10
+msgid "View"
+msgstr ""
+
+#. Translators: Short intro blurb
+# path/to/template/file.html:13
+msgid ""
+"A multiline translatable"
+"literal."
+msgstr ""
+
+# ...
+
+#. Translators: Label of a button that triggers search
+# path/to/template/file.html:100
+msgid "Go"
+msgstr ""
+
+#. Translators: This is a text of the base template
+# path/to/template/file.html:103
+msgid "Ambiguous translatable block of text"
+msgstr ""
+</pre> </div>   <h3 id="std:templatetag-language">Switching language in templates</h3> <p id="s-switching-language-in-templates">If you want to select a language within a template, you can use the <code>language</code> template tag:</p> <pre data-language="markup">{% load i18n %}
+
+{% get_current_language as LANGUAGE_CODE %}
+&lt;!-- Current language: {{ LANGUAGE_CODE }} --&gt;
+&lt;p&gt;{% translate "Welcome to our page" %}&lt;/p&gt;
+
+{% language 'en' %}
+    {% get_current_language as LANGUAGE_CODE %}
+    &lt;!-- Current language: {{ LANGUAGE_CODE }} --&gt;
+    &lt;p&gt;{% translate "Welcome to our page" %}&lt;/p&gt;
+{% endlanguage %}
+</pre> <p>While the first occurrence of “Welcome to our page” uses the current language, the second will always be in English.</p>   <h3 id="i18n-template-tags">Other tags</h3> <p id="s-other-tags">These tags also require a <code>{% load i18n %}</code>.</p>  <h4 id="std:templatetag-get_available_languages"><code>get_available_languages</code></h4> <p id="s-get-available-languages"><code>{% get_available_languages as LANGUAGES %}</code> returns a list of tuples in which the first element is the <a class="reference internal" href="index#term-language-code"><span class="xref std std-term">language code</span></a> and the second is the language name (translated into the currently active locale).</p>   <h4 id="std:templatetag-get_current_language"><code>get_current_language</code></h4> <p id="s-get-current-language"><code>{% get_current_language as LANGUAGE_CODE %}</code> returns the current user’s preferred language as a string. Example: <code>en-us</code>. See <a class="reference internal" href="#how-django-discovers-language-preference"><span class="std std-ref">How Django discovers language preference</span></a>.</p>   <h4 id="std:templatetag-get_current_language_bidi"><code>get_current_language_bidi</code></h4> <p id="s-get-current-language-bidi"><code>{% get_current_language_bidi as LANGUAGE_BIDI %}</code> returns the current locale’s direction. If <code>True</code>, it’s a right-to-left language, e.g. Hebrew, Arabic. If <code>False</code> it’s a left-to-right language, e.g. English, French, German, etc.</p>   <h4 id="template-translation-vars">
+<code>i18n</code> context processor</h4> <p id="s-i18n-context-processor">If you enable the <a class="reference internal" href="../../ref/templates/api#django.template.context_processors.i18n" title="django.template.context_processors.i18n"><code>django.template.context_processors.i18n</code></a> context processor, then each <code>RequestContext</code> will have access to <code>LANGUAGES</code>, <code>LANGUAGE_CODE</code>, and <code>LANGUAGE_BIDI</code> as defined above.</p>   <h4 id="std:templatetag-get_language_info"><code>get_language_info</code></h4> <p id="s-get-language-info">You can also retrieve information about any of the available languages using provided template tags and filters. To get information about a single language, use the <code>{% get_language_info %}</code> tag:</p> <pre data-language="markup">{% get_language_info for LANGUAGE_CODE as lang %}
+{% get_language_info for "pl" as lang %}
+</pre> <p>You can then access the information:</p> <pre data-language="markup">Language code: {{ lang.code }}&lt;br&gt;
+Name of language: {{ lang.name_local }}&lt;br&gt;
+Name in English: {{ lang.name }}&lt;br&gt;
+Bi-directional: {{ lang.bidi }}
+Name in the active language: {{ lang.name_translated }}
+</pre>   <h4 id="std:templatetag-get_language_info_list"><code>get_language_info_list</code></h4> <p id="s-get-language-info-list">You can also use the <code>{% get_language_info_list %}</code> template tag to retrieve information for a list of languages (e.g. active languages as specified in <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a>). See <a class="reference internal" href="#set-language-redirect-view"><span class="std std-ref">the section about the set_language redirect view</span></a> for an example of how to display a language selector using <code>{% get_language_info_list %}</code>.</p> <p>In addition to <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a> style list of tuples, <code>{% get_language_info_list %}</code> supports lists of language codes. If you do this in your view:</p> <pre data-language="python">context = {'available_languages': ['en', 'es', 'fr']}
+return render(request, 'mytemplate.html', context)
+</pre> <p>you can iterate over those languages in the template:</p> <pre data-language="markup" id="std:templatefilter-language_bidi">{% get_language_info_list for available_languages as langs %}
+{% for lang in langs %} ... {% endfor %}
+</pre>   <h4 id="std:templatefilter-language_name_translated">Template filters</h4> <p id="s-template-filters">There are also some filters available for convenience:</p> <ul class="simple"> <li>
+<code>{{ LANGUAGE_CODE|language_name }}</code> (“German”)</li> <li>
+<code>{{ LANGUAGE_CODE|language_name_local }}</code> (“Deutsch”)</li> <li>
+<code>{{ LANGUAGE_CODE|language_bidi }}</code> (False)</li> <li>
+<code>{{ LANGUAGE_CODE|language_name_translated }}</code> (“německy”, when active language is Czech)</li> </ul>     <h2 id="internationalization-in-javascript-code">Internationalization: in JavaScript code</h2> <p id="s-internationalization-in-javascript-code">Adding translations to JavaScript poses some problems:</p> <ul class="simple"> <li>JavaScript code doesn’t have access to a <code>gettext</code> implementation.</li> <li>JavaScript code doesn’t have access to <code>.po</code> or <code>.mo</code> files; they need to be delivered by the server.</li> <li>The translation catalogs for JavaScript should be kept as small as possible.</li> </ul> <p>Django provides an integrated solution for these problems: It passes the translations into JavaScript, so you can call <code>gettext</code>, etc., from within JavaScript.</p> <p>The main solution to these problems is the following <code>JavaScriptCatalog</code> view, which generates a JavaScript code library with functions that mimic the <code>gettext</code> interface, plus an array of translation strings.</p>  <h3 id="the-javascriptcatalog-view">The <code>JavaScriptCatalog</code> view</h3> <dl class="class" id="s-module-django.views.i18n"> <dt id="django.views.i18n.JavaScriptCatalog">
+<code>class JavaScriptCatalog</code> </dt> <dd>
+<p>A view that produces a JavaScript code library with functions that mimic the <code>gettext</code> interface, plus an array of translation strings.</p> <p><strong>Attributes</strong></p> <dl class="attribute"> <dt id="django.views.i18n.JavaScriptCatalog.domain">
+<code>domain</code> </dt> <dd>
+<p>Translation domain containing strings to add in the view output. Defaults to <code>'djangojs'</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.views.i18n.JavaScriptCatalog.packages">
+<code>packages</code> </dt> <dd>
+<p>A list of <a class="reference internal" href="../../ref/applications#django.apps.AppConfig.name" title="django.apps.AppConfig.name"><code>application names</code></a> among installed applications. Those apps should contain a <code>locale</code> directory. All those catalogs plus all catalogs found in <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> (which are always included) are merged into one catalog. Defaults to <code>None</code>, which means that all available translations from all <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> are provided in the JavaScript output.</p> </dd>
+</dl> <p><strong>Example with default values</strong>:</p> <pre data-language="python">from django.views.i18n import JavaScriptCatalog
+
+urlpatterns = [
+    path('jsi18n/', JavaScriptCatalog.as_view(), name='javascript-catalog'),
+]
+</pre> <p><strong>Example with custom packages</strong>:</p> <pre data-language="python">urlpatterns = [
+    path('jsi18n/myapp/',
+         JavaScriptCatalog.as_view(packages=['your.app.label']),
+         name='javascript-catalog'),
+]
+</pre> <p>If your root URLconf uses <a class="reference internal" href="#django.conf.urls.i18n.i18n_patterns" title="django.conf.urls.i18n.i18n_patterns"><code>i18n_patterns()</code></a>, <code>JavaScriptCatalog</code> must also be wrapped by <code>i18n_patterns()</code> for the catalog to be correctly generated.</p> <p><strong>Example with</strong> <code>i18n_patterns()</code>:</p> <pre data-language="python">from django.conf.urls.i18n import i18n_patterns
+
+urlpatterns = i18n_patterns(
+    path('jsi18n/', JavaScriptCatalog.as_view(), name='javascript-catalog'),
+)
+</pre> </dd>
+</dl> <p>The precedence of translations is such that the packages appearing later in the <code>packages</code> argument have higher precedence than the ones appearing at the beginning. This is important in the case of clashing translations for the same literal.</p> <p>If you use more than one <code>JavaScriptCatalog</code> view on a site and some of them define the same strings, the strings in the catalog that was loaded last take precedence.</p>   <h3 id="using-the-javascript-translation-catalog">Using the JavaScript translation catalog</h3> <p id="s-using-the-javascript-translation-catalog">To use the catalog, pull in the dynamically generated script like this:</p> <pre data-language="markup">&lt;script src="{% url 'javascript-catalog' %}"&gt;&lt;/script&gt;
+</pre> <p>This uses reverse URL lookup to find the URL of the JavaScript catalog view. When the catalog is loaded, your JavaScript code can use the following methods:</p> <ul class="simple"> <li><code>gettext</code></li> <li><code>ngettext</code></li> <li><code>interpolate</code></li> <li><code>get_format</code></li> <li><code>gettext_noop</code></li> <li><code>pgettext</code></li> <li><code>npgettext</code></li> <li><code>pluralidx</code></li> </ul>  <h4 id="gettext"><code>gettext</code></h4> <p id="s-gettext">The <code>gettext</code> function behaves similarly to the standard <code>gettext</code> interface within your Python code:</p> <pre data-language="javascript">document.write(gettext('this is to be translated'));
+</pre>   <h4 id="ngettext"><code>ngettext</code></h4> <p id="s-ngettext">The <code>ngettext</code> function provides an interface to pluralize words and phrases:</p> <pre data-language="javascript">const objectCount = 1 // or 0, or 2, or 3, ...
+const string = ngettext(
+    'literal for the singular case',
+    'literal for the plural case',
+    objectCount
+);
+</pre>   <h4 id="interpolate"><code>interpolate</code></h4> <p id="s-interpolate">The <code>interpolate</code> function supports dynamically populating a format string. The interpolation syntax is borrowed from Python, so the <code>interpolate</code> function supports both positional and named interpolation:</p> <ul> <li>
+<p class="first">Positional interpolation: <code>obj</code> contains a JavaScript Array object whose elements values are then sequentially interpolated in their corresponding <code>fmt</code> placeholders in the same order they appear. For example:</p> <pre data-language="javascript">const formats = ngettext(
+  'There is %s object. Remaining: %s',
+  'There are %s objects. Remaining: %s',
+  11
+);
+const string = interpolate(formats, [11, 20]);
+// string is 'There are 11 objects. Remaining: 20'
+</pre> </li> <li>
+<p class="first">Named interpolation: This mode is selected by passing the optional boolean <code>named</code> parameter as <code>true</code>. <code>obj</code> contains a JavaScript object or associative array. For example:</p> <pre data-language="javascript">const data = {
+  count: 10,
+  total: 50
+};
+
+const formats = ngettext(
+    'Total: %(total)s, there is %(count)s object',
+    'there are %(count)s of a total of %(total)s objects',
+    data.count
+);
+const string = interpolate(formats, data, true);
+</pre> </li> </ul> <p>You shouldn’t go over the top with string interpolation, though: this is still JavaScript, so the code has to make repeated regular-expression substitutions. This isn’t as fast as string interpolation in Python, so keep it to those cases where you really need it (for example, in conjunction with <code>ngettext</code> to produce proper pluralizations).</p>   <h4 id="get-format"><code>get_format</code></h4> <p id="s-get-format">The <code>get_format</code> function has access to the configured i18n formatting settings and can retrieve the format string for a given setting name:</p> <pre data-language="javascript">document.write(get_format('DATE_FORMAT'));
+// 'N j, Y'
+</pre> <p>It has access to the following settings:</p> <ul class="simple"> <li><a class="reference internal" href="../../ref/settings#std:setting-DATE_FORMAT"><code>DATE_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-DATE_INPUT_FORMATS"><code>DATE_INPUT_FORMATS</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-DATETIME_FORMAT"><code>DATETIME_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-DATETIME_INPUT_FORMATS"><code>DATETIME_INPUT_FORMATS</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-DECIMAL_SEPARATOR"><code>DECIMAL_SEPARATOR</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-FIRST_DAY_OF_WEEK"><code>FIRST_DAY_OF_WEEK</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-MONTH_DAY_FORMAT"><code>MONTH_DAY_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-NUMBER_GROUPING"><code>NUMBER_GROUPING</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-SHORT_DATE_FORMAT"><code>SHORT_DATE_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-SHORT_DATETIME_FORMAT"><code>SHORT_DATETIME_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-THOUSAND_SEPARATOR"><code>THOUSAND_SEPARATOR</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-TIME_FORMAT"><code>TIME_FORMAT</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-TIME_INPUT_FORMATS"><code>TIME_INPUT_FORMATS</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-YEAR_MONTH_FORMAT"><code>YEAR_MONTH_FORMAT</code></a></li> </ul> <p>This is useful for maintaining formatting consistency with the Python-rendered values.</p>   <h4 id="gettext-noop"><code>gettext_noop</code></h4> <p id="s-gettext-noop">This emulates the <code>gettext</code> function but does nothing, returning whatever is passed to it:</p> <pre data-language="javascript">document.write(gettext_noop('this will not be translated'));
+</pre> <p>This is useful for stubbing out portions of the code that will need translation in the future.</p>   <h4 id="pgettext"><code>pgettext</code></h4> <p id="s-pgettext">The <code>pgettext</code> function behaves like the Python variant (<a class="reference internal" href="../../ref/utils#django.utils.translation.pgettext" title="django.utils.translation.pgettext"><code>pgettext()</code></a>), providing a contextually translated word:</p> <pre data-language="javascript">document.write(pgettext('month name', 'May'));
+</pre>   <h4 id="npgettext"><code>npgettext</code></h4> <p id="s-npgettext">The <code>npgettext</code> function also behaves like the Python variant (<a class="reference internal" href="../../ref/utils#django.utils.translation.npgettext" title="django.utils.translation.npgettext"><code>npgettext()</code></a>), providing a <strong>pluralized</strong> contextually translated word:</p> <pre data-language="javascript">document.write(npgettext('group', 'party', 1));
+// party
+document.write(npgettext('group', 'party', 2));
+// parties
+</pre>   <h4 id="pluralidx"><code>pluralidx</code></h4> <p id="s-pluralidx">The <code>pluralidx</code> function works in a similar way to the <a class="reference internal" href="../../ref/templates/builtins#std:templatefilter-pluralize"><code>pluralize</code></a> template filter, determining if a given <code>count</code> should use a plural form of a word or not:</p> <pre data-language="javascript">document.write(pluralidx(0));
+// true
+document.write(pluralidx(1));
+// false
+document.write(pluralidx(2));
+// true
+</pre> <p>In the simplest case, if no custom pluralization is needed, this returns <code>false</code> for the integer <code>1</code> and <code>true</code> for all other numbers.</p> <p>However, pluralization is not this simple in all languages. If the language does not support pluralization, an empty value is provided.</p> <p>Additionally, if there are complex rules around pluralization, the catalog view will render a conditional expression. This will evaluate to either a <code>true</code> (should pluralize) or <code>false</code> (should <strong>not</strong> pluralize) value.</p>    <h3 id="the-jsoncatalog-view">The <code>JSONCatalog</code> view</h3> <dl class="class" id="s-the-jsoncatalog-view"> <dt id="django.views.i18n.JSONCatalog">
+<code>class JSONCatalog</code> </dt> <dd>
+<p>In order to use another client-side library to handle translations, you may want to take advantage of the <code>JSONCatalog</code> view. It’s similar to <a class="reference internal" href="#django.views.i18n.JavaScriptCatalog" title="django.views.i18n.JavaScriptCatalog"><code>JavaScriptCatalog</code></a> but returns a JSON response.</p> <p>See the documentation for <a class="reference internal" href="#django.views.i18n.JavaScriptCatalog" title="django.views.i18n.JavaScriptCatalog"><code>JavaScriptCatalog</code></a> to learn about possible values and use of the <code>domain</code> and <code>packages</code> attributes.</p> <p>The response format is as follows:</p> <pre data-language="text">{
+    "catalog": {
+        # Translations catalog
+    },
+    "formats": {
+        # Language formats for date, time, etc.
+    },
+    "plural": "..."  # Expression for plural forms, or null.
+}
+</pre> </dd>
+</dl>   <h3 id="note-on-performance">Note on performance</h3> <p id="s-note-on-performance">The various JavaScript/JSON i18n views generate the catalog from <code>.mo</code> files on every request. Since its output is constant, at least for a given version of a site, it’s a good candidate for caching.</p> <p>Server-side caching will reduce CPU load. It’s easily implemented with the <a class="reference internal" href="../cache#django.views.decorators.cache.cache_page" title="django.views.decorators.cache.cache_page"><code>cache_page()</code></a> decorator. To trigger cache invalidation when your translations change, provide a version-dependent key prefix, as shown in the example below, or map the view at a version-dependent URL:</p> <pre data-language="python">from django.views.decorators.cache import cache_page
+from django.views.i18n import JavaScriptCatalog
+
+# The value returned by get_version() must change when translations change.
+urlpatterns = [
+    path('jsi18n/',
+         cache_page(86400, key_prefix='js18n-%s' % get_version())(JavaScriptCatalog.as_view()),
+         name='javascript-catalog'),
+]
+</pre> <p>Client-side caching will save bandwidth and make your site load faster. If you’re using ETags (<a class="reference internal" href="../../ref/middleware#django.middleware.http.ConditionalGetMiddleware" title="django.middleware.http.ConditionalGetMiddleware"><code>ConditionalGetMiddleware</code></a>), you’re already covered. Otherwise, you can apply <a class="reference internal" href="../conditional-view-processing#conditional-decorators"><span class="std std-ref">conditional decorators</span></a>. In the following example, the cache is invalidated whenever you restart your application server:</p> <pre data-language="python">from django.utils import timezone
+from django.views.decorators.http import last_modified
+from django.views.i18n import JavaScriptCatalog
+
+last_modified_date = timezone.now()
+
+urlpatterns = [
+    path('jsi18n/',
+         last_modified(lambda req, **kw: last_modified_date)(JavaScriptCatalog.as_view()),
+         name='javascript-catalog'),
+]
+</pre> <p>You can even pre-generate the JavaScript catalog as part of your deployment procedure and serve it as a static file. This radical technique is implemented in <a class="reference external" href="https://django-statici18n.readthedocs.io/">django-statici18n</a>.</p>    <h2 id="url-internationalization">Internationalization: in URL patterns</h2> <p id="s-module-django.conf.urls.i18n">Django provides two mechanisms to internationalize URL patterns:</p> <ul class="simple"> <li>Adding the language prefix to the root of the URL patterns to make it possible for <a class="reference internal" href="../../ref/middleware#django.middleware.locale.LocaleMiddleware" title="django.middleware.locale.LocaleMiddleware"><code>LocaleMiddleware</code></a> to detect the language to activate from the requested URL.</li> <li>Making URL patterns themselves translatable via the <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_lazy" title="django.utils.translation.gettext_lazy"><code>django.utils.translation.gettext_lazy()</code></a> function.</li> </ul> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Using either one of these features requires that an active language be set for each request; in other words, you need to have <a class="reference internal" href="../../ref/middleware#django.middleware.locale.LocaleMiddleware" title="django.middleware.locale.LocaleMiddleware"><code>django.middleware.locale.LocaleMiddleware</code></a> in your <a class="reference internal" href="../../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> setting.</p> </div>  <h3 id="language-prefix-in-url-patterns">Language prefix in URL patterns</h3> <dl class="function" id="s-language-prefix-in-url-patterns"> <dt id="django.conf.urls.i18n.i18n_patterns">
+<code>i18n_patterns(*urls, prefix_default_language=True)</code> </dt> 
+</dl> <p>This function can be used in a root URLconf and Django will automatically prepend the current active language code to all URL patterns defined within <a class="reference internal" href="#django.conf.urls.i18n.i18n_patterns" title="django.conf.urls.i18n.i18n_patterns"><code>i18n_patterns()</code></a>.</p> <p>Setting <code>prefix_default_language</code> to <code>False</code> removes the prefix from the default language (<a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a>). This can be useful when adding translations to existing site so that the current URLs won’t change.</p> <p>Example URL patterns:</p> <pre data-language="python">from django.conf.urls.i18n import i18n_patterns
+from django.urls import include, path
+
+from about import views as about_views
+from news import views as news_views
+from sitemap.views import sitemap
+
+urlpatterns = [
+    path('sitemap.xml', sitemap, name='sitemap-xml'),
+]
+
+news_patterns = ([
+    path('', news_views.index, name='index'),
+    path('category/&lt;slug:slug&gt;/', news_views.category, name='category'),
+    path('&lt;slug:slug&gt;/', news_views.details, name='detail'),
+], 'news')
+
+urlpatterns += i18n_patterns(
+    path('about/', about_views.main, name='about'),
+    path('news/', include(news_patterns, namespace='news')),
+)
+</pre> <p>After defining these URL patterns, Django will automatically add the language prefix to the URL patterns that were added by the <code>i18n_patterns</code> function. Example:</p> <pre data-language="python">&gt;&gt;&gt; from django.urls import reverse
+&gt;&gt;&gt; from django.utils.translation import activate
+
+&gt;&gt;&gt; activate('en')
+&gt;&gt;&gt; reverse('sitemap-xml')
+'/sitemap.xml'
+&gt;&gt;&gt; reverse('news:index')
+'/en/news/'
+
+&gt;&gt;&gt; activate('nl')
+&gt;&gt;&gt; reverse('news:detail', kwargs={'slug': 'news-slug'})
+'/nl/news/news-slug/'
+</pre> <p>With <code>prefix_default_language=False</code> and <code>LANGUAGE_CODE='en'</code>, the URLs will be:</p> <pre data-language="python">&gt;&gt;&gt; activate('en')
+&gt;&gt;&gt; reverse('news:index')
+'/news/'
+
+&gt;&gt;&gt; activate('nl')
+&gt;&gt;&gt; reverse('news:index')
+'/nl/news/'
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last"><a class="reference internal" href="#django.conf.urls.i18n.i18n_patterns" title="django.conf.urls.i18n.i18n_patterns"><code>i18n_patterns()</code></a> is only allowed in a root URLconf. Using it within an included URLconf will throw an <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.ImproperlyConfigured" title="django.core.exceptions.ImproperlyConfigured"><code>ImproperlyConfigured</code></a> exception.</p> </div> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Ensure that you don’t have non-prefixed URL patterns that might collide with an automatically-added language prefix.</p> </div>   <h3 id="translating-urlpatterns">Translating URL patterns</h3> <p id="s-translating-url-patterns">URL patterns can also be marked translatable using the <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_lazy" title="django.utils.translation.gettext_lazy"><code>gettext_lazy()</code></a> function. Example:</p> <pre data-language="python">from django.conf.urls.i18n import i18n_patterns
+from django.urls import include, path
+from django.utils.translation import gettext_lazy as _
+
+from about import views as about_views
+from news import views as news_views
+from sitemaps.views import sitemap
+
+urlpatterns = [
+    path('sitemap.xml', sitemap, name='sitemap-xml'),
+]
+
+news_patterns = ([
+    path('', news_views.index, name='index'),
+    path(_('category/&lt;slug:slug&gt;/'), news_views.category, name='category'),
+    path('&lt;slug:slug&gt;/', news_views.details, name='detail'),
+], 'news')
+
+urlpatterns += i18n_patterns(
+    path(_('about/'), about_views.main, name='about'),
+    path(_('news/'), include(news_patterns, namespace='news')),
+)
+</pre> <p>After you’ve created the translations, the <a class="reference internal" href="../../ref/urlresolvers#django.urls.reverse" title="django.urls.reverse"><code>reverse()</code></a> function will return the URL in the active language. Example:</p> <pre data-language="python">&gt;&gt;&gt; from django.urls import reverse
+&gt;&gt;&gt; from django.utils.translation import activate
+
+&gt;&gt;&gt; activate('en')
+&gt;&gt;&gt; reverse('news:category', kwargs={'slug': 'recent'})
+'/en/news/category/recent/'
+
+&gt;&gt;&gt; activate('nl')
+&gt;&gt;&gt; reverse('news:category', kwargs={'slug': 'recent'})
+'/nl/nieuws/categorie/recent/'
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">In most cases, it’s best to use translated URLs only within a language code prefixed block of patterns (using <a class="reference internal" href="#django.conf.urls.i18n.i18n_patterns" title="django.conf.urls.i18n.i18n_patterns"><code>i18n_patterns()</code></a>), to avoid the possibility that a carelessly translated URL causes a collision with a non-translated URL pattern.</p> </div>   <h3 id="id2">Reversing in templates</h3> <p id="s-reversing-in-templates">If localized URLs get reversed in templates they always use the current language. To link to a URL in another language use the <a class="reference internal" href="#std:templatetag-language"><code>language</code></a> template tag. It enables the given language in the enclosed template section:</p> <pre data-language="markup">{% load i18n %}
+
+{% get_available_languages as languages %}
+
+{% translate "View this category in:" %}
+{% for lang_code, lang_name in languages %}
+    {% language lang_code %}
+    &lt;a href="{% url 'category' slug=category.slug %}"&gt;{{ lang_name }}&lt;/a&gt;
+    {% endlanguage %}
+{% endfor %}
+</pre> <p>The <a class="reference internal" href="#std:templatetag-language"><code>language</code></a> tag expects the language code as the only argument.</p>    <h2 id="how-to-create-language-files">Localization: how to create language files</h2> <p id="s-localization-how-to-create-language-files">Once the string literals of an application have been tagged for later translation, the translation themselves need to be written (or obtained). Here’s how that works.</p>  <h3 id="message-files">Message files</h3> <p id="s-message-files">The first step is to create a <a class="reference internal" href="index#term-message-file"><span class="xref std std-term">message file</span></a> for a new language. A message file is a plain-text file, representing a single language, that contains all available translation strings and how they should be represented in the given language. Message files have a <code>.po</code> file extension.</p> <p>Django comes with a tool, <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a>, that automates the creation and upkeep of these files.</p> <div class="admonition-gettext-utilities admonition"> <p class="first admonition-title">Gettext utilities</p> <p>The <code>makemessages</code> command (and <code>compilemessages</code> discussed later) use commands from the GNU gettext toolset: <code>xgettext</code>, <code>msgfmt</code>, <code>msgmerge</code> and <code>msguniq</code>.</p> <p class="last">The minimum version of the <code>gettext</code> utilities supported is 0.15.</p> </div> <p>To create or update a message file, run this command:</p> <pre data-language="python">django-admin makemessages -l de
+</pre> <p>…where <code>de</code> is the <a class="reference internal" href="index#term-locale-name"><span class="xref std std-term">locale name</span></a> for the message file you want to create. For example, <code>pt_BR</code> for Brazilian Portuguese, <code>de_AT</code> for Austrian German or <code>id</code> for Indonesian.</p> <p>The script should be run from one of two places:</p> <ul class="simple"> <li>The root directory of your Django project (the one that contains <code>manage.py</code>).</li> <li>The root directory of one of your Django apps.</li> </ul> <p>The script runs over your project source tree or your application source tree and pulls out all strings marked for translation (see <a class="reference internal" href="#how-django-discovers-translations"><span class="std std-ref">How Django discovers translations</span></a> and be sure <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> is configured correctly). It creates (or updates) a message file in the directory <code>locale/LANG/LC_MESSAGES</code>. In the <code>de</code> example, the file will be <code>locale/de/LC_MESSAGES/django.po</code>.</p> <p>When you run <code>makemessages</code> from the root directory of your project, the extracted strings will be automatically distributed to the proper message files. That is, a string extracted from a file of an app containing a <code>locale</code> directory will go in a message file under that directory. A string extracted from a file of an app without any <code>locale</code> directory will either go in a message file under the directory listed first in <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> or will generate an error if <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> is empty.</p> <p>By default <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a> examines every file that has the <code>.html</code>, <code>.txt</code> or <code>.py</code> file extension. If you want to override that default, use the <a class="reference internal" href="../../ref/django-admin#cmdoption-makemessages-extension"><code>--extension</code></a> or <code>-e</code> option to specify the file extensions to examine:</p> <pre data-language="python">django-admin makemessages -l de -e txt
+</pre> <p>Separate multiple extensions with commas and/or use <code>-e</code> or <code>--extension</code> multiple times:</p> <pre data-language="python">django-admin makemessages -l de -e html,txt -e xml
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">When <a class="reference internal" href="#creating-message-files-from-js-code"><span class="std std-ref">creating message files from JavaScript source code</span></a> you need to use the special <code>djangojs</code> domain, <strong>not</strong> <code>-e js</code>.</p> </div> <div class="admonition-using-jinja2-templates admonition"> <p class="first admonition-title">Using Jinja2 templates?</p> <p><a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> doesn’t understand the syntax of Jinja2 templates. To extract strings from a project containing Jinja2 templates, use <a class="reference external" href="https://babel.pocoo.org/en/latest/messages.html#message-extraction">Message Extracting</a> from <a class="reference external" href="https://babel.pocoo.org/en/latest/">Babel</a> instead.</p> <p>Here’s an example <code>babel.cfg</code> configuration file:</p> <pre data-language="python"># Extraction from Python source files
+[python: **.py]
+
+# Extraction from Jinja2 templates
+[jinja2: **.jinja]
+extensions = jinja2.ext.with_
+</pre> <p>Make sure you list all extensions you’re using! Otherwise Babel won’t recognize the tags defined by these extensions and will ignore Jinja2 templates containing them entirely.</p> <p class="last">Babel provides similar features to <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a>, can replace it in general, and doesn’t depend on <code>gettext</code>. For more information, read its documentation about <a class="reference external" href="https://babel.pocoo.org/en/latest/messages.html">working with message catalogs</a>.</p> </div> <div class="admonition-no-gettext admonition"> <p class="first admonition-title">No gettext?</p> <p class="last">If you don’t have the <code>gettext</code> utilities installed, <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> will create empty files. If that’s the case, either install the <code>gettext</code> utilities or copy the English message file (<code>locale/en/LC_MESSAGES/django.po</code>) if available and use it as a starting point, which is an empty translation file.</p> </div> <div class="admonition-working-on-windows admonition"> <p class="first admonition-title">Working on Windows?</p> <p class="last">If you’re using Windows and need to install the GNU gettext utilities so <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> works, see <a class="reference internal" href="#gettext-on-windows"><span class="std std-ref">gettext on Windows</span></a> for more information.</p> </div> <p>Each <code>.po</code> file contains a small bit of metadata, such as the translation maintainer’s contact information, but the bulk of the file is a list of <strong>messages</strong> – mappings between translation strings and the actual translated text for the particular language.</p> <p>For example, if your Django app contained a translation string for the text <code>"Welcome to my site."</code>, like so:</p> <pre data-language="python">_("Welcome to my site.")
+</pre> <p>…then <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a> will have created a <code>.po</code> file containing the following snippet – a message:</p> <pre data-language="po">#: path/to/python/module.py:23
+msgid "Welcome to my site."
+msgstr ""
+</pre> <p>A quick explanation:</p> <ul class="simple"> <li>
+<code>msgid</code> is the translation string, which appears in the source. Don’t change it.</li> <li>
+<code>msgstr</code> is where you put the language-specific translation. It starts out empty, so it’s your responsibility to change it. Make sure you keep the quotes around your translation.</li> <li>As a convenience, each message includes, in the form of a comment line prefixed with <code>#</code> and located above the <code>msgid</code> line, the filename and line number from which the translation string was gleaned.</li> </ul> <p>Long messages are a special case. There, the first string directly after the <code>msgstr</code> (or <code>msgid</code>) is an empty string. Then the content itself will be written over the next few lines as one string per line. Those strings are directly concatenated. Don’t forget trailing spaces within the strings; otherwise, they’ll be tacked together without whitespace!</p> <div class="admonition-mind-your-charset admonition"> <p class="first admonition-title">Mind your charset</p> <p class="last">Due to the way the <code>gettext</code> tools work internally and because we want to allow non-ASCII source strings in Django’s core and your applications, you <strong>must</strong> use UTF-8 as the encoding for your PO files (the default when PO files are created). This means that everybody will be using the same encoding, which is important when Django processes the PO files.</p> </div> <div class="admonition-fuzzy-entries admonition"> <p class="first admonition-title">Fuzzy entries</p> <p class="last"><a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> sometimes generates translation entries marked as fuzzy, e.g. when translations are inferred from previously translated strings. By default, fuzzy entries are <strong>not</strong> processed by <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>compilemessages</code></a>.</p> </div> <p>To reexamine all source code and templates for new translation strings and update all message files for <strong>all</strong> languages, run this:</p> <pre data-language="python">django-admin makemessages -a
+</pre>   <h3 id="compiling-message-files">Compiling message files</h3> <p id="s-compiling-message-files">After you create your message file – and each time you make changes to it – you’ll need to compile it into a more efficient form, for use by <code>gettext</code>. Do this with the <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages</code></a> utility.</p> <p>This tool runs over all available <code>.po</code> files and creates <code>.mo</code> files, which are binary files optimized for use by <code>gettext</code>. In the same directory from which you ran <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a>, run <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages</code></a> like this:</p> <pre data-language="python">django-admin compilemessages
+</pre> <p>That’s it. Your translations are ready for use.</p> <div class="admonition-working-on-windows admonition"> <p class="first admonition-title">Working on Windows?</p> <p class="last">If you’re using Windows and need to install the GNU gettext utilities so <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages</code></a> works see <a class="reference internal" href="#gettext-on-windows"><span class="std std-ref">gettext on Windows</span></a> for more information.</p> </div> <div class="admonition-po-files-encoding-and-bom-usage admonition"> <p class="first admonition-title">.po files: Encoding and BOM usage.</p> <p class="last">Django only supports <code>.po</code> files encoded in UTF-8 and without any BOM (Byte Order Mark) so if your text editor adds such marks to the beginning of files by default then you will need to reconfigure it.</p> </div>   <h3 id="troubleshooting-gettext-incorrectly-detects-python-format-in-strings-with-percent-signs">Troubleshooting: <code>gettext()</code> incorrectly detects <code>python-format</code> in strings with percent signs</h3> <p id="s-troubleshooting-gettext-incorrectly-detects-python-format-in-strings-with-percent-signs">In some cases, such as strings with a percent sign followed by a space and a <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#old-string-formatting" title="(in Python v3.10)"><span class="xref std std-ref">string conversion type</span></a> (e.g. <code>_("10% interest")</code>), <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext" title="django.utils.translation.gettext"><code>gettext()</code></a> incorrectly flags strings with <code>python-format</code>.</p> <p>If you try to compile message files with incorrectly flagged strings, you’ll get an error message like <code>number of format specifications in 'msgid' and
+'msgstr' does not match</code> or <code>'msgstr' is not a valid Python format string,
+unlike 'msgid'</code>.</p> <p>To workaround this, you can escape percent signs by adding a second percent sign:</p> <pre data-language="python">from django.utils.translation import gettext as _
+output = _("10%% interest")
+</pre> <p>Or you can use <code>no-python-format</code> so that all percent signs are treated as literals:</p> <pre data-language="python"># xgettext:no-python-format
+output = _("10% interest")
+</pre>   <h3 id="creating-message-files-from-js-code">Creating message files from JavaScript source code</h3> <p id="s-creating-message-files-from-javascript-source-code">You create and update the message files the same way as the other Django message files – with the <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a> tool. The only difference is you need to explicitly specify what in gettext parlance is known as a domain in this case the <code>djangojs</code> domain, by providing a <code>-d
+djangojs</code> parameter, like this:</p> <pre data-language="python">django-admin makemessages -d djangojs -l de
+</pre> <p>This would create or update the message file for JavaScript for German. After updating message files, run <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages</code></a> the same way as you do with normal Django message files.</p>   <h3 id="id3">
+<code>gettext</code> on Windows</h3> <p id="s-gettext-on-windows">This is only needed for people who either want to extract message IDs or compile message files (<code>.po</code>). Translation work itself involves editing existing files of this type, but if you want to create your own message files, or want to test or compile a changed message file, download <a class="reference external" href="https://mlocati.github.io/articles/gettext-iconv-windows.html">a precompiled binary installer</a>.</p> <p>You may also use <code>gettext</code> binaries you have obtained elsewhere, so long as the <code>xgettext --version</code> command works properly. Do not attempt to use Django translation utilities with a <code>gettext</code> package if the command <code>xgettext
+--version</code> entered at a Windows command prompt causes a popup window saying “xgettext.exe has generated errors and will be closed by Windows”.</p>   <h3 id="customizing-makemessages">Customizing the <code>makemessages</code> command</h3> <p id="s-customizing-the-makemessages-command">If you want to pass additional parameters to <code>xgettext</code>, you need to create a custom <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> command and override its <code>xgettext_options</code> attribute:</p> <pre data-language="python">from django.core.management.commands import makemessages
+
+class Command(makemessages.Command):
+    xgettext_options = makemessages.Command.xgettext_options + ['--keyword=mytrans']
+</pre> <p>If you need more flexibility, you could also add a new argument to your custom <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>makemessages</code></a> command:</p> <pre data-language="python">from django.core.management.commands import makemessages
+
+class Command(makemessages.Command):
+
+    def add_arguments(self, parser):
+        super().add_arguments(parser)
+        parser.add_argument(
+            '--extra-keyword',
+            dest='xgettext_keywords',
+            action='append',
+        )
+
+    def handle(self, *args, **options):
+        xgettext_keywords = options.pop('xgettext_keywords')
+        if xgettext_keywords:
+            self.xgettext_options = (
+                makemessages.Command.xgettext_options[:] +
+                ['--keyword=%s' % kwd for kwd in xgettext_keywords]
+            )
+        super().handle(*args, **options)
+</pre>    <h2 id="miscellaneous">Miscellaneous</h2>  <h3 id="set-language-redirect-view">The <code>set_language</code> redirect view</h3> <dl class="function" id="s-miscellaneous"> <dt id="django.views.i18n.set_language">
+<code>set_language(request)</code> </dt> 
+</dl> <p>As a convenience, Django comes with a view, <a class="reference internal" href="#django.views.i18n.set_language" title="django.views.i18n.set_language"><code>django.views.i18n.set_language()</code></a>, that sets a user’s language preference and redirects to a given URL or, by default, back to the previous page.</p> <p>Activate this view by adding the following line to your URLconf:</p> <pre data-language="python">path('i18n/', include('django.conf.urls.i18n')),
+</pre> <p>(Note that this example makes the view available at <code>/i18n/setlang/</code>.)</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Make sure that you don’t include the above URL within <a class="reference internal" href="#django.conf.urls.i18n.i18n_patterns" title="django.conf.urls.i18n.i18n_patterns"><code>i18n_patterns()</code></a> - it needs to be language-independent itself to work correctly.</p> </div> <p>The view expects to be called via the <code>POST</code> method, with a <code>language</code> parameter set in request. If session support is enabled, the view saves the language choice in the user’s session. It also saves the language choice in a cookie that is named <code>django_language</code> by default. (The name can be changed through the <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_NAME"><code>LANGUAGE_COOKIE_NAME</code></a> setting.)</p> <p>After setting the language choice, Django looks for a <code>next</code> parameter in the <code>POST</code> or <code>GET</code> data. If that is found and Django considers it to be a safe URL (i.e. it doesn’t point to a different host and uses a safe scheme), a redirect to that URL will be performed. Otherwise, Django may fall back to redirecting the user to the URL from the <code>Referer</code> header or, if it is not set, to <code>/</code>, depending on the nature of the request:</p> <ul class="simple"> <li>If the request accepts HTML content (based on its <code>Accept</code> HTTP header), the fallback will always be performed.</li> <li>If the request doesn’t accept HTML, the fallback will be performed only if the <code>next</code> parameter was set. Otherwise a 204 status code (No Content) will be returned.</li> </ul> <p>Here’s example HTML template code:</p> <pre data-language="markup">{% load i18n %}
+
+&lt;form action="{% url 'set_language' %}" method="post"&gt;{% csrf_token %}
+    &lt;input name="next" type="hidden" value="{{ redirect_to }}"&gt;
+    &lt;select name="language"&gt;
+        {% get_current_language as LANGUAGE_CODE %}
+        {% get_available_languages as LANGUAGES %}
+        {% get_language_info_list for LANGUAGES as languages %}
+        {% for language in languages %}
+            &lt;option value="{{ language.code }}"{% if language.code == LANGUAGE_CODE %} selected{% endif %}&gt;
+                {{ language.name_local }} ({{ language.code }})
+            &lt;/option&gt;
+        {% endfor %}
+    &lt;/select&gt;
+    &lt;input type="submit" value="Go"&gt;
+&lt;/form&gt;
+</pre> <p>In this example, Django looks up the URL of the page to which the user will be redirected in the <code>redirect_to</code> context variable.</p>   <h3 id="id4">Explicitly setting the active language</h3> <p id="s-explicitly-setting-the-active-language">You may want to set the active language for the current session explicitly. Perhaps a user’s language preference is retrieved from another system, for example. You’ve already been introduced to <a class="reference internal" href="../../ref/utils#django.utils.translation.activate" title="django.utils.translation.activate"><code>django.utils.translation.activate()</code></a>. That applies to the current thread only. To persist the language for the entire session in a cookie, set the <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_NAME"><code>LANGUAGE_COOKIE_NAME</code></a> cookie on the response:</p> <pre data-language="python">from django.conf import settings
+from django.http import HttpResponse
+from django.utils import translation
+user_language = 'fr'
+translation.activate(user_language)
+response = HttpResponse(...)
+response.set_cookie(settings.LANGUAGE_COOKIE_NAME, user_language)
+</pre> <p>You would typically want to use both: <a class="reference internal" href="../../ref/utils#django.utils.translation.activate" title="django.utils.translation.activate"><code>django.utils.translation.activate()</code></a> changes the language for this thread, and setting the cookie makes this preference persist in future requests.</p>   <h3 id="using-translations-outside-views-and-templates">Using translations outside views and templates</h3> <p id="s-using-translations-outside-views-and-templates">While Django provides a rich set of i18n tools for use in views and templates, it does not restrict the usage to Django-specific code. The Django translation mechanisms can be used to translate arbitrary texts to any language that is supported by Django (as long as an appropriate translation catalog exists, of course). You can load a translation catalog, activate it and translate text to language of your choice, but remember to switch back to original language, as activating a translation catalog is done on per-thread basis and such change will affect code running in the same thread.</p> <p>For example:</p> <pre data-language="python">from django.utils import translation
+
+def welcome_translated(language):
+    cur_language = translation.get_language()
+    try:
+        translation.activate(language)
+        text = translation.gettext('welcome')
+    finally:
+        translation.activate(cur_language)
+    return text
+</pre> <p>Calling this function with the value <code>'de'</code> will give you <code>"Willkommen"</code>, regardless of <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> and language set by middleware.</p> <p>Functions of particular interest are <a class="reference internal" href="../../ref/utils#django.utils.translation.get_language" title="django.utils.translation.get_language"><code>django.utils.translation.get_language()</code></a> which returns the language used in the current thread, <a class="reference internal" href="../../ref/utils#django.utils.translation.activate" title="django.utils.translation.activate"><code>django.utils.translation.activate()</code></a> which activates a translation catalog for the current thread, and <a class="reference internal" href="../../ref/utils#django.utils.translation.check_for_language" title="django.utils.translation.check_for_language"><code>django.utils.translation.check_for_language()</code></a> which checks if the given language is supported by Django.</p> <p>To help write more concise code, there is also a context manager <a class="reference internal" href="../../ref/utils#django.utils.translation.override" title="django.utils.translation.override"><code>django.utils.translation.override()</code></a> that stores the current language on enter and restores it on exit. With it, the above example becomes:</p> <pre data-language="python">from django.utils import translation
+
+def welcome_translated(language):
+    with translation.override(language):
+        return translation.gettext('welcome')
+</pre>   <h3 id="language-cookie">Language cookie</h3> <p id="s-language-cookie">A number of settings can be used to adjust language cookie options:</p> <ul class="simple"> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_NAME"><code>LANGUAGE_COOKIE_NAME</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_AGE"><code>LANGUAGE_COOKIE_AGE</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_DOMAIN"><code>LANGUAGE_COOKIE_DOMAIN</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_HTTPONLY"><code>LANGUAGE_COOKIE_HTTPONLY</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_PATH"><code>LANGUAGE_COOKIE_PATH</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_SAMESITE"><code>LANGUAGE_COOKIE_SAMESITE</code></a></li> <li><a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_SECURE"><code>LANGUAGE_COOKIE_SECURE</code></a></li> </ul>    <h2 id="implementation-notes">Implementation notes</h2>  <h3 id="specialties-of-django-i18n">Specialties of Django translation</h3> <p id="s-implementation-notes">Django’s translation machinery uses the standard <code>gettext</code> module that comes with Python. If you know <code>gettext</code>, you might note these specialties in the way Django does translation:</p> <ul class="simple"> <li>The string domain is <code>django</code> or <code>djangojs</code>. This string domain is used to differentiate between different programs that store their data in a common message-file library (usually <code>/usr/share/locale/</code>). The <code>django</code> domain is used for Python and template translation strings and is loaded into the global translation catalogs. The <code>djangojs</code> domain is only used for JavaScript translation catalogs to make sure that those are as small as possible.</li> <li>Django doesn’t use <code>xgettext</code> alone. It uses Python wrappers around <code>xgettext</code> and <code>msgfmt</code>. This is mostly for convenience.</li> </ul>   <h3 id="id5">How Django discovers language preference</h3> <p id="s-how-django-discovers-language-preference">Once you’ve prepared your translations – or, if you want to use the translations that come with Django – you’ll need to activate translation for your app.</p> <p>Behind the scenes, Django has a very flexible model of deciding which language should be used – installation-wide, for a particular user, or both.</p> <p>To set an installation-wide language preference, set <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a>. Django uses this language as the default translation – the final attempt if no better matching translation is found through one of the methods employed by the locale middleware (see below).</p> <p>If all you want is to run Django with your native language all you need to do is set <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> and make sure the corresponding <a class="reference internal" href="index#term-message-file"><span class="xref std std-term">message files</span></a> and their compiled versions (<code>.mo</code>) exist.</p> <p>If you want to let each individual user specify which language they prefer, then you also need to use the <code>LocaleMiddleware</code>. <code>LocaleMiddleware</code> enables language selection based on data from the request. It customizes content for each user.</p> <p>To use <code>LocaleMiddleware</code>, add <code>'django.middleware.locale.LocaleMiddleware'</code> to your <a class="reference internal" href="../../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> setting. Because middleware order matters, follow these guidelines:</p> <ul class="simple"> <li>Make sure it’s one of the first middleware installed.</li> <li>It should come after <code>SessionMiddleware</code>, because <code>LocaleMiddleware</code> makes use of session data. And it should come before <code>CommonMiddleware</code> because <code>CommonMiddleware</code> needs an activated language in order to resolve the requested URL.</li> <li>If you use <code>CacheMiddleware</code>, put <code>LocaleMiddleware</code> after it.</li> </ul> <p>For example, your <a class="reference internal" href="../../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> might look like this:</p> <pre data-language="python">MIDDLEWARE = [
+   'django.contrib.sessions.middleware.SessionMiddleware',
+   'django.middleware.locale.LocaleMiddleware',
+   'django.middleware.common.CommonMiddleware',
+]
+</pre> <p>(For more on middleware, see the <a class="reference internal" href="../http/middleware"><span class="doc">middleware documentation</span></a>.)</p> <p><code>LocaleMiddleware</code> tries to determine the user’s language preference by following this algorithm:</p> <ul> <li>First, it looks for the language prefix in the requested URL. This is only performed when you are using the <code>i18n_patterns</code> function in your root URLconf. See <a class="reference internal" href="#url-internationalization"><span class="std std-ref">Internationalization: in URL patterns</span></a> for more information about the language prefix and how to internationalize URL patterns. </li> <li>
+<p class="first">Failing that, it looks for a cookie.</p> <p>The name of the cookie used is set by the <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_COOKIE_NAME"><code>LANGUAGE_COOKIE_NAME</code></a> setting. (The default name is <code>django_language</code>.)</p> </li> <li>Failing that, it looks at the <code>Accept-Language</code> HTTP header. This header is sent by your browser and tells the server which language(s) you prefer, in order by priority. Django tries each language in the header until it finds one with available translations. </li> <li>Failing that, it uses the global <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> setting. </li> </ul> <p id="locale-middleware-notes">Notes:</p> <ul> <li>In each of these places, the language preference is expected to be in the standard <a class="reference internal" href="index#term-language-code"><span class="xref std std-term">language format</span></a>, as a string. For example, Brazilian Portuguese is <code>pt-br</code>. </li> <li>If a base language is available but the sublanguage specified is not, Django uses the base language. For example, if a user specifies <code>de-at</code> (Austrian German) but Django only has <code>de</code> available, Django uses <code>de</code>. </li> <li>
+<p class="first">Only languages listed in the <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a> setting can be selected. If you want to restrict the language selection to a subset of provided languages (because your application doesn’t provide all those languages), set <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a> to a list of languages. For example:</p> <pre data-language="python">LANGUAGES = [
+    ('de', _('German')),
+    ('en', _('English')),
+]
+</pre> <p>This example restricts languages that are available for automatic selection to German and English (and any sublanguage, like <code>de-ch</code> or <code>en-us</code>).</p> </li> <li>
+<p class="first">If you define a custom <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a> setting, as explained in the previous bullet, you can mark the language names as translation strings – but use <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext_lazy" title="django.utils.translation.gettext_lazy"><code>gettext_lazy()</code></a> instead of <a class="reference internal" href="../../ref/utils#django.utils.translation.gettext" title="django.utils.translation.gettext"><code>gettext()</code></a> to avoid a circular import.</p> <p>Here’s a sample settings file:</p> <pre data-language="python">from django.utils.translation import gettext_lazy as _
+
+LANGUAGES = [
+    ('de', _('German')),
+    ('en', _('English')),
+]
+</pre> </li> </ul> <p>Once <code>LocaleMiddleware</code> determines the user’s preference, it makes this preference available as <code>request.LANGUAGE_CODE</code> for each <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a>. Feel free to read this value in your view code. Here’s an example:</p> <pre data-language="python">from django.http import HttpResponse
+
+def hello_world(request, count):
+    if request.LANGUAGE_CODE == 'de-at':
+        return HttpResponse("You prefer to read Austrian German.")
+    else:
+        return HttpResponse("You prefer to read another language.")
+</pre> <p>Note that, with static (middleware-less) translation, the language is in <code>settings.LANGUAGE_CODE</code>, while with dynamic (middleware) translation, it’s in <code>request.LANGUAGE_CODE</code>.</p>   <h3 id="id6">How Django discovers translations</h3> <p id="s-how-django-discovers-translations">At runtime, Django builds an in-memory unified catalog of literals-translations. To achieve this it looks for translations by following this algorithm regarding the order in which it examines the different file paths to load the compiled <a class="reference internal" href="index#term-message-file"><span class="xref std std-term">message files</span></a> (<code>.mo</code>) and the precedence of multiple translations for the same literal:</p> <ol class="arabic simple"> <li>The directories listed in <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> have the highest precedence, with the ones appearing first having higher precedence than the ones appearing later.</li> <li>Then, it looks for and uses if it exists a <code>locale</code> directory in each of the installed apps listed in <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>. The ones appearing first have higher precedence than the ones appearing later.</li> <li>Finally, the Django-provided base translation in <code>django/conf/locale</code> is used as a fallback.</li> </ol> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p>The translations for literals included in JavaScript assets are looked up following a similar but not identical algorithm. See <a class="reference internal" href="#django.views.i18n.JavaScriptCatalog" title="django.views.i18n.JavaScriptCatalog"><code>JavaScriptCatalog</code></a> for more details.</p> <p class="last">You can also put <a class="reference internal" href="formatting#custom-format-files"><span class="std std-ref">custom format files</span></a> in the <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> directories if you also set <a class="reference internal" href="../../ref/settings#std:setting-FORMAT_MODULE_PATH"><code>FORMAT_MODULE_PATH</code></a>.</p> </div> <p>In all cases the name of the directory containing the translation is expected to be named using <a class="reference internal" href="index#term-locale-name"><span class="xref std std-term">locale name</span></a> notation. E.g. <code>de</code>, <code>pt_BR</code>, <code>es_AR</code>, etc. Untranslated strings for territorial language variants use the translations of the generic language. For example, untranslated <code>pt_BR</code> strings use <code>pt</code> translations.</p> <p>This way, you can write applications that include their own translations, and you can override base translations in your project. Or, you can build a big project out of several apps and put all translations into one big common message file specific to the project you are composing. The choice is yours.</p> <p>All message file repositories are structured the same way. They are:</p> <ul class="simple"> <li>All paths listed in <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> in your settings file are searched for <code>&lt;language&gt;/LC_MESSAGES/django.(po|mo)</code>
+</li> <li><code>$APPPATH/locale/&lt;language&gt;/LC_MESSAGES/django.(po|mo)</code></li> <li><code>$PYTHONPATH/django/conf/locale/&lt;language&gt;/LC_MESSAGES/django.(po|mo)</code></li> </ul> <p>To create message files, you use the <a class="reference internal" href="../../ref/django-admin#django-admin-makemessages"><code>django-admin makemessages</code></a> tool. And you use <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages</code></a> to produce the binary <code>.mo</code> files that are used by <code>gettext</code>.</p> <p>You can also run <a class="reference internal" href="../../ref/django-admin#django-admin-compilemessages"><code>django-admin compilemessages
+--settings=path.to.settings</code></a> to make the compiler process all the directories in your <a class="reference internal" href="../../ref/settings#std:setting-LOCALE_PATHS"><code>LOCALE_PATHS</code></a> setting.</p>   <h3 id="using-a-non-english-base-language">Using a non-English base language</h3> <p id="s-using-a-non-english-base-language">Django makes the general assumption that the original strings in a translatable project are written in English. You can choose another language, but you must be aware of certain limitations:</p> <ul class="simple"> <li>
+<code>gettext</code> only provides two plural forms for the original messages, so you will also need to provide a translation for the base language to include all plural forms if the plural rules for the base language are different from English.</li> <li>When an English variant is activated and English strings are missing, the fallback language will not be the <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> of the project, but the original strings. For example, an English user visiting a site with <a class="reference internal" href="../../ref/settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> set to Spanish and original strings written in Russian will see Russian text rather than Spanish.</li> </ul><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/i18n/translation/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/i18n/translation/</a>
+  </p>
+</div>

@@ -1,0 +1,669 @@
+# Testing WSGI Applications
+
+## Test Client
+
+Werkzeug provides a `Client` to simulate requests to a WSGI application
+without starting a server. The client has methods for making different types
+of requests, as well as managing cookies across requests.
+
+    
+    >>> from werkzeug.test import Client
+    >>> from werkzeug.testapp import test_app
+    >>> c = Client(test_app)
+    >>> response = c.get("/")
+    >>> response.status_code
+    200
+    >>> resp.headers
+    Headers([('Content-Type', 'text/html; charset=utf-8'), ('Content-Length', '6658')])
+    >>> response.get_data(as_text=True)
+    '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"...'
+    
+The client’s request methods return instances of `TestResponse`. This provides
+extra attributes and methods on top of `Response` that are useful for testing.
+
+## Request Body
+
+By passing a dict to `data`, the client will construct a request body with
+file and form data. It will set the content type to `application/x-www-form-
+urlencoded` if there are no files, or `multipart/form-data` there are.
+
+    
+    import io
+    
+    response = client.post(data={
+        "name": "test",
+        "file": (BytesIO("file contents".encode("utf8")), "test.txt")
+    })
+    
+Pass a string, bytes, or file-like object to `data` to use that as the raw
+request body. In that case, you should set the content type appropriately. For
+example, to post YAML:
+
+    
+    response = client.post(
+        data="a: value\nb: 1\n", content_type="application/yaml"
+    )
+    
+A shortcut when testing JSON APIs is to pass a dict to `json` instead of using
+`data`. This will automatically call `json.dumps()` and set the content type
+to `application/json`. Additionally, if the app returns JSON, `response.json`
+will automatically call `json.loads()`.
+
+    
+    response = client.post("/api", json={"a": "value", "b": 1})
+    obj = response.json()
+    
+## Environment Builder
+
+`EnvironBuilder` is used to construct a WSGI environ dict. The test client
+uses this internally to prepare its requests. The arguments passed to the
+client request methods are the same as the builder.
+
+Sometimes, it can be useful to construct a WSGI environment manually. An
+environ builder or dict can be passed to the test client request methods in
+place of other arguments to use a custom environ.
+
+    
+    from werkzeug.test import EnvironBuilder
+    builder = EnvironBuilder(...)
+    # build an environ dict
+    environ = builder.get_environ()
+    # build an environ dict wrapped in a request
+    request = builder.get_request()
+    
+The test client responses make this available through `TestResponse.request`
+and `response.request.environ`.
+
+## API
+
+`class werkzeug.test.Client(application, response_wrapper=None,
+use_cookies=True, allow_subdomain_redirects=False)`
+
+    
+This class allows you to send requests to a wrapped application.
+
+The use_cookies parameter indicates whether cookies should be stored and sent
+for subsequent requests. This is True by default, but passing False will
+disable this behaviour.
+
+If you want to request some subdomain of your application you may set
+`allow_subdomain_redirects` to `True` as if not no external redirects are
+allowed.
+
+Changed in version 2.0: `response_wrapper` is always a subclass of
+:class:`TestResponse`.
+
+Changelog
+
+Changed in version 0.5: Added the `use_cookies` parameter.
+
+Parameters
+
+    
+  * application (WSGIApplication) – 
+  * response_wrapper (Optional[Type[Response]]) – 
+  * use_cookies (bool) – 
+  * allow_subdomain_redirects (bool) – 
+
+Return type
+
+    
+None
+
+`set_cookie(server_name, key, value='', max_age=None, expires=None, path='/',
+domain=None, secure=False, httponly=False, samesite=None, charset='utf-8')`
+
+    
+Sets a cookie in the client’s cookie jar. The server name is required and has
+to match the one that is also passed to the open call.
+
+Parameters
+
+    
+  * server_name (str) – 
+  * key (str) – 
+  * value (str) – 
+  * max_age (Optional[Union[datetime.timedelta, int]]) – 
+  * expires (Optional[Union[str, datetime.datetime, int, float]]) – 
+  * path (str) – 
+  * domain (Optional[str]) – 
+  * secure (bool) – 
+  * httponly (bool) – 
+  * samesite (Optional[str]) – 
+  * charset (str) – 
+
+Return type
+
+    
+None
+
+`delete_cookie(server_name, key, path='/', domain=None, secure=False,
+httponly=False, samesite=None)`
+
+    
+Deletes a cookie in the test client.
+
+Parameters
+
+    
+  * server_name (str) – 
+  * key (str) – 
+  * path (str) – 
+  * domain (Optional[str]) – 
+  * secure (bool) – 
+  * httponly (bool) – 
+  * samesite (Optional[str]) – 
+
+Return type
+
+    
+None
+
+`open(*args, as_tuple=False, buffered=False, follow_redirects=False,
+**kwargs)`
+
+    
+Generate an environ dict from the given arguments, make a request to the
+application using it, and return the response.
+
+Parameters
+
+    
+  * args (Any) – Passed to `EnvironBuilder` to create the environ for the request. If a single arg is passed, it can be an existing `EnvironBuilder` or an environ dict.
+  * buffered (bool) – Convert the iterator returned by the app into a list. If the iterator has a `close()` method, it is called automatically.
+  * follow_redirects (bool) – Make additional requests to follow HTTP redirects until a non-redirect status is returned. `TestResponse.history` lists the intermediate responses.
+  * as_tuple (bool) – 
+  * kwargs (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+Changed in version 2.0: `as_tuple` is deprecated and will be removed in
+Werkzeug 2.1. Use `TestResponse.request` and `request.environ` instead.
+
+Changed in version 2.0: The request input stream is closed when calling
+`response.close()`. Input streams for redirects are automatically closed.
+
+Changelog
+
+Changed in version 0.5: If a dict is provided as file in the dict for the
+`data` parameter the content type has to be called `content_type` instead of
+`mimetype`. This change was made for consistency with `werkzeug.FileWrapper`.
+
+Changed in version 0.5: Added the `follow_redirects` parameter.
+
+`get(*args, **kw)`
+
+    
+Call `open()` with `method` set to `GET`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`post(*args, **kw)`
+
+    
+Call `open()` with `method` set to `POST`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`put(*args, **kw)`
+
+    
+Call `open()` with `method` set to `PUT`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`delete(*args, **kw)`
+
+    
+Call `open()` with `method` set to `DELETE`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`patch(*args, **kw)`
+
+    
+Call `open()` with `method` set to `PATCH`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`options(*args, **kw)`
+
+    
+Call `open()` with `method` set to `OPTIONS`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`head(*args, **kw)`
+
+    
+Call `open()` with `method` set to `HEAD`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`trace(*args, **kw)`
+
+    
+Call `open()` with `method` set to `TRACE`.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kw (Any) – 
+
+Return type
+
+    
+werkzeug.test.TestResponse
+
+`class werkzeug.test.TestResponse(response, status, headers, request,
+history=(), **kwargs)`
+
+    
+`Response` subclass that provides extra information about requests made with
+the test `Client`.
+
+Test client requests will always return an instance of this class. If a custom
+response class is passed to the client, it is subclassed along with this to
+support test information.
+
+If the test request included large files, or if the application is serving a
+file, call `close()` to close any open files and prevent Python showing a
+`ResourceWarning`.
+
+Parameters
+
+    
+  * response (Union[Iterable[str], Iterable[bytes]]) – 
+  * status (str) – 
+  * headers (werkzeug.datastructures.Headers) – 
+  * request (werkzeug.wrappers.request.Request) – 
+  * history (Tuple[werkzeug.test.TestResponse, ...]) – 
+  * kwargs (Any) – 
+
+Return type
+
+    
+None
+
+`request: werkzeug.wrappers.request.Request`
+
+    
+A request object with the environ used to make the request that resulted in
+this response.
+
+`history: Tuple[werkzeug.test.TestResponse, ...]`
+
+    
+A list of intermediate responses. Populated when the test request is made with
+`follow_redirects` enabled.
+
+`class werkzeug.test.EnvironBuilder(path='/', base_url=None,
+query_string=None, method='GET', input_stream=None, content_type=None,
+content_length=None, errors_stream=None, multithread=False,
+multiprocess=False, run_once=False, headers=None, data=None,
+environ_base=None, environ_overrides=None, charset='utf-8', mimetype=None,
+json=None, auth=None)`
+
+    
+This class can be used to conveniently create a WSGI environment for testing
+purposes. It can be used to quickly create WSGI environments or request
+objects from arbitrary data.
+
+The signature of this class is also used in some other places as of Werkzeug
+0.5 (`create_environ()`, `Response.from_values()`, `Client.open()`). Because
+of this most of the functionality is available through the constructor alone.
+
+Files and regular form data can be manipulated independently of each other
+with the `form` and `files` attributes, but are passed with the same argument
+to the constructor: `data`.
+
+`data` can be any of these values:
+
+  * a `str` or `bytes` object: The object is converted into an `input_stream`, the `content_length` is set and you have to provide a `content_type`.
+  * a `dict` or `MultiDict`: The keys have to be strings. The values have to be either any of the following objects, or a list of any of the following objects:
+    * a `file`-like object: These are converted into `FileStorage` objects automatically.
+    * a `tuple`: The `add_file()` method is called with the key and the unpacked `tuple` items as positional arguments.
+    * a `str`: The string is set as form data for the associated key.
+  * a file-like object: The object content is loaded in memory and then handled like a regular `str` or a `bytes`.
+
+Parameters
+
+    
+  * path (str) – the path of the request. In the WSGI environment this will end up as `PATH_INFO`. If the `query_string` is not defined and there is a question mark in the `path` everything after it is used as query string.
+  * base_url (Optional[str]) – the base URL is a URL that is used to extract the WSGI URL scheme, host (server name + server port) and the script root (`SCRIPT_NAME`).
+  * query_string (Optional[Union[Mapping[str, str], str]]) – an optional string or dict with URL parameters.
+  * method (str) – the HTTP method to use, defaults to `GET`.
+  * input_stream (Optional[BinaryIO]) – an optional input stream. Do not specify this and `data`. As soon as an input stream is set you can’t modify `args` and `files` unless you set the `input_stream` to `None` again.
+  * content_type (Optional[str]) – The content type for the request. As of 0.5 you don’t have to provide this when specifying files and form data via `data`.
+  * content_length (Optional[int]) – The content length for the request. You don’t have to specify this when providing data via `data`.
+  * errors_stream (Optional[TextIO]) – an optional error stream that is used for `wsgi.errors`. Defaults to `stderr`.
+  * multithread (bool) – controls `wsgi.multithread`. Defaults to `False`.
+  * multiprocess (bool) – controls `wsgi.multiprocess`. Defaults to `False`.
+  * run_once (bool) – controls `wsgi.run_once`. Defaults to `False`.
+  * headers (Optional[Union[werkzeug.datastructures.Headers, Iterable[Tuple[str, str]]]]) – an optional list or `Headers` object of headers.
+  * data (Optional[Union[BinaryIO, str, bytes, Mapping[str, Any]]]) – a string or dict of form data or a file-object. See explanation above.
+  * json (Optional[Mapping[str, Any]]) – An object to be serialized and assigned to `data`. Defaults the content type to `"application/json"`. Serialized with the function assigned to `json_dumps`.
+  * environ_base (Optional[Mapping[str, Any]]) – an optional dict of environment defaults.
+  * environ_overrides (Optional[Mapping[str, Any]]) – an optional dict of environment overrides.
+  * charset (str) – the charset used to encode string data.
+  * auth (Optional[Union[werkzeug.datastructures.Authorization, Tuple[str, str]]]) – An authorization object to use for the `Authorization` header value. A `(username, password)` tuple is a shortcut for `Basic` authorization.
+  * mimetype (Optional[str]) – 
+
+Return type
+
+    
+None
+
+Changed in version 2.0: `REQUEST_URI` and `RAW_URI` is the full raw URI
+including the query string, not only the path.
+
+Changed in version 2.0: The default `request_class` is `Request` instead of
+`BaseRequest`.
+
+New in version 2.0: Added the `auth` parameter.
+
+Changelog
+
+New in version 0.15: The `json` param and `json_dumps()` method.
+
+New in version 0.15: The environ has keys `REQUEST_URI` and `RAW_URI`
+containing the path before perecent-decoding. This is not part of the WSGI
+PEP, but many WSGI servers include it.
+
+Changed in version 0.6: `path` and `base_url` can now be unicode strings that
+are encoded with `iri_to_uri()`.
+
+`server_protocol = 'HTTP/1.1'`
+
+    
+the server protocol to use. defaults to HTTP/1.1
+
+`wsgi_version = (1, 0)`
+
+    
+the wsgi version to use. defaults to (1, 0)
+
+`request_class`
+
+    
+alias of `werkzeug.wrappers.request.Request`
+
+`static json_dumps(obj, *, skipkeys=False, ensure_ascii=True,
+check_circular=True, allow_nan=True, cls=None, indent=None, separators=None,
+default=None, sort_keys=False, **kw)`
+
+    
+The serialization function used when `json` is passed.
+
+`classmethod from_environ(environ, **kwargs)`
+
+    
+Turn an environ dict back into a builder. Any extra kwargs override the args
+extracted from the environ.
+
+Changed in version 2.0: Path and query values are passed through the WSGI
+decoding dance to avoid double encoding.
+
+Changelog
+
+New in version 0.15.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – 
+  * kwargs (Any) – 
+
+Return type
+
+    
+EnvironBuilder
+
+`property base_url: str`
+
+    
+The base URL is used to extract the URL scheme, host name, port, and root
+path.
+
+`property content_type: Optional[str]`
+
+    
+The content type for the request. Reflected from and to the `headers`. Do not
+set if you set `files` or `form` for auto detection.
+
+`property mimetype: Optional[str]`
+
+    
+The mimetype (content type without charset etc.)
+
+Changelog
+
+New in version 0.14.
+
+`property mimetype_params: Mapping[str, str]`
+
+    
+The mimetype parameters as dict. For example if the content type is
+`text/html; charset=utf-8` the params would be `{'charset': 'utf-8'}`.
+
+Changelog
+
+New in version 0.14.
+
+`property content_length: Optional[int]`
+
+    
+The content length as integer. Reflected from and to the `headers`. Do not set
+if you set `files` or `form` for auto detection.
+
+`property form: werkzeug.datastructures.MultiDict`
+
+    
+A `MultiDict` of form values.
+
+`property files: werkzeug.datastructures.FileMultiDict`
+
+    
+A `FileMultiDict` of uploaded files. Use `add_file()` to add new files.
+
+`property input_stream: Optional[BinaryIO]`
+
+    
+An optional input stream. This is mutually exclusive with setting `form` and
+`files`, setting it will clear those. Do not provide this if the method is not
+`POST` or another method that has a body.
+
+`property query_string: str`
+
+    
+The query string. If you set this to a string `args` will no longer be
+available.
+
+`property args: werkzeug.datastructures.MultiDict`
+
+    
+The URL arguments as `MultiDict`.
+
+`property server_name: str`
+
+    
+The server name (read-only, use `host` to set)
+
+`property server_port: int`
+
+    
+The server port as integer (read-only, use `host` to set)
+
+`close()`
+
+    
+Closes all files. If you put real `file` objects into the `files` dict you can
+call this method to automatically close them all in one go.
+
+Return type
+
+    
+None
+
+`get_environ()`
+
+    
+Return the built environ.
+
+Changelog
+
+Changed in version 0.15: The content type and length headers are set based on
+input stream detection. Previously this only set the WSGI keys.
+
+Return type
+
+    
+WSGIEnvironment
+
+`get_request(cls=None)`
+
+    
+Returns a request with the data. If the request class is not specified
+`request_class` is used.
+
+Parameters
+
+    
+cls (Optional[Type[werkzeug.wrappers.request.Request]]) – The request wrapper
+to use.
+
+Return type
+
+    
+werkzeug.wrappers.request.Request
+
+`werkzeug.test.create_environ(*args, **kwargs)`
+
+    
+Create a new WSGI environ dict based on the values passed. The first parameter
+should be the path of the request which defaults to ‘/’. The second one can
+either be an absolute path (in that case the host is localhost:80) or a full
+path to the request with scheme, netloc port and the path to the script.
+
+This accepts the same arguments as the `EnvironBuilder` constructor.
+
+Changelog
+
+Changed in version 0.5: This function is now a thin wrapper over
+`EnvironBuilder` which was added in 0.5. The `headers`, `environ_base`,
+`environ_overrides` and `charset` parameters were added.
+
+Parameters
+
+    
+  * args (Any) – 
+  * kwargs (Any) – 
+
+Return type
+
+    
+WSGIEnvironment
+
+`werkzeug.test.run_wsgi_app(app, environ, buffered=False)`
+
+    
+Return a tuple in the form (app_iter, status, headers) of the application
+output. This works best if you pass it an application that returns an iterator
+all the time.
+
+Sometimes applications may use the `write()` callable returned by the
+`start_response` function. This tries to resolve such edge cases
+automatically. But if you don’t get the expected output you should set
+`buffered` to `True` which enforces buffering.
+
+If passed an invalid WSGI application the behavior of this function is
+undefined. Never pass non-conforming WSGI applications to this function.
+
+Parameters
+
+    
+  * app (WSGIApplication) – the application to execute.
+  * buffered (bool) – set to `True` to enforce buffering.
+  * environ (WSGIEnvironment) – 
+
+Returns
+
+    
+tuple in the form `(app_iter, status, headers)`
+
+Return type
+
+    
+Tuple[Iterable[bytes], str, werkzeug.datastructures.Headers]
+
+© 2007–2021 Pallets  
+Licensed under the BSD 3-clause License.  
+https://werkzeug.palletsprojects.com/en/2.0.x/test/
+

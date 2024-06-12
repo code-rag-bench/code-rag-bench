@@ -1,0 +1,60 @@
+<h1>Uploading Files</h1> <p>Ah yes, the good old problem of file uploads. The basic idea of file uploads is actually quite simple. It basically works like this:</p> <ol class="arabic simple"> <li>A <code>&lt;form&gt;</code> tag is marked with <code>enctype=multipart/form-data</code> and an <code>&lt;input type=file&gt;</code> is placed in that form.</li> <li>The application accesses the file from the <code>files</code> dictionary on the request object.</li> <li>use the <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/datastructures/#werkzeug.datastructures.FileStorage.save" title="(in Werkzeug v2.0.x)"><code>save()</code></a> method of the file to save the file permanently somewhere on the filesystem.</li> </ol>  <h2 id="a-gentle-introduction">A Gentle Introduction</h2> <p>Let’s start with a very basic application that uploads a file to a specific upload folder and displays a file to the user. Let’s look at the bootstrapping code for our application:</p> <pre data-language="python">import os
+from flask import Flask, flash, request, redirect, url_for
+from werkzeug.utils import secure_filename
+
+UPLOAD_FOLDER = '/path/to/the/uploads'
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif'}
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+</pre> <p>So first we need a couple of imports. Most should be straightforward, the <code>werkzeug.secure_filename()</code> is explained a little bit later. The <code>UPLOAD_FOLDER</code> is where we will store the uploaded files and the <code>ALLOWED_EXTENSIONS</code> is the set of allowed file extensions.</p> <p>Why do we limit the extensions that are allowed? You probably don’t want your users to be able to upload everything there if the server is directly sending out the data to the client. That way you can make sure that users are not able to upload HTML files that would cause XSS problems (see <a class="reference internal" href="../../security/index#security-xss"><span class="std std-ref">Cross-Site Scripting (XSS)</span></a>). Also make sure to disallow <code>.php</code> files if the server executes them, but who has PHP installed on their server, right? :)</p> <p>Next the functions that check if an extension is valid and that uploads the file and redirects the user to the URL for the uploaded file:</p> <pre data-language="python">def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/', methods=['GET', 'POST'])
+def upload_file():
+    if request.method == 'POST':
+        # check if the post request has the file part
+        if 'file' not in request.files:
+            flash('No file part')
+            return redirect(request.url)
+        file = request.files['file']
+        # If the user does not select a file, the browser submits an
+        # empty file without a filename.
+        if file.filename == '':
+            flash('No selected file')
+            return redirect(request.url)
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            return redirect(url_for('download_file', name=filename))
+    return '''
+    &lt;!doctype html&gt;
+    &lt;title&gt;Upload new File&lt;/title&gt;
+    &lt;h1&gt;Upload new File&lt;/h1&gt;
+    &lt;form method=post enctype=multipart/form-data&gt;
+      &lt;input type=file name=file&gt;
+      &lt;input type=submit value=Upload&gt;
+    &lt;/form&gt;
+    '''
+</pre> <p>So what does that <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/utils/#werkzeug.utils.secure_filename" title="(in Werkzeug v2.0.x)"><code>secure_filename()</code></a> function actually do? Now the problem is that there is that principle called “never trust user input”. This is also true for the filename of an uploaded file. All submitted form data can be forged, and filenames can be dangerous. For the moment just remember: always use that function to secure a filename before storing it directly on the filesystem.</p> <div class="admonition-information-for-the-pros admonition"> <p class="admonition-title">Information for the Pros</p> <p>So you’re interested in what that <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/utils/#werkzeug.utils.secure_filename" title="(in Werkzeug v2.0.x)"><code>secure_filename()</code></a> function does and what the problem is if you’re not using it? So just imagine someone would send the following information as <code>filename</code> to your application:</p> <pre data-language="python">filename = "../../../../home/username/.bashrc"
+</pre> <p>Assuming the number of <code>../</code> is correct and you would join this with the <code>UPLOAD_FOLDER</code> the user might have the ability to modify a file on the server’s filesystem he or she should not modify. This does require some knowledge about how the application looks like, but trust me, hackers are patient :)</p> <p>Now let’s look how that function works:</p> <pre data-language="python">&gt;&gt;&gt; secure_filename('../../../../home/username/.bashrc')
+'home_username_.bashrc'
+</pre> </div> <p>We want to be able to serve the uploaded files so they can be downloaded by users. We’ll define a <code>download_file</code> view to serve files in the upload folder by name. <code>url_for("download_file", name=name)</code> generates download URLs.</p> <pre data-language="python">from flask import send_from_directory
+
+@app.route('/uploads/&lt;name&gt;')
+def download_file(name):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], name)
+</pre> <p>If you’re using middleware or the HTTP server to serve files, you can register the <code>download_file</code> endpoint as <code>build_only</code> so <code>url_for</code> will work without a view function.</p> <pre data-language="python">app.add_url_rule(
+    "/uploads/&lt;name&gt;", endpoint="download_file", build_only=True
+)
+</pre>   <h2 id="improving-uploads">Improving Uploads</h2> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.6.</span></p> </div> </details><p>So how exactly does Flask handle uploads? Well it will store them in the webserver’s memory if the files are reasonably small, otherwise in a temporary location (as returned by <a class="reference external" href="https://docs.python.org/3/library/tempfile.html#tempfile.gettempdir" title="(in Python v3.9)"><code>tempfile.gettempdir()</code></a>). But how do you specify the maximum file size after which an upload is aborted? By default Flask will happily accept file uploads with an unlimited amount of memory, but you can limit that by setting the <code>MAX_CONTENT_LENGTH</code> config key:</p> <pre data-language="python">from flask import Flask, Request
+
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1000 * 1000
+</pre> <p>The code above will limit the maximum allowed payload to 16 megabytes. If a larger file is transmitted, Flask will raise a <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/exceptions/#werkzeug.exceptions.RequestEntityTooLarge" title="(in Werkzeug v2.0.x)"><code>RequestEntityTooLarge</code></a> exception.</p> <div class="admonition-connection-reset-issue admonition"> <p class="admonition-title">Connection Reset Issue</p> <p>When using the local development server, you may get a connection reset error instead of a 413 response. You will get the correct status response when running the app with a production WSGI server.</p> </div> <p>This feature was added in Flask 0.6 but can be achieved in older versions as well by subclassing the request object. For more information on that consult the Werkzeug documentation on file handling.</p>   <h2 id="upload-progress-bars">Upload Progress Bars</h2> <p>A while ago many developers had the idea to read the incoming file in small chunks and store the upload progress in the database to be able to poll the progress with JavaScript from the client. The client asks the server every 5 seconds how much it has transmitted, but this is something it should already know.</p>   <h2 id="an-easier-solution">An Easier Solution</h2> <p>Now there are better solutions that work faster and are more reliable. There are JavaScript libraries like <a class="reference external" href="https://jquery.com/">jQuery</a> that have form plugins to ease the construction of progress bar.</p> <p>Because the common pattern for file uploads exists almost unchanged in all applications dealing with uploads, there is also a Flask extension called <a class="reference external" href="https://flask-uploads.readthedocs.io/en/latest/">Flask-Uploads</a> that implements a full fledged upload mechanism that allows controlling which file extensions are allowed to be uploaded.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/fileuploads/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/fileuploads/</a>
+  </p>
+</div>

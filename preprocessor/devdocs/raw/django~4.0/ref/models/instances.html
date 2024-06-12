@@ -1,0 +1,260 @@
+<h1 id="model-instance-reference">Model instance reference</h1> <p id="s-model-instance-reference">This document describes the details of the <code>Model</code> API. It builds on the material presented in the <a class="reference internal" href="../../topics/db/models"><span class="doc">model</span></a> and <a class="reference internal" href="../../topics/db/queries"><span class="doc">database query</span></a> guides, so you’ll probably want to read and understand those documents before reading this one.</p> <p>Throughout this reference we’ll use the <a class="reference internal" href="../../topics/db/queries#queryset-model-example"><span class="std std-ref">example blog models</span></a> presented in the <a class="reference internal" href="../../topics/db/queries"><span class="doc">database query guide</span></a>.</p>  <h2 id="creating-objects">Creating objects</h2> <p id="s-creating-objects">To create a new instance of a model, instantiate it like any other Python class:</p> <dl class="class"> <dt id="django.db.models.Model">
+<code>class Model(**kwargs)</code> </dt> 
+</dl> <p>The keyword arguments are the names of the fields you’ve defined on your model. Note that instantiating a model in no way touches your database; for that, you need to <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a>.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>You may be tempted to customize the model by overriding the <code>__init__</code> method. If you do so, however, take care not to change the calling signature as any change may prevent the model instance from being saved. Rather than overriding <code>__init__</code>, try using one of these approaches:</p> <ol class="last arabic"> <li>
+<p class="first">Add a classmethod on the model class:</p> <pre data-language="python">from django.db import models
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+
+    @classmethod
+    def create(cls, title):
+        book = cls(title=title)
+        # do something with the book
+        return book
+
+book = Book.create("Pride and Prejudice")
+</pre> </li> <li>
+<p class="first">Add a method on a custom manager (usually preferred):</p> <pre data-language="python">class BookManager(models.Manager):
+    def create_book(self, title):
+        book = self.create(title=title)
+        # do something with the book
+        return book
+
+class Book(models.Model):
+    title = models.CharField(max_length=100)
+
+    objects = BookManager()
+
+book = Book.objects.create_book("Pride and Prejudice")
+</pre> </li> </ol> </div>  <h3 id="customizing-model-loading">Customizing model loading</h3> <dl class="classmethod" id="s-customizing-model-loading"> <dt id="django.db.models.Model.from_db">
+<code>classmethod Model.from_db(db, field_names, values)</code> </dt> 
+</dl> <p>The <code>from_db()</code> method can be used to customize model instance creation when loading from the database.</p> <p>The <code>db</code> argument contains the database alias for the database the model is loaded from, <code>field_names</code> contains the names of all loaded fields, and <code>values</code> contains the loaded values for each field in <code>field_names</code>. The <code>field_names</code> are in the same order as the <code>values</code>. If all of the model’s fields are present, then <code>values</code> are guaranteed to be in the order <code>__init__()</code> expects them. That is, the instance can be created by <code>cls(*values)</code>. If any fields are deferred, they won’t appear in <code>field_names</code>. In that case, assign a value of <code>django.db.models.DEFERRED</code> to each of the missing fields.</p> <p>In addition to creating the new model, the <code>from_db()</code> method must set the <code>adding</code> and <code>db</code> flags in the new instance’s <a class="reference internal" href="#django.db.models.Model._state" title="django.db.models.Model._state"><code>_state</code></a> attribute.</p> <p>Below is an example showing how to record the initial values of fields that are loaded from the database:</p> <pre data-language="python">from django.db.models import DEFERRED
+
+@classmethod
+def from_db(cls, db, field_names, values):
+    # Default implementation of from_db() (subject to change and could
+    # be replaced with super()).
+    if len(values) != len(cls._meta.concrete_fields):
+        values = list(values)
+        values.reverse()
+        values = [
+            values.pop() if f.attname in field_names else DEFERRED
+            for f in cls._meta.concrete_fields
+        ]
+    instance = cls(*values)
+    instance._state.adding = False
+    instance._state.db = db
+    # customization to store the original field values on the instance
+    instance._loaded_values = dict(zip(field_names, values))
+    return instance
+
+def save(self, *args, **kwargs):
+    # Check how the current values differ from ._loaded_values. For example,
+    # prevent changing the creator_id of the model. (This example doesn't
+    # support cases where 'creator_id' is deferred).
+    if not self._state.adding and (
+            self.creator_id != self._loaded_values['creator_id']):
+        raise ValueError("Updating the value of creator isn't allowed")
+    super().save(*args, **kwargs)
+</pre> <p>The example above shows a full <code>from_db()</code> implementation to clarify how that is done. In this case it would be possible to use a <code>super()</code> call in the <code>from_db()</code> method.</p>    <h2 id="refreshing-objects-from-database">Refreshing objects from database</h2> <p id="s-refreshing-objects-from-database">If you delete a field from a model instance, accessing it again reloads the value from the database:</p> <pre data-language="python">&gt;&gt;&gt; obj = MyModel.objects.first()
+&gt;&gt;&gt; del obj.field
+&gt;&gt;&gt; obj.field  # Loads the field from the database
+</pre> <dl class="method"> <dt id="django.db.models.Model.refresh_from_db">
+<code>Model.refresh_from_db(using=None, fields=None)</code> </dt> 
+</dl> <p>If you need to reload a model’s values from the database, you can use the <code>refresh_from_db()</code> method. When this method is called without arguments the following is done:</p> <ol class="arabic simple"> <li>All non-deferred fields of the model are updated to the values currently present in the database.</li> <li>Any cached relations are cleared from the reloaded instance.</li> </ol> <p>Only fields of the model are reloaded from the database. Other database-dependent values such as annotations aren’t reloaded. Any <a class="reference internal" href="../utils#django.utils.functional.cached_property" title="django.utils.functional.cached_property"><code>@cached_property</code></a> attributes aren’t cleared either.</p> <p>The reloading happens from the database the instance was loaded from, or from the default database if the instance wasn’t loaded from the database. The <code>using</code> argument can be used to force the database used for reloading.</p> <p>It is possible to force the set of fields to be loaded by using the <code>fields</code> argument.</p> <p>For example, to test that an <code>update()</code> call resulted in the expected update, you could write a test similar to this:</p> <pre data-language="python">def test_update_result(self):
+    obj = MyModel.objects.create(val=1)
+    MyModel.objects.filter(pk=obj.pk).update(val=F('val') + 1)
+    # At this point obj.val is still 1, but the value in the database
+    # was updated to 2. The object's updated value needs to be reloaded
+    # from the database.
+    obj.refresh_from_db()
+    self.assertEqual(obj.val, 2)
+</pre> <p>Note that when deferred fields are accessed, the loading of the deferred field’s value happens through this method. Thus it is possible to customize the way deferred loading happens. The example below shows how one can reload all of the instance’s fields when a deferred field is reloaded:</p> <pre data-language="python">class ExampleModel(models.Model):
+    def refresh_from_db(self, using=None, fields=None, **kwargs):
+        # fields contains the name of the deferred field to be
+        # loaded.
+        if fields is not None:
+            fields = set(fields)
+            deferred_fields = self.get_deferred_fields()
+            # If any deferred field is going to be loaded
+            if fields.intersection(deferred_fields):
+                # then load all of them
+                fields = fields.union(deferred_fields)
+        super().refresh_from_db(using, fields, **kwargs)
+</pre> <dl class="method"> <dt id="django.db.models.Model.get_deferred_fields">
+<code>Model.get_deferred_fields()</code> </dt> 
+</dl> <p>A helper method that returns a set containing the attribute names of all those fields that are currently deferred for this model.</p>   <h2 id="id1">Validating objects</h2> <p id="s-validating-objects">There are three steps involved in validating a model:</p> <ol class="arabic simple"> <li>Validate the model fields - <a class="reference internal" href="#django.db.models.Model.clean_fields" title="django.db.models.Model.clean_fields"><code>Model.clean_fields()</code></a>
+</li> <li>Validate the model as a whole - <a class="reference internal" href="#django.db.models.Model.clean" title="django.db.models.Model.clean"><code>Model.clean()</code></a>
+</li> <li>Validate the field uniqueness - <a class="reference internal" href="#django.db.models.Model.validate_unique" title="django.db.models.Model.validate_unique"><code>Model.validate_unique()</code></a>
+</li> </ol> <p>All three steps are performed when you call a model’s <a class="reference internal" href="#django.db.models.Model.full_clean" title="django.db.models.Model.full_clean"><code>full_clean()</code></a> method.</p> <p>When you use a <a class="reference internal" href="../../topics/forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a>, the call to <a class="reference internal" href="../forms/api#django.forms.Form.is_valid" title="django.forms.Form.is_valid"><code>is_valid()</code></a> will perform these validation steps for all the fields that are included on the form. See the <a class="reference internal" href="../../topics/forms/modelforms"><span class="doc">ModelForm documentation</span></a> for more information. You should only need to call a model’s <a class="reference internal" href="#django.db.models.Model.full_clean" title="django.db.models.Model.full_clean"><code>full_clean()</code></a> method if you plan to handle validation errors yourself, or if you have excluded fields from the <a class="reference internal" href="../../topics/forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a> that require validation.</p> <dl class="method"> <dt id="django.db.models.Model.full_clean">
+<code>Model.full_clean(exclude=None, validate_unique=True)</code> </dt> 
+</dl> <p>This method calls <a class="reference internal" href="#django.db.models.Model.clean_fields" title="django.db.models.Model.clean_fields"><code>Model.clean_fields()</code></a>, <a class="reference internal" href="#django.db.models.Model.clean" title="django.db.models.Model.clean"><code>Model.clean()</code></a>, and <a class="reference internal" href="#django.db.models.Model.validate_unique" title="django.db.models.Model.validate_unique"><code>Model.validate_unique()</code></a> (if <code>validate_unique</code> is <code>True</code>), in that order and raises a <a class="reference internal" href="../exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> that has a <code>message_dict</code> attribute containing errors from all three stages.</p> <p>The optional <code>exclude</code> argument can be used to provide a list of field names that can be excluded from validation and cleaning. <a class="reference internal" href="../../topics/forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a> uses this argument to exclude fields that aren’t present on your form from being validated since any errors raised could not be corrected by the user.</p> <p>Note that <code>full_clean()</code> will <em>not</em> be called automatically when you call your model’s <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a> method. You’ll need to call it manually when you want to run one-step model validation for your own manually created models. For example:</p> <pre data-language="python">from django.core.exceptions import ValidationError
+try:
+    article.full_clean()
+except ValidationError as e:
+    # Do something based on the errors contained in e.message_dict.
+    # Display them to a user, or handle them programmatically.
+    pass
+</pre> <p>The first step <code>full_clean()</code> performs is to clean each individual field.</p> <dl class="method"> <dt id="django.db.models.Model.clean_fields">
+<code>Model.clean_fields(exclude=None)</code> </dt> 
+</dl> <p>This method will validate all fields on your model. The optional <code>exclude</code> argument lets you provide a list of field names to exclude from validation. It will raise a <a class="reference internal" href="../exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> if any fields fail validation.</p> <p>The second step <code>full_clean()</code> performs is to call <a class="reference internal" href="#django.db.models.Model.clean" title="django.db.models.Model.clean"><code>Model.clean()</code></a>. This method should be overridden to perform custom validation on your model.</p> <dl class="method"> <dt id="django.db.models.Model.clean">
+<code>Model.clean()</code> </dt> 
+</dl> <p>This method should be used to provide custom model validation, and to modify attributes on your model if desired. For instance, you could use it to automatically provide a value for a field, or to do validation that requires access to more than a single field:</p> <pre data-language="python">import datetime
+from django.core.exceptions import ValidationError
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class Article(models.Model):
+    ...
+    def clean(self):
+        # Don't allow draft entries to have a pub_date.
+        if self.status == 'draft' and self.pub_date is not None:
+            raise ValidationError(_('Draft entries may not have a publication date.'))
+        # Set the pub_date for published items if it hasn't been set already.
+        if self.status == 'published' and self.pub_date is None:
+            self.pub_date = datetime.date.today()
+</pre> <p>Note, however, that like <a class="reference internal" href="#django.db.models.Model.full_clean" title="django.db.models.Model.full_clean"><code>Model.full_clean()</code></a>, a model’s <code>clean()</code> method is not invoked when you call your model’s <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a> method.</p> <p>In the above example, the <a class="reference internal" href="../exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> exception raised by <code>Model.clean()</code> was instantiated with a string, so it will be stored in a special error dictionary key, <a class="reference internal" href="../exceptions#django.core.exceptions.NON_FIELD_ERRORS" title="django.core.exceptions.NON_FIELD_ERRORS"><code>NON_FIELD_ERRORS</code></a>. This key is used for errors that are tied to the entire model instead of to a specific field:</p> <pre data-language="python">from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+try:
+    article.full_clean()
+except ValidationError as e:
+    non_field_errors = e.message_dict[NON_FIELD_ERRORS]
+</pre> <p>To assign exceptions to a specific field, instantiate the <a class="reference internal" href="../exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> with a dictionary, where the keys are the field names. We could update the previous example to assign the error to the <code>pub_date</code> field:</p> <pre data-language="python">class Article(models.Model):
+    ...
+    def clean(self):
+        # Don't allow draft entries to have a pub_date.
+        if self.status == 'draft' and self.pub_date is not None:
+            raise ValidationError({'pub_date': _('Draft entries may not have a publication date.')})
+        ...
+</pre> <p>If you detect errors in multiple fields during <code>Model.clean()</code>, you can also pass a dictionary mapping field names to errors:</p> <pre data-language="python">raise ValidationError({
+    'title': ValidationError(_('Missing title.'), code='required'),
+    'pub_date': ValidationError(_('Invalid date.'), code='invalid'),
+})
+</pre> <p>Finally, <code>full_clean()</code> will check any unique constraints on your model.</p> <div class="admonition-how-to-raise-field-specific-validation-errors-if-those-fields-don-t-appear-in-a-modelform admonition"> <p class="first admonition-title">How to raise field-specific validation errors if those fields don’t appear in a <code>ModelForm</code></p> <p>You can’t raise validation errors in <code>Model.clean()</code> for fields that don’t appear in a model form (a form may limit its fields using <code>Meta.fields</code> or <code>Meta.exclude</code>). Doing so will raise a <code>ValueError</code> because the validation error won’t be able to be associated with the excluded field.</p> <p>To work around this dilemma, instead override <a class="reference internal" href="#django.db.models.Model.clean_fields" title="django.db.models.Model.clean_fields"><code>Model.clean_fields()</code></a> as it receives the list of fields that are excluded from validation. For example:</p> <pre data-language="python">class Article(models.Model):
+    ...
+    def clean_fields(self, exclude=None):
+        super().clean_fields(exclude=exclude)
+        if self.status == 'draft' and self.pub_date is not None:
+            if exclude and 'status' in exclude:
+                raise ValidationError(
+                    _('Draft entries may not have a publication date.')
+                )
+            else:
+                raise ValidationError({
+                    'status': _(
+                        'Set status to draft if there is not a '
+                        'publication date.'
+                     ),
+                })
+</pre> </div> <dl class="method"> <dt id="django.db.models.Model.validate_unique">
+<code>Model.validate_unique(exclude=None)</code> </dt> 
+</dl> <p>This method is similar to <a class="reference internal" href="#django.db.models.Model.clean_fields" title="django.db.models.Model.clean_fields"><code>clean_fields()</code></a>, but validates all uniqueness constraints on your model instead of individual field values. The optional <code>exclude</code> argument allows you to provide a list of field names to exclude from validation. It will raise a <a class="reference internal" href="../exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> if any fields fail validation.</p> <p>Note that if you provide an <code>exclude</code> argument to <code>validate_unique()</code>, any <a class="reference internal" href="options#django.db.models.Options.unique_together" title="django.db.models.Options.unique_together"><code>unique_together</code></a> constraint involving one of the fields you provided will not be checked.</p>   <h2 id="saving-objects">Saving objects</h2> <p id="s-saving-objects">To save an object back to the database, call <code>save()</code>:</p> <dl class="method"> <dt id="django.db.models.Model.save">
+<code>Model.save(force_insert=False, force_update=False, using=DEFAULT_DB_ALIAS, update_fields=None)</code> </dt> 
+</dl> <p>For details on using the <code>force_insert</code> and <code>force_update</code> arguments, see <a class="reference internal" href="#ref-models-force-insert"><span class="std std-ref">Forcing an INSERT or UPDATE</span></a>. Details about the <code>update_fields</code> argument can be found in the <a class="reference internal" href="#ref-models-update-fields"><span class="std std-ref">Specifying which fields to save</span></a> section.</p> <p>If you want customized saving behavior, you can override this <code>save()</code> method. See <a class="reference internal" href="../../topics/db/models#overriding-model-methods"><span class="std std-ref">Overriding predefined model methods</span></a> for more details.</p> <p>The model save process also has some subtleties; see the sections below.</p>  <h3 id="auto-incrementing-primary-keys">Auto-incrementing primary keys</h3> <p id="s-auto-incrementing-primary-keys">If a model has an <a class="reference internal" href="fields#django.db.models.AutoField" title="django.db.models.AutoField"><code>AutoField</code></a> — an auto-incrementing primary key — then that auto-incremented value will be calculated and saved as an attribute on your object the first time you call <code>save()</code>:</p> <pre data-language="python">&gt;&gt;&gt; b2 = Blog(name='Cheddar Talk', tagline='Thoughts on cheese.')
+&gt;&gt;&gt; b2.id     # Returns None, because b2 doesn't have an ID yet.
+&gt;&gt;&gt; b2.save()
+&gt;&gt;&gt; b2.id     # Returns the ID of your new object.
+</pre> <p>There’s no way to tell what the value of an ID will be before you call <code>save()</code>, because that value is calculated by your database, not by Django.</p> <p>For convenience, each model has an <a class="reference internal" href="fields#django.db.models.AutoField" title="django.db.models.AutoField"><code>AutoField</code></a> named <code>id</code> by default unless you explicitly specify <code>primary_key=True</code> on a field in your model. See the documentation for <a class="reference internal" href="fields#django.db.models.AutoField" title="django.db.models.AutoField"><code>AutoField</code></a> for more details.</p>  <h4 id="the-pk-property">The <code>pk</code> property</h4> <dl class="attribute" id="s-the-pk-property"> <dt id="django.db.models.Model.pk">
+<code>Model.pk</code> </dt> 
+</dl> <p>Regardless of whether you define a primary key field yourself, or let Django supply one for you, each model will have a property called <code>pk</code>. It behaves like a normal attribute on the model, but is actually an alias for whichever attribute is the primary key field for the model. You can read and set this value, just as you would for any other attribute, and it will update the correct field in the model.</p>   <h4 id="explicitly-specifying-auto-primary-key-values">Explicitly specifying auto-primary-key values</h4> <p id="s-explicitly-specifying-auto-primary-key-values">If a model has an <a class="reference internal" href="fields#django.db.models.AutoField" title="django.db.models.AutoField"><code>AutoField</code></a> but you want to define a new object’s ID explicitly when saving, define it explicitly before saving, rather than relying on the auto-assignment of the ID:</p> <pre data-language="python">&gt;&gt;&gt; b3 = Blog(id=3, name='Cheddar Talk', tagline='Thoughts on cheese.')
+&gt;&gt;&gt; b3.id     # Returns 3.
+&gt;&gt;&gt; b3.save()
+&gt;&gt;&gt; b3.id     # Returns 3.
+</pre> <p>If you assign auto-primary-key values manually, make sure not to use an already-existing primary-key value! If you create a new object with an explicit primary-key value that already exists in the database, Django will assume you’re changing the existing record rather than creating a new one.</p> <p>Given the above <code>'Cheddar Talk'</code> blog example, this example would override the previous record in the database:</p> <pre data-language="python">b4 = Blog(id=3, name='Not Cheddar', tagline='Anything but cheese.')
+b4.save()  # Overrides the previous blog with ID=3!
+</pre> <p>See <a class="reference internal" href="#how-django-knows-to-update-vs-insert">How Django knows to UPDATE vs. INSERT</a>, below, for the reason this happens.</p> <p>Explicitly specifying auto-primary-key values is mostly useful for bulk-saving objects, when you’re confident you won’t have primary-key collision.</p> <p>If you’re using PostgreSQL, the sequence associated with the primary key might need to be updated; see <a class="reference internal" href="../databases#manually-specified-autoincrement-pk"><span class="std std-ref">Manually-specifying values of auto-incrementing primary keys</span></a>.</p>    <h3 id="what-happens-when-you-save">What happens when you save?</h3> <p id="s-what-happens-when-you-save">When you save an object, Django performs the following steps:</p> <ol class="arabic"> <li>
+<strong>Emit a pre-save signal.</strong> The <a class="reference internal" href="../signals#django.db.models.signals.pre_save" title="django.db.models.signals.pre_save"><code>pre_save</code></a> signal is sent, allowing any functions listening for that signal to do something. </li> <li>
+<strong>Preprocess the data.</strong> Each field’s <a class="reference internal" href="fields#django.db.models.Field.pre_save" title="django.db.models.Field.pre_save"><code>pre_save()</code></a> method is called to perform any automated data modification that’s needed. For example, the date/time fields override <code>pre_save()</code> to implement <a class="reference internal" href="fields#django.db.models.DateField.auto_now_add" title="django.db.models.DateField.auto_now_add"><code>auto_now_add</code></a> and <a class="reference internal" href="fields#django.db.models.DateField.auto_now" title="django.db.models.DateField.auto_now"><code>auto_now</code></a>. </li> <li>
+<p class="first"><strong>Prepare the data for the database.</strong> Each field’s <a class="reference internal" href="fields#django.db.models.Field.get_db_prep_save" title="django.db.models.Field.get_db_prep_save"><code>get_db_prep_save()</code></a> method is asked to provide its current value in a data type that can be written to the database.</p> <p>Most fields don’t require data preparation. Simple data types, such as integers and strings, are ‘ready to write’ as a Python object. However, more complex data types often require some modification.</p> <p>For example, <a class="reference internal" href="fields#django.db.models.DateField" title="django.db.models.DateField"><code>DateField</code></a> fields use a Python <code>datetime</code> object to store data. Databases don’t store <code>datetime</code> objects, so the field value must be converted into an ISO-compliant date string for insertion into the database.</p> </li> <li>
+<strong>Insert the data into the database.</strong> The preprocessed, prepared data is composed into an SQL statement for insertion into the database. </li> <li>
+<strong>Emit a post-save signal.</strong> The <a class="reference internal" href="../signals#django.db.models.signals.post_save" title="django.db.models.signals.post_save"><code>post_save</code></a> signal is sent, allowing any functions listening for that signal to do something. </li> </ol>   <h3 id="how-django-knows-to-update-vs-insert">How Django knows to UPDATE vs. INSERT</h3> <p id="s-how-django-knows-to-update-vs-insert">You may have noticed Django database objects use the same <code>save()</code> method for creating and changing objects. Django abstracts the need to use <code>INSERT</code> or <code>UPDATE</code> SQL statements. Specifically, when you call <code>save()</code> and the object’s primary key attribute does <strong>not</strong> define a <a class="reference internal" href="fields#django.db.models.Field.default" title="django.db.models.Field.default"><code>default</code></a>, Django follows this algorithm:</p> <ul class="simple"> <li>If the object’s primary key attribute is set to a value that evaluates to <code>True</code> (i.e., a value other than <code>None</code> or the empty string), Django executes an <code>UPDATE</code>.</li> <li>If the object’s primary key attribute is <em>not</em> set or if the <code>UPDATE</code> didn’t update anything (e.g. if primary key is set to a value that doesn’t exist in the database), Django executes an <code>INSERT</code>.</li> </ul> <p>If the object’s primary key attribute defines a <a class="reference internal" href="fields#django.db.models.Field.default" title="django.db.models.Field.default"><code>default</code></a> then Django executes an <code>UPDATE</code> if it is an existing model instance and primary key is set to a value that exists in the database. Otherwise, Django executes an <code>INSERT</code>.</p> <p>The one gotcha here is that you should be careful not to specify a primary-key value explicitly when saving new objects, if you cannot guarantee the primary-key value is unused. For more on this nuance, see <a class="reference internal" href="#explicitly-specifying-auto-primary-key-values">Explicitly specifying auto-primary-key values</a> above and <a class="reference internal" href="#forcing-an-insert-or-update">Forcing an INSERT or UPDATE</a> below.</p> <p>In Django 1.5 and earlier, Django did a <code>SELECT</code> when the primary key attribute was set. If the <code>SELECT</code> found a row, then Django did an <code>UPDATE</code>, otherwise it did an <code>INSERT</code>. The old algorithm results in one more query in the <code>UPDATE</code> case. There are some rare cases where the database doesn’t report that a row was updated even if the database contains a row for the object’s primary key value. An example is the PostgreSQL <code>ON UPDATE</code> trigger which returns <code>NULL</code>. In such cases it is possible to revert to the old algorithm by setting the <a class="reference internal" href="options#django.db.models.Options.select_on_save" title="django.db.models.Options.select_on_save"><code>select_on_save</code></a> option to <code>True</code>.</p>  <h4 id="ref-models-force-insert">Forcing an INSERT or UPDATE</h4> <p id="s-forcing-an-insert-or-update">In some rare circumstances, it’s necessary to be able to force the <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a> method to perform an SQL <code>INSERT</code> and not fall back to doing an <code>UPDATE</code>. Or vice-versa: update, if possible, but not insert a new row. In these cases you can pass the <code>force_insert=True</code> or <code>force_update=True</code> parameters to the <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a> method. Passing both parameters is an error: you cannot both insert <em>and</em> update at the same time!</p> <p>It should be very rare that you’ll need to use these parameters. Django will almost always do the right thing and trying to override that will lead to errors that are difficult to track down. This feature is for advanced use only.</p> <p>Using <code>update_fields</code> will force an update similarly to <code>force_update</code>.</p>    <h3 id="ref-models-field-updates-using-f-expressions">Updating attributes based on existing fields</h3> <p id="s-updating-attributes-based-on-existing-fields">Sometimes you’ll need to perform a simple arithmetic task on a field, such as incrementing or decrementing the current value. One way of achieving this is doing the arithmetic in Python like:</p> <pre data-language="python">&gt;&gt;&gt; product = Product.objects.get(name='Venezuelan Beaver Cheese')
+&gt;&gt;&gt; product.number_sold += 1
+&gt;&gt;&gt; product.save()
+</pre> <p>If the old <code>number_sold</code> value retrieved from the database was 10, then the value of 11 will be written back to the database.</p> <p>The process can be made robust, <a class="reference internal" href="expressions#avoiding-race-conditions-using-f"><span class="std std-ref">avoiding a race condition</span></a>, as well as slightly faster by expressing the update relative to the original field value, rather than as an explicit assignment of a new value. Django provides <a class="reference internal" href="expressions#django.db.models.F" title="django.db.models.F"><code>F expressions</code></a> for performing this kind of relative update. Using <a class="reference internal" href="expressions#django.db.models.F" title="django.db.models.F"><code>F expressions</code></a>, the previous example is expressed as:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import F
+&gt;&gt;&gt; product = Product.objects.get(name='Venezuelan Beaver Cheese')
+&gt;&gt;&gt; product.number_sold = F('number_sold') + 1
+&gt;&gt;&gt; product.save()
+</pre> <p>For more details, see the documentation on <a class="reference internal" href="expressions#django.db.models.F" title="django.db.models.F"><code>F expressions</code></a> and their <a class="reference internal" href="../../topics/db/queries#topics-db-queries-update"><span class="std std-ref">use in update queries</span></a>.</p>   <h3 id="ref-models-update-fields">Specifying which fields to save</h3> <p id="s-specifying-which-fields-to-save">If <code>save()</code> is passed a list of field names in keyword argument <code>update_fields</code>, only the fields named in that list will be updated. This may be desirable if you want to update just one or a few fields on an object. There will be a slight performance benefit from preventing all of the model fields from being updated in the database. For example:</p> <pre data-language="python">product.name = 'Name changed again'
+product.save(update_fields=['name'])
+</pre> <p>The <code>update_fields</code> argument can be any iterable containing strings. An empty <code>update_fields</code> iterable will skip the save. A value of <code>None</code> will perform an update on all fields.</p> <p>Specifying <code>update_fields</code> will force an update.</p> <p>When saving a model fetched through deferred model loading (<a class="reference internal" href="querysets#django.db.models.query.QuerySet.only" title="django.db.models.query.QuerySet.only"><code>only()</code></a> or <a class="reference internal" href="querysets#django.db.models.query.QuerySet.defer" title="django.db.models.query.QuerySet.defer"><code>defer()</code></a>) only the fields loaded from the DB will get updated. In effect there is an automatic <code>update_fields</code> in this case. If you assign or change any deferred field value, the field will be added to the updated fields.</p>    <h2 id="deleting-objects">Deleting objects</h2> <dl class="method" id="s-deleting-objects"> <dt id="django.db.models.Model.delete">
+<code>Model.delete(using=DEFAULT_DB_ALIAS, keep_parents=False)</code> </dt> 
+</dl> <p>Issues an SQL <code>DELETE</code> for the object. This only deletes the object in the database; the Python instance will still exist and will still have data in its fields. This method returns the number of objects deleted and a dictionary with the number of deletions per object type.</p> <p>For more details, including how to delete objects in bulk, see <a class="reference internal" href="../../topics/db/queries#topics-db-queries-delete"><span class="std std-ref">Deleting objects</span></a>.</p> <p>If you want customized deletion behavior, you can override the <code>delete()</code> method. See <a class="reference internal" href="../../topics/db/models#overriding-model-methods"><span class="std std-ref">Overriding predefined model methods</span></a> for more details.</p> <p>Sometimes with <a class="reference internal" href="../../topics/db/models#multi-table-inheritance"><span class="std std-ref">multi-table inheritance</span></a> you may want to delete only a child model’s data. Specifying <code>keep_parents=True</code> will keep the parent model’s data.</p>   <h2 id="pickling-objects">Pickling objects</h2> <p id="s-pickling-objects">When you <a class="reference external" href="https://docs.python.org/3/library/pickle.html#module-pickle" title="(in Python v3.10)"><code>pickle</code></a> a model, its current state is pickled. When you unpickle it, it’ll contain the model instance at the moment it was pickled, rather than the data that’s currently in the database.</p> <div class="admonition-you-can-t-share-pickles-between-versions admonition"> <p class="first admonition-title">You can’t share pickles between versions</p> <p>Pickles of models are only valid for the version of Django that was used to generate them. If you generate a pickle using Django version N, there is no guarantee that pickle will be readable with Django version N+1. Pickles should not be used as part of a long-term archival strategy.</p> <p class="last">Since pickle compatibility errors can be difficult to diagnose, such as silently corrupted objects, a <code>RuntimeWarning</code> is raised when you try to unpickle a model in a Django version that is different than the one in which it was pickled.</p> </div>   <h2 id="model-instance-methods">Other model instance methods</h2> <p id="s-other-model-instance-methods">A few object methods have special purposes.</p>  <h3 id="str"><code>__str__()</code></h3> <dl class="method" id="s-str"> <dt id="django.db.models.Model.__str__">
+<code>Model.__str__()</code> </dt> 
+</dl> <p>The <code>__str__()</code> method is called whenever you call <code>str()</code> on an object. Django uses <code>str(obj)</code> in a number of places. Most notably, to display an object in the Django admin site and as the value inserted into a template when it displays an object. Thus, you should always return a nice, human-readable representation of the model from the <code>__str__()</code> method.</p> <p>For example:</p> <pre data-language="python">from django.db import models
+
+class Person(models.Model):
+    first_name = models.CharField(max_length=50)
+    last_name = models.CharField(max_length=50)
+
+    def __str__(self):
+        return '%s %s' % (self.first_name, self.last_name)
+</pre>   <h3 id="eq"><code>__eq__()</code></h3> <dl class="method" id="s-eq"> <dt id="django.db.models.Model.__eq__">
+<code>Model.__eq__()</code> </dt> 
+</dl> <p>The equality method is defined such that instances with the same primary key value and the same concrete class are considered equal, except that instances with a primary key value of <code>None</code> aren’t equal to anything except themselves. For proxy models, concrete class is defined as the model’s first non-proxy parent; for all other models it’s simply the model’s class.</p> <p>For example:</p> <pre data-language="python">from django.db import models
+
+class MyModel(models.Model):
+    id = models.AutoField(primary_key=True)
+
+class MyProxyModel(MyModel):
+    class Meta:
+        proxy = True
+
+class MultitableInherited(MyModel):
+    pass
+
+# Primary keys compared
+MyModel(id=1) == MyModel(id=1)
+MyModel(id=1) != MyModel(id=2)
+# Primary keys are None
+MyModel(id=None) != MyModel(id=None)
+# Same instance
+instance = MyModel(id=None)
+instance == instance
+# Proxy model
+MyModel(id=1) == MyProxyModel(id=1)
+# Multi-table inheritance
+MyModel(id=1) != MultitableInherited(id=1)
+</pre>   <h3 id="hash"><code>__hash__()</code></h3> <dl class="method" id="s-hash"> <dt id="django.db.models.Model.__hash__">
+<code>Model.__hash__()</code> </dt> 
+</dl> <p>The <code>__hash__()</code> method is based on the instance’s primary key value. It is effectively <code>hash(obj.pk)</code>. If the instance doesn’t have a primary key value then a <code>TypeError</code> will be raised (otherwise the <code>__hash__()</code> method would return different values before and after the instance is saved, but changing the <a class="reference external" href="https://docs.python.org/3/reference/datamodel.html#object.__hash__" title="(in Python v3.10)"><code>__hash__()</code></a> value of an instance is forbidden in Python.</p>   <h3 id="get-absolute-url"><code>get_absolute_url()</code></h3> <dl class="method" id="s-get-absolute-url"> <dt id="django.db.models.Model.get_absolute_url">
+<code>Model.get_absolute_url()</code> </dt> 
+</dl> <p>Define a <code>get_absolute_url()</code> method to tell Django how to calculate the canonical URL for an object. To callers, this method should appear to return a string that can be used to refer to the object over HTTP.</p> <p>For example:</p> <pre data-language="python">def get_absolute_url(self):
+    return "/people/%i/" % self.id
+</pre> <p>While this code is correct and simple, it may not be the most portable way to to write this kind of method. The <a class="reference internal" href="../urlresolvers#django.urls.reverse" title="django.urls.reverse"><code>reverse()</code></a> function is usually the best approach.</p> <p>For example:</p> <pre data-language="python">def get_absolute_url(self):
+    from django.urls import reverse
+    return reverse('people-detail', kwargs={'pk' : self.pk})
+</pre> <p>One place Django uses <code>get_absolute_url()</code> is in the admin app. If an object defines this method, the object-editing page will have a “View on site” link that will jump you directly to the object’s public view, as given by <code>get_absolute_url()</code>.</p> <p>Similarly, a couple of other bits of Django, such as the <a class="reference internal" href="../contrib/syndication"><span class="doc">syndication feed framework</span></a>, use <code>get_absolute_url()</code> when it is defined. If it makes sense for your model’s instances to each have a unique URL, you should define <code>get_absolute_url()</code>.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>You should avoid building the URL from unvalidated user input, in order to reduce possibilities of link or redirect poisoning:</p> <pre data-language="python">def get_absolute_url(self):
+    return '/%s/' % self.name
+</pre> <p class="last">If <code>self.name</code> is <code>'/example.com'</code> this returns <code>'//example.com/'</code> which, in turn, is a valid schema relative URL but not the expected <code>'/%2Fexample.com/'</code>.</p> </div> <p>It’s good practice to use <code>get_absolute_url()</code> in templates, instead of hard-coding your objects’ URLs. For example, this template code is bad:</p> <pre data-language="markup">&lt;!-- BAD template code. Avoid! --&gt;
+&lt;a href="/people/{{ object.id }}/"&gt;{{ object.name }}&lt;/a&gt;
+</pre> <p>This template code is much better:</p> <pre data-language="markup">&lt;a href="{{ object.get_absolute_url }}"&gt;{{ object.name }}&lt;/a&gt;
+</pre> <p>The logic here is that if you change the URL structure of your objects, even for something small like correcting a spelling error, you don’t want to have to track down every place that the URL might be created. Specify it once, in <code>get_absolute_url()</code> and have all your other code call that one place.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>The string you return from <code>get_absolute_url()</code> <strong>must</strong> contain only ASCII characters (required by the URI specification, <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2396.html#section-2" id="index-0"><strong>RFC 2396#section-2</strong></a>) and be URL-encoded, if necessary.</p> <p class="last">Code and templates calling <code>get_absolute_url()</code> should be able to use the result directly without any further processing. You may wish to use the <code>django.utils.encoding.iri_to_uri()</code> function to help with this if you are using strings containing characters outside the ASCII range.</p> </div>    <h2 id="extra-instance-methods">Extra instance methods</h2> <p id="s-extra-instance-methods">In addition to <a class="reference internal" href="#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a>, <a class="reference internal" href="#django.db.models.Model.delete" title="django.db.models.Model.delete"><code>delete()</code></a>, a model object might have some of the following methods:</p> <dl class="method"> <dt id="django.db.models.Model.get_FOO_display">
+<code>Model.get_FOO_display()</code> </dt> 
+</dl> <p>For every field that has <a class="reference internal" href="fields#django.db.models.Field.choices" title="django.db.models.Field.choices"><code>choices</code></a> set, the object will have a <code>get_FOO_display()</code> method, where <code>FOO</code> is the name of the field. This method returns the “human-readable” value of the field.</p> <p>For example:</p> <pre data-language="python">from django.db import models
+
+class Person(models.Model):
+    SHIRT_SIZES = (
+        ('S', 'Small'),
+        ('M', 'Medium'),
+        ('L', 'Large'),
+    )
+    name = models.CharField(max_length=60)
+    shirt_size = models.CharField(max_length=2, choices=SHIRT_SIZES)
+</pre> <pre data-language="python">&gt;&gt;&gt; p = Person(name="Fred Flintstone", shirt_size="L")
+&gt;&gt;&gt; p.save()
+&gt;&gt;&gt; p.shirt_size
+'L'
+&gt;&gt;&gt; p.get_shirt_size_display()
+'Large'
+</pre> <dl class="method"> <dt id="django.db.models.Model.get_next_by_FOO">
+<code>Model.get_next_by_FOO(**kwargs)</code> </dt> 
+</dl> <dl class="method"> <dt id="django.db.models.Model.get_previous_by_FOO">
+<code>Model.get_previous_by_FOO(**kwargs)</code> </dt> 
+</dl> <p>For every <a class="reference internal" href="fields#django.db.models.DateField" title="django.db.models.DateField"><code>DateField</code></a> and <a class="reference internal" href="fields#django.db.models.DateTimeField" title="django.db.models.DateTimeField"><code>DateTimeField</code></a> that does not have <a class="reference internal" href="fields#django.db.models.Field.null" title="django.db.models.Field.null"><code>null=True</code></a>, the object will have <code>get_next_by_FOO()</code> and <code>get_previous_by_FOO()</code> methods, where <code>FOO</code> is the name of the field. This returns the next and previous object with respect to the date field, raising a <a class="reference internal" href="class#django.db.models.Model.DoesNotExist" title="django.db.models.Model.DoesNotExist"><code>DoesNotExist</code></a> exception when appropriate.</p> <p>Both of these methods will perform their queries using the default manager for the model. If you need to emulate filtering used by a custom manager, or want to perform one-off custom filtering, both methods also accept optional keyword arguments, which should be in the format described in <a class="reference internal" href="querysets#field-lookups"><span class="std std-ref">Field lookups</span></a>.</p> <p>Note that in the case of identical date values, these methods will use the primary key as a tie-breaker. This guarantees that no records are skipped or duplicated. That also means you cannot use those methods on unsaved objects.</p> <div class="admonition-overriding-extra-instance-methods admonition"> <p class="first admonition-title">Overriding extra instance methods</p> <p class="last">In most cases overriding or inheriting <code>get_FOO_display()</code>, <code>get_next_by_FOO()</code>, and <code>get_previous_by_FOO()</code> should work as expected. Since they are added by the metaclass however, it is not practical to account for all possible inheritance structures. In more complex cases you should override <code>Field.contribute_to_class()</code> to set the methods you need.</p> </div>   <h2 id="other-attributes">Other attributes</h2>  <h3 id="state"><code>_state</code></h3> <dl class="attribute" id="s-other-attributes"> <dt id="django.db.models.Model._state">
+<code>Model._state</code> </dt> <dd>
+<p>The <code>_state</code> attribute refers to a <code>ModelState</code> object that tracks the lifecycle of the model instance.</p> <p>The <code>ModelState</code> object has two attributes: <code>adding</code>, a flag which is <code>True</code> if the model has not been saved to the database yet, and <code>db</code>, a string referring to the database alias the instance was loaded from or saved to.</p> <p>Newly instantiated instances have <code>adding=True</code> and <code>db=None</code>, since they are yet to be saved. Instances fetched from a <code>QuerySet</code> will have <code>adding=False</code> and <code>db</code> set to the alias of the associated database.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/models/instances/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/models/instances/</a>
+  </p>
+</div>

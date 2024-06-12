@@ -1,0 +1,160 @@
+<h1 id="email-headerregistry-custom-header-objects">email.headerregistry: Custom Header Objects</h1> <p id="module-email.headerregistry"><strong>Source code:</strong> <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/email/headerregistry.py">Lib/email/headerregistry.py</a></p>  <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6: </span><a class="footnote-reference brackets" href="#id2" id="id1">1</a></p> </div> <p>Headers are represented by customized subclasses of <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a>. The particular class used to represent a given header is determined by the <a class="reference internal" href="email.policy#email.policy.EmailPolicy.header_factory" title="email.policy.EmailPolicy.header_factory"><code>header_factory</code></a> of the <a class="reference internal" href="email.policy#module-email.policy" title="email.policy: Controlling the parsing and generating of messages"><code>policy</code></a> in effect when the headers are created. This section documents the particular <code>header_factory</code> implemented by the email package for handling <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-0"><strong>RFC 5322</strong></a> compliant email messages, which not only provides customized header objects for various header types, but also provides an extension mechanism for applications to add their own custom header types.</p> <p>When using any of the policy objects derived from <a class="reference internal" href="email.policy#email.policy.EmailPolicy" title="email.policy.EmailPolicy"><code>EmailPolicy</code></a>, all headers are produced by <a class="reference internal" href="#email.headerregistry.HeaderRegistry" title="email.headerregistry.HeaderRegistry"><code>HeaderRegistry</code></a> and have <a class="reference internal" href="#email.headerregistry.BaseHeader" title="email.headerregistry.BaseHeader"><code>BaseHeader</code></a> as their last base class. Each header class has an additional base class that is determined by the type of the header. For example, many headers have the class <a class="reference internal" href="#email.headerregistry.UnstructuredHeader" title="email.headerregistry.UnstructuredHeader"><code>UnstructuredHeader</code></a> as their other base class. The specialized second class for a header is determined by the name of the header, using a lookup table stored in the <a class="reference internal" href="#email.headerregistry.HeaderRegistry" title="email.headerregistry.HeaderRegistry"><code>HeaderRegistry</code></a>. All of this is managed transparently for the typical application program, but interfaces are provided for modifying the default behavior for use by more complex applications.</p> <p>The sections below first document the header base classes and their attributes, followed by the API for modifying the behavior of <a class="reference internal" href="#email.headerregistry.HeaderRegistry" title="email.headerregistry.HeaderRegistry"><code>HeaderRegistry</code></a>, and finally the support classes used to represent the data parsed from structured headers.</p> <dl class="class"> <dt id="email.headerregistry.BaseHeader">
+<code>class email.headerregistry.BaseHeader(name, value)</code> </dt> <dd>
+<p><em>name</em> and <em>value</em> are passed to <code>BaseHeader</code> from the <a class="reference internal" href="email.policy#email.policy.EmailPolicy.header_factory" title="email.policy.EmailPolicy.header_factory"><code>header_factory</code></a> call. The string value of any header object is the <em>value</em> fully decoded to unicode.</p> <p>This base class defines the following read-only properties:</p> <dl class="attribute"> <dt id="email.headerregistry.BaseHeader.name">
+<code>name</code> </dt> <dd>
+<p>The name of the header (the portion of the field before the ‘:’). This is exactly the value passed in the <a class="reference internal" href="email.policy#email.policy.EmailPolicy.header_factory" title="email.policy.EmailPolicy.header_factory"><code>header_factory</code></a> call for <em>name</em>; that is, case is preserved.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.BaseHeader.defects">
+<code>defects</code> </dt> <dd>
+<p>A tuple of <code>HeaderDefect</code> instances reporting any RFC compliance problems found during parsing. The email package tries to be complete about detecting compliance issues. See the <a class="reference internal" href="email.errors#module-email.errors" title="email.errors: The exception classes used by the email package."><code>errors</code></a> module for a discussion of the types of defects that may be reported.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.BaseHeader.max_count">
+<code>max_count</code> </dt> <dd>
+<p>The maximum number of headers of this type that can have the same <code>name</code>. A value of <code>None</code> means unlimited. The <code>BaseHeader</code> value for this attribute is <code>None</code>; it is expected that specialized header classes will override this value as needed.</p> </dd>
+</dl> <p><code>BaseHeader</code> also provides the following method, which is called by the email library code and should not in general be called by application programs:</p> <dl class="method"> <dt id="email.headerregistry.BaseHeader.fold">
+<code>fold(*, policy)</code> </dt> <dd>
+<p>Return a string containing <a class="reference internal" href="email.policy#email.policy.Policy.linesep" title="email.policy.Policy.linesep"><code>linesep</code></a> characters as required to correctly fold the header according to <em>policy</em>. A <a class="reference internal" href="email.policy#email.policy.Policy.cte_type" title="email.policy.Policy.cte_type"><code>cte_type</code></a> of <code>8bit</code> will be treated as if it were <code>7bit</code>, since headers may not contain arbitrary binary data. If <a class="reference internal" href="email.policy#email.policy.EmailPolicy.utf8" title="email.policy.EmailPolicy.utf8"><code>utf8</code></a> is <code>False</code>, non-ASCII data will be <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2047.html" id="index-1"><strong>RFC 2047</strong></a> encoded.</p> </dd>
+</dl> <p><code>BaseHeader</code> by itself cannot be used to create a header object. It defines a protocol that each specialized header cooperates with in order to produce the header object. Specifically, <code>BaseHeader</code> requires that the specialized class provide a <a class="reference internal" href="functions#classmethod" title="classmethod"><code>classmethod()</code></a> named <code>parse</code>. This method is called as follows:</p> <pre data-language="python">parse(string, kwds)
+</pre> <p><code>kwds</code> is a dictionary containing one pre-initialized key, <code>defects</code>. <code>defects</code> is an empty list. The parse method should append any detected defects to this list. On return, the <code>kwds</code> dictionary <em>must</em> contain values for at least the keys <code>decoded</code> and <code>defects</code>. <code>decoded</code> should be the string value for the header (that is, the header value fully decoded to unicode). The parse method should assume that <em>string</em> may contain content-transfer-encoded parts, but should correctly handle all valid unicode characters as well so that it can parse un-encoded header values.</p> <p><code>BaseHeader</code>’s <code>__new__</code> then creates the header instance, and calls its <code>init</code> method. The specialized class only needs to provide an <code>init</code> method if it wishes to set additional attributes beyond those provided by <code>BaseHeader</code> itself. Such an <code>init</code> method should look like this:</p> <pre data-language="python">def init(self, /, *args, **kw):
+    self._myattr = kw.pop('myattr')
+    super().init(*args, **kw)
+</pre> <p>That is, anything extra that the specialized class puts in to the <code>kwds</code> dictionary should be removed and handled, and the remaining contents of <code>kw</code> (and <code>args</code>) passed to the <code>BaseHeader</code> <code>init</code> method.</p> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.UnstructuredHeader">
+<code>class email.headerregistry.UnstructuredHeader</code> </dt> <dd>
+<p>An “unstructured” header is the default type of header in <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-2"><strong>RFC 5322</strong></a>. Any header that does not have a specified syntax is treated as unstructured. The classic example of an unstructured header is the <em class="mailheader">Subject</em> header.</p> <p>In <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-3"><strong>RFC 5322</strong></a>, an unstructured header is a run of arbitrary text in the ASCII character set. <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2047.html" id="index-4"><strong>RFC 2047</strong></a>, however, has an <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-5"><strong>RFC 5322</strong></a> compatible mechanism for encoding non-ASCII text as ASCII characters within a header value. When a <em>value</em> containing encoded words is passed to the constructor, the <code>UnstructuredHeader</code> parser converts such encoded words into unicode, following the <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2047.html" id="index-6"><strong>RFC 2047</strong></a> rules for unstructured text. The parser uses heuristics to attempt to decode certain non-compliant encoded words. Defects are registered in such cases, as well as defects for issues such as invalid characters within the encoded words or the non-encoded text.</p> <p>This header type provides no additional attributes.</p> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.DateHeader">
+<code>class email.headerregistry.DateHeader</code> </dt> <dd>
+<p><a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-7"><strong>RFC 5322</strong></a> specifies a very specific format for dates within email headers. The <code>DateHeader</code> parser recognizes that date format, as well as recognizing a number of variant forms that are sometimes found “in the wild”.</p> <p>This header type provides the following additional attributes:</p> <dl class="attribute"> <dt id="email.headerregistry.DateHeader.datetime">
+<code>datetime</code> </dt> <dd>
+<p>If the header value can be recognized as a valid date of one form or another, this attribute will contain a <a class="reference internal" href="datetime#datetime.datetime" title="datetime.datetime"><code>datetime</code></a> instance representing that date. If the timezone of the input date is specified as <code>-0000</code> (indicating it is in UTC but contains no information about the source timezone), then <a class="reference internal" href="#email.headerregistry.DateHeader.datetime" title="email.headerregistry.DateHeader.datetime"><code>datetime</code></a> will be a naive <a class="reference internal" href="datetime#datetime.datetime" title="datetime.datetime"><code>datetime</code></a>. If a specific timezone offset is found (including <code>+0000</code>), then <a class="reference internal" href="#email.headerregistry.DateHeader.datetime" title="email.headerregistry.DateHeader.datetime"><code>datetime</code></a> will contain an aware <code>datetime</code> that uses <a class="reference internal" href="datetime#datetime.timezone" title="datetime.timezone"><code>datetime.timezone</code></a> to record the timezone offset.</p> </dd>
+</dl> <p>The <code>decoded</code> value of the header is determined by formatting the <code>datetime</code> according to the <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-8"><strong>RFC 5322</strong></a> rules; that is, it is set to:</p> <pre data-language="python">email.utils.format_datetime(self.datetime)
+</pre> <p>When creating a <code>DateHeader</code>, <em>value</em> may be <a class="reference internal" href="datetime#datetime.datetime" title="datetime.datetime"><code>datetime</code></a> instance. This means, for example, that the following code is valid and does what one would expect:</p> <pre data-language="python">msg['Date'] = datetime(2011, 7, 15, 21)
+</pre> <p>Because this is a naive <code>datetime</code> it will be interpreted as a UTC timestamp, and the resulting value will have a timezone of <code>-0000</code>. Much more useful is to use the <a class="reference internal" href="email.utils#email.utils.localtime" title="email.utils.localtime"><code>localtime()</code></a> function from the <a class="reference internal" href="email.utils#module-email.utils" title="email.utils: Miscellaneous email package utilities."><code>utils</code></a> module:</p> <pre data-language="python">msg['Date'] = utils.localtime()
+</pre> <p>This example sets the date header to the current time and date using the current timezone offset.</p> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.AddressHeader">
+<code>class email.headerregistry.AddressHeader</code> </dt> <dd>
+<p>Address headers are one of the most complex structured header types. The <code>AddressHeader</code> class provides a generic interface to any address header.</p> <p>This header type provides the following additional attributes:</p> <dl class="attribute"> <dt id="email.headerregistry.AddressHeader.groups">
+<code>groups</code> </dt> <dd>
+<p>A tuple of <a class="reference internal" href="#email.headerregistry.Group" title="email.headerregistry.Group"><code>Group</code></a> objects encoding the addresses and groups found in the header value. Addresses that are not part of a group are represented in this list as single-address <code>Groups</code> whose <a class="reference internal" href="#email.headerregistry.Group.display_name" title="email.headerregistry.Group.display_name"><code>display_name</code></a> is <code>None</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.AddressHeader.addresses">
+<code>addresses</code> </dt> <dd>
+<p>A tuple of <a class="reference internal" href="#email.headerregistry.Address" title="email.headerregistry.Address"><code>Address</code></a> objects encoding all of the individual addresses from the header value. If the header value contains any groups, the individual addresses from the group are included in the list at the point where the group occurs in the value (that is, the list of addresses is “flattened” into a one dimensional list).</p> </dd>
+</dl> <p>The <code>decoded</code> value of the header will have all encoded words decoded to unicode. <a class="reference internal" href="codecs#module-encodings.idna" title="encodings.idna: Internationalized Domain Names implementation"><code>idna</code></a> encoded domain names are also decoded to unicode. The <code>decoded</code> value is set by <a class="reference internal" href="stdtypes#str.join" title="str.join"><code>join</code></a>ing the <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a> value of the elements of the <code>groups</code> attribute with <code>',
+'</code>.</p> <p>A list of <a class="reference internal" href="#email.headerregistry.Address" title="email.headerregistry.Address"><code>Address</code></a> and <a class="reference internal" href="#email.headerregistry.Group" title="email.headerregistry.Group"><code>Group</code></a> objects in any combination may be used to set the value of an address header. <code>Group</code> objects whose <code>display_name</code> is <code>None</code> will be interpreted as single addresses, which allows an address list to be copied with groups intact by using the list obtained from the <code>groups</code> attribute of the source header.</p> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.SingleAddressHeader">
+<code>class email.headerregistry.SingleAddressHeader</code> </dt> <dd>
+<p>A subclass of <a class="reference internal" href="#email.headerregistry.AddressHeader" title="email.headerregistry.AddressHeader"><code>AddressHeader</code></a> that adds one additional attribute:</p> <dl class="attribute"> <dt id="email.headerregistry.SingleAddressHeader.address">
+<code>address</code> </dt> <dd>
+<p>The single address encoded by the header value. If the header value actually contains more than one address (which would be a violation of the RFC under the default <a class="reference internal" href="email.policy#module-email.policy" title="email.policy: Controlling the parsing and generating of messages"><code>policy</code></a>), accessing this attribute will result in a <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a>.</p> </dd>
+</dl> </dd>
+</dl> <p>Many of the above classes also have a <code>Unique</code> variant (for example, <code>UniqueUnstructuredHeader</code>). The only difference is that in the <code>Unique</code> variant, <a class="reference internal" href="#email.headerregistry.BaseHeader.max_count" title="email.headerregistry.BaseHeader.max_count"><code>max_count</code></a> is set to 1.</p> <dl class="class"> <dt id="email.headerregistry.MIMEVersionHeader">
+<code>class email.headerregistry.MIMEVersionHeader</code> </dt> <dd>
+<p>There is really only one valid value for the <em class="mailheader">MIME-Version</em> header, and that is <code>1.0</code>. For future proofing, this header class supports other valid version numbers. If a version number has a valid value per <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2045.html" id="index-9"><strong>RFC 2045</strong></a>, then the header object will have non-<code>None</code> values for the following attributes:</p> <dl class="attribute"> <dt id="email.headerregistry.MIMEVersionHeader.version">
+<code>version</code> </dt> <dd>
+<p>The version number as a string, with any whitespace and/or comments removed.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.MIMEVersionHeader.major">
+<code>major</code> </dt> <dd>
+<p>The major version number as an integer</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.MIMEVersionHeader.minor">
+<code>minor</code> </dt> <dd>
+<p>The minor version number as an integer</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.ParameterizedMIMEHeader">
+<code>class email.headerregistry.ParameterizedMIMEHeader</code> </dt> <dd>
+<p>MIME headers all start with the prefix ‘Content-‘. Each specific header has a certain value, described under the class for that header. Some can also take a list of supplemental parameters, which have a common format. This class serves as a base for all the MIME headers that take parameters.</p> <dl class="attribute"> <dt id="email.headerregistry.ParameterizedMIMEHeader.params">
+<code>params</code> </dt> <dd>
+<p>A dictionary mapping parameter names to parameter values.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.ContentTypeHeader">
+<code>class email.headerregistry.ContentTypeHeader</code> </dt> <dd>
+<p>A <a class="reference internal" href="#email.headerregistry.ParameterizedMIMEHeader" title="email.headerregistry.ParameterizedMIMEHeader"><code>ParameterizedMIMEHeader</code></a> class that handles the <em class="mailheader">Content-Type</em> header.</p> <dl class="attribute"> <dt id="email.headerregistry.ContentTypeHeader.content_type">
+<code>content_type</code> </dt> <dd>
+<p>The content type string, in the form <code>maintype/subtype</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.ContentTypeHeader.maintype">
+<code>maintype</code> </dt> 
+</dl> <dl class="attribute"> <dt id="email.headerregistry.ContentTypeHeader.subtype">
+<code>subtype</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.ContentDispositionHeader">
+<code>class email.headerregistry.ContentDispositionHeader</code> </dt> <dd>
+<p>A <a class="reference internal" href="#email.headerregistry.ParameterizedMIMEHeader" title="email.headerregistry.ParameterizedMIMEHeader"><code>ParameterizedMIMEHeader</code></a> class that handles the <em class="mailheader">Content-Disposition</em> header.</p> <dl class="attribute"> <dt id="email.headerregistry.ContentDispositionHeader.content_disposition">
+<code>content_disposition</code> </dt> <dd>
+<p><code>inline</code> and <code>attachment</code> are the only valid values in common use.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.ContentTransferEncoding">
+<code>class email.headerregistry.ContentTransferEncoding</code> </dt> <dd>
+<p>Handles the <em class="mailheader">Content-Transfer-Encoding</em> header.</p> <dl class="attribute"> <dt id="email.headerregistry.ContentTransferEncoding.cte">
+<code>cte</code> </dt> <dd>
+<p>Valid values are <code>7bit</code>, <code>8bit</code>, <code>base64</code>, and <code>quoted-printable</code>. See <a class="rfc reference external" href="https://tools.ietf.org/html/rfc2045.html" id="index-10"><strong>RFC 2045</strong></a> for more information.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.HeaderRegistry">
+<code>class email.headerregistry.HeaderRegistry(base_class=BaseHeader, default_class=UnstructuredHeader, use_default_map=True)</code> </dt> <dd>
+<p>This is the factory used by <a class="reference internal" href="email.policy#email.policy.EmailPolicy" title="email.policy.EmailPolicy"><code>EmailPolicy</code></a> by default. <code>HeaderRegistry</code> builds the class used to create a header instance dynamically, using <em>base_class</em> and a specialized class retrieved from a registry that it holds. When a given header name does not appear in the registry, the class specified by <em>default_class</em> is used as the specialized class. When <em>use_default_map</em> is <code>True</code> (the default), the standard mapping of header names to classes is copied in to the registry during initialization. <em>base_class</em> is always the last class in the generated class’s <code>__bases__</code> list.</p> <p>The default mappings are:</p>  <dl class="field-list simple"> <dt class="field-odd">subject</dt> <dd class="field-odd">
+<p>UniqueUnstructuredHeader</p> </dd> <dt class="field-even">date</dt> <dd class="field-even">
+<p>UniqueDateHeader</p> </dd> <dt class="field-odd">resent-date</dt> <dd class="field-odd">
+<p>DateHeader</p> </dd> <dt class="field-even">orig-date</dt> <dd class="field-even">
+<p>UniqueDateHeader</p> </dd> <dt class="field-odd">sender</dt> <dd class="field-odd">
+<p>UniqueSingleAddressHeader</p> </dd> <dt class="field-even">resent-sender</dt> <dd class="field-even">
+<p>SingleAddressHeader</p> </dd> <dt class="field-odd">to</dt> <dd class="field-odd">
+<p>UniqueAddressHeader</p> </dd> <dt class="field-even">resent-to</dt> <dd class="field-even">
+<p>AddressHeader</p> </dd> <dt class="field-odd">cc</dt> <dd class="field-odd">
+<p>UniqueAddressHeader</p> </dd> <dt class="field-even">resent-cc</dt> <dd class="field-even">
+<p>AddressHeader</p> </dd> <dt class="field-odd">bcc</dt> <dd class="field-odd">
+<p>UniqueAddressHeader</p> </dd> <dt class="field-even">resent-bcc</dt> <dd class="field-even">
+<p>AddressHeader</p> </dd> <dt class="field-odd">from</dt> <dd class="field-odd">
+<p>UniqueAddressHeader</p> </dd> <dt class="field-even">resent-from</dt> <dd class="field-even">
+<p>AddressHeader</p> </dd> <dt class="field-odd">reply-to</dt> <dd class="field-odd">
+<p>UniqueAddressHeader</p> </dd> <dt class="field-even">mime-version</dt> <dd class="field-even">
+<p>MIMEVersionHeader</p> </dd> <dt class="field-odd">content-type</dt> <dd class="field-odd">
+<p>ContentTypeHeader</p> </dd> <dt class="field-even">content-disposition</dt> <dd class="field-even">
+<p>ContentDispositionHeader</p> </dd> <dt class="field-odd">content-transfer-encoding</dt> <dd class="field-odd">
+<p>ContentTransferEncodingHeader</p> </dd> <dt class="field-even">message-id</dt> <dd class="field-even">
+<p>MessageIDHeader</p> </dd> </dl>  <p><code>HeaderRegistry</code> has the following methods:</p> <dl class="method"> <dt id="email.headerregistry.HeaderRegistry.map_to_type">
+<code>map_to_type(self, name, cls)</code> </dt> <dd>
+<p><em>name</em> is the name of the header to be mapped. It will be converted to lower case in the registry. <em>cls</em> is the specialized class to be used, along with <em>base_class</em>, to create the class used to instantiate headers that match <em>name</em>.</p> </dd>
+</dl> <dl class="method"> <dt id="email.headerregistry.HeaderRegistry.__getitem__">
+<code>__getitem__(name)</code> </dt> <dd>
+<p>Construct and return a class to handle creating a <em>name</em> header.</p> </dd>
+</dl> <dl class="method"> <dt id="email.headerregistry.HeaderRegistry.__call__">
+<code>__call__(name, value)</code> </dt> <dd>
+<p>Retrieves the specialized header associated with <em>name</em> from the registry (using <em>default_class</em> if <em>name</em> does not appear in the registry) and composes it with <em>base_class</em> to produce a class, calls the constructed class’s constructor, passing it the same argument list, and finally returns the class instance created thereby.</p> </dd>
+</dl> </dd>
+</dl> <p>The following classes are the classes used to represent data parsed from structured headers and can, in general, be used by an application program to construct structured values to assign to specific headers.</p> <dl class="class"> <dt id="email.headerregistry.Address">
+<code>class email.headerregistry.Address(display_name='', username='', domain='', addr_spec=None)</code> </dt> <dd>
+<p>The class used to represent an email address. The general form of an address is:</p> <pre data-language="python">[display_name] &lt;username@domain&gt;
+</pre> <p>or:</p> <pre data-language="python">username@domain
+</pre> <p>where each part must conform to specific syntax rules spelled out in <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-11"><strong>RFC 5322</strong></a>.</p> <p>As a convenience <em>addr_spec</em> can be specified instead of <em>username</em> and <em>domain</em>, in which case <em>username</em> and <em>domain</em> will be parsed from the <em>addr_spec</em>. An <em>addr_spec</em> must be a properly RFC quoted string; if it is not <code>Address</code> will raise an error. Unicode characters are allowed and will be property encoded when serialized. However, per the RFCs, unicode is <em>not</em> allowed in the username portion of the address.</p> <dl class="attribute"> <dt id="email.headerregistry.Address.display_name">
+<code>display_name</code> </dt> <dd>
+<p>The display name portion of the address, if any, with all quoting removed. If the address does not have a display name, this attribute will be an empty string.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.Address.username">
+<code>username</code> </dt> <dd>
+<p>The <code>username</code> portion of the address, with all quoting removed.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.Address.domain">
+<code>domain</code> </dt> <dd>
+<p>The <code>domain</code> portion of the address.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.Address.addr_spec">
+<code>addr_spec</code> </dt> <dd>
+<p>The <code>username@domain</code> portion of the address, correctly quoted for use as a bare address (the second form shown above). This attribute is not mutable.</p> </dd>
+</dl> <dl class="method"> <dt id="email.headerregistry.Address.__str__">
+<code>__str__()</code> </dt> <dd>
+<p>The <code>str</code> value of the object is the address quoted according to <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-12"><strong>RFC 5322</strong></a> rules, but with no Content Transfer Encoding of any non-ASCII characters.</p> </dd>
+</dl> <p>To support SMTP (<a class="rfc reference external" href="https://tools.ietf.org/html/rfc5321.html" id="index-13"><strong>RFC 5321</strong></a>), <code>Address</code> handles one special case: if <code>username</code> and <code>domain</code> are both the empty string (or <code>None</code>), then the string value of the <code>Address</code> is <code>&lt;&gt;</code>.</p> </dd>
+</dl> <dl class="class"> <dt id="email.headerregistry.Group">
+<code>class email.headerregistry.Group(display_name=None, addresses=None)</code> </dt> <dd>
+<p>The class used to represent an address group. The general form of an address group is:</p> <pre data-language="python">display_name: [address-list];
+</pre> <p>As a convenience for processing lists of addresses that consist of a mixture of groups and single addresses, a <code>Group</code> may also be used to represent single addresses that are not part of a group by setting <em>display_name</em> to <code>None</code> and providing a list of the single address as <em>addresses</em>.</p> <dl class="attribute"> <dt id="email.headerregistry.Group.display_name">
+<code>display_name</code> </dt> <dd>
+<p>The <code>display_name</code> of the group. If it is <code>None</code> and there is exactly one <code>Address</code> in <code>addresses</code>, then the <code>Group</code> represents a single address that is not in a group.</p> </dd>
+</dl> <dl class="attribute"> <dt id="email.headerregistry.Group.addresses">
+<code>addresses</code> </dt> <dd>
+<p>A possibly empty tuple of <a class="reference internal" href="#email.headerregistry.Address" title="email.headerregistry.Address"><code>Address</code></a> objects representing the addresses in the group.</p> </dd>
+</dl> <dl class="method"> <dt id="email.headerregistry.Group.__str__">
+<code>__str__()</code> </dt> <dd>
+<p>The <code>str</code> value of a <code>Group</code> is formatted according to <a class="rfc reference external" href="https://tools.ietf.org/html/rfc5322.html" id="index-14"><strong>RFC 5322</strong></a>, but with no Content Transfer Encoding of any non-ASCII characters. If <code>display_name</code> is none and there is a single <code>Address</code> in the <code>addresses</code> list, the <code>str</code> value will be the same as the <code>str</code> of that single <code>Address</code>.</p> </dd>
+</dl> </dd>
+</dl> <h4 class="rubric">Footnotes</h4> <dl class="footnote brackets"> <dt class="label" id="id2">
+<code>1</code> </dt> <dd>
+<p>Originally added in 3.3 as a <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-provisional-package"><span class="xref std std-term">provisional module</span></a></p> </dd> </dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/email.headerregistry.html" class="_attribution-link">https://docs.python.org/3.9/library/email.headerregistry.html</a>
+  </p>
+</div>

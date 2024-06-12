@@ -1,0 +1,926 @@
+# Enhancing performance
+
+In this part of the tutorial, we will investigate how to speed up certain
+functions operating on pandas `DataFrames` using three different techniques:
+Cython, Numba and `pandas.eval()`. We will see a speed improvement of ~200
+when we use Cython and Numba on a test function operating row-wise on the
+`DataFrame`. Using `pandas.eval()` we will speed up a sum by an order of ~2.
+
+Note
+
+In addition to following the steps in this tutorial, users interested in
+enhancing performance are highly encouraged to install the recommended
+dependencies for pandas. These dependencies are often not installed by
+default, but will offer speed improvements if present.
+
+## Cython (writing C extensions for pandas)
+
+For many use cases writing pandas in pure Python and NumPy is sufficient. In
+some computationally heavy applications however, it can be possible to achieve
+sizable speed-ups by offloading work to cython.
+
+This tutorial assumes you have refactored as much as possible in Python, for
+example by trying to remove for-loops and making use of NumPy vectorization.
+It’s always worth optimising in Python first.
+
+This tutorial walks through a “typical” process of cythonizing a slow
+computation. We use an example from the Cython documentation but in the
+context of pandas. Our final cythonized solution is around 100 times faster
+than the pure Python solution.
+
+### Pure Python
+
+We have a `DataFrame` to which we want to apply a function row-wise.
+
+    
+    In [1]: df = pd.DataFrame(
+       ...:     {
+       ...:         "a": np.random.randn(1000),
+       ...:         "b": np.random.randn(1000),
+       ...:         "N": np.random.randint(100, 1000, (1000)),
+       ...:         "x": "x",
+       ...:     }
+       ...: )
+       ...: 
+    
+    In [2]: df
+    Out[2]: 
+                a         b    N  x
+    0    0.469112 -0.218470  585  x
+    1   -0.282863 -0.061645  841  x
+    2   -1.509059 -0.723780  251  x
+    3   -1.135632  0.551225  972  x
+    4    1.212112 -0.497767  181  x
+    ..        ...       ...  ... ..
+    995 -1.512743  0.874737  374  x
+    996  0.933753  1.120790  246  x
+    997 -0.308013  0.198768  157  x
+    998 -0.079915  1.757555  977  x
+    999 -1.010589 -1.115680  770  x
+    
+    [1000 rows x 4 columns]
+    
+Here’s the function in pure Python:
+
+    
+    In [3]: def f(x):
+       ...:     return x * (x - 1)
+       ...: 
+    
+    In [4]: def integrate_f(a, b, N):
+       ...:     s = 0
+       ...:     dx = (b - a) / N
+       ...:     for i in range(N):
+       ...:         s += f(a + i * dx)
+       ...:     return s * dx
+       ...: 
+    
+We achieve our result by using `apply` (row-wise):
+
+    
+    In [7]: %timeit df.apply(lambda x: integrate_f(x["a"], x["b"], x["N"]), axis=1)
+    10 loops, best of 3: 174 ms per loop
+    
+But clearly this isn’t fast enough for us. Let’s take a look and see where the
+time is spent during this operation (limited to the most time consuming four
+calls) using the prun ipython magic function:
+
+    
+    In [5]: %prun -l 4 df.apply(lambda x: integrate_f(x["a"], x["b"], x["N"]), axis=1)  # noqa E999
+             638348 function calls (638330 primitive calls) in 0.230 seconds
+    
+       Ordered by: internal time
+       List reduced from 228 to 4 due to restriction <4>
+    
+       ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+         1000    0.123    0.000    0.177    0.000 <ipython-input-4-c2a74e076cf0>:1(integrate_f)
+       552423    0.054    0.000    0.054    0.000 <ipython-input-3-c138bdd570e3>:1(f)
+         3000    0.007    0.000    0.032    0.000 series.py:944(__getitem__)
+         3000    0.004    0.000    0.019    0.000 series.py:1053(_get_value)
+    
+By far the majority of time is spend inside either `integrate_f` or `f`, hence
+we’ll concentrate our efforts cythonizing these two functions.
+
+### Plain Cython
+
+First we’re going to need to import the Cython magic function to IPython:
+
+    
+    In [6]: %load_ext Cython
+    
+Now, let’s simply copy our functions over to Cython as is (the suffix is here
+to distinguish between function versions):
+
+    
+    In [7]: %%cython
+       ...: def f_plain(x):
+       ...:     return x * (x - 1)
+       ...: def integrate_f_plain(a, b, N):
+       ...:     s = 0
+       ...:     dx = (b - a) / N
+       ...:     for i in range(N):
+       ...:         s += f_plain(a + i * dx)
+       ...:     return s * dx
+       ...: 
+    
+Note
+
+If you’re having trouble pasting the above into your ipython, you may need to
+be using bleeding edge IPython for paste to play well with cell magics.
+
+    
+    In [4]: %timeit df.apply(lambda x: integrate_f_plain(x["a"], x["b"], x["N"]), axis=1)
+    10 loops, best of 3: 85.5 ms per loop
+    
+Already this has shaved a third off, not too bad for a simple copy and paste.
+
+### Adding type
+
+We get another huge improvement simply by providing type information:
+
+    
+    In [8]: %%cython
+       ...: cdef double f_typed(double x) except? -2:
+       ...:     return x * (x - 1)
+       ...: cpdef double integrate_f_typed(double a, double b, int N):
+       ...:     cdef int i
+       ...:     cdef double s, dx
+       ...:     s = 0
+       ...:     dx = (b - a) / N
+       ...:     for i in range(N):
+       ...:         s += f_typed(a + i * dx)
+       ...:     return s * dx
+       ...: 
+    
+    
+    In [4]: %timeit df.apply(lambda x: integrate_f_typed(x["a"], x["b"], x["N"]), axis=1)
+    10 loops, best of 3: 20.3 ms per loop
+    
+Now, we’re talking! It’s now over ten times faster than the original Python
+implementation, and we haven’t really modified the code. Let’s have another
+look at what’s eating up time:
+
+    
+    In [9]: %prun -l 4 df.apply(lambda x: integrate_f_typed(x["a"], x["b"], x["N"]), axis=1)
+             85918 function calls (85900 primitive calls) in 0.034 seconds
+    
+       Ordered by: internal time
+       List reduced from 221 to 4 due to restriction <4>
+    
+       ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+         3000    0.004    0.000    0.021    0.000 series.py:944(__getitem__)
+         3000    0.003    0.000    0.012    0.000 series.py:1053(_get_value)
+        16189    0.002    0.000    0.002    0.000 {built-in method builtins.isinstance}
+         3000    0.002    0.000    0.006    0.000 base.py:3577(get_loc)
+    
+### Using ndarray
+
+It’s calling series… a lot! It’s creating a Series from each row, and get-ting
+from both the index and the series (three times for each row). Function calls
+are expensive in Python, so maybe we could minimize these by cythonizing the
+apply part.
+
+Note
+
+We are now passing ndarrays into the Cython function, fortunately Cython plays
+very nicely with NumPy.
+
+    
+    In [10]: %%cython
+       ....: cimport numpy as np
+       ....: import numpy as np
+       ....: cdef double f_typed(double x) except? -2:
+       ....:     return x * (x - 1)
+       ....: cpdef double integrate_f_typed(double a, double b, int N):
+       ....:     cdef int i
+       ....:     cdef double s, dx
+       ....:     s = 0
+       ....:     dx = (b - a) / N
+       ....:     for i in range(N):
+       ....:         s += f_typed(a + i * dx)
+       ....:     return s * dx
+       ....: cpdef np.ndarray[double] apply_integrate_f(np.ndarray col_a, np.ndarray col_b,
+       ....:                                            np.ndarray col_N):
+       ....:     assert (col_a.dtype == np.float_
+       ....:             and col_b.dtype == np.float_ and col_N.dtype == np.int_)
+       ....:     cdef Py_ssize_t i, n = len(col_N)
+       ....:     assert (len(col_a) == len(col_b) == n)
+       ....:     cdef np.ndarray[double] res = np.empty(n)
+       ....:     for i in range(len(col_a)):
+       ....:         res[i] = integrate_f_typed(col_a[i], col_b[i], col_N[i])
+       ....:     return res
+       ....: 
+    
+The implementation is simple, it creates an array of zeros and loops over the
+rows, applying our `integrate_f_typed`, and putting this in the zeros array.
+
+Warning
+
+You can not pass a `Series` directly as a `ndarray` typed parameter to a
+Cython function. Instead pass the actual `ndarray` using the
+`Series.to_numpy()`. The reason is that the Cython definition is specific to
+an ndarray and not the passed `Series`.
+
+So, do not do this:
+
+    
+    apply_integrate_f(df["a"], df["b"], df["N"])
+    
+But rather, use `Series.to_numpy()` to get the underlying `ndarray`:
+
+    
+    apply_integrate_f(df["a"].to_numpy(), df["b"].to_numpy(), df["N"].to_numpy())
+    
+Note
+
+Loops like this would be extremely slow in Python, but in Cython looping over
+NumPy arrays is fast.
+
+    
+    In [4]: %timeit apply_integrate_f(df["a"].to_numpy(), df["b"].to_numpy(), df["N"].to_numpy())
+    1000 loops, best of 3: 1.25 ms per loop
+    
+We’ve gotten another big improvement. Let’s check again where the time is
+spent:
+
+    
+    In [11]: %prun -l 4 apply_integrate_f(df["a"].to_numpy(), df["b"].to_numpy(), df["N"].to_numpy())
+             200 function calls in 0.001 seconds
+    
+       Ordered by: internal time
+       List reduced from 53 to 4 due to restriction <4>
+    
+       ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+            1    0.001    0.001    0.001    0.001 {built-in method _cython_magic_f5cd3d072b0d379f774a53a3036c6b65.apply_integrate_f}
+            3    0.000    0.000    0.000    0.000 frame.py:3464(__getitem__)
+            1    0.000    0.000    0.001    0.001 {built-in method builtins.exec}
+            3    0.000    0.000    0.000    0.000 managers.py:1016(iget)
+    
+As one might expect, the majority of the time is now spent in
+`apply_integrate_f`, so if we wanted to make anymore efficiencies we must
+continue to concentrate our efforts here.
+
+### More advanced techniques
+
+There is still hope for improvement. Here’s an example of using some more
+advanced Cython techniques:
+
+    
+    In [12]: %%cython
+       ....: cimport cython
+       ....: cimport numpy as np
+       ....: import numpy as np
+       ....: cdef double f_typed(double x) except? -2:
+       ....:     return x * (x - 1)
+       ....: cpdef double integrate_f_typed(double a, double b, int N):
+       ....:     cdef int i
+       ....:     cdef double s, dx
+       ....:     s = 0
+       ....:     dx = (b - a) / N
+       ....:     for i in range(N):
+       ....:         s += f_typed(a + i * dx)
+       ....:     return s * dx
+       ....: @cython.boundscheck(False)
+       ....: @cython.wraparound(False)
+       ....: cpdef np.ndarray[double] apply_integrate_f_wrap(np.ndarray[double] col_a,
+       ....:                                                 np.ndarray[double] col_b,
+       ....:                                                 np.ndarray[int] col_N):
+       ....:     cdef int i, n = len(col_N)
+       ....:     assert len(col_a) == len(col_b) == n
+       ....:     cdef np.ndarray[double] res = np.empty(n)
+       ....:     for i in range(n):
+       ....:         res[i] = integrate_f_typed(col_a[i], col_b[i], col_N[i])
+       ....:     return res
+       ....: 
+    
+    
+    In [4]: %timeit apply_integrate_f_wrap(df["a"].to_numpy(), df["b"].to_numpy(), df["N"].to_numpy())
+    1000 loops, best of 3: 987 us per loop
+    
+Even faster, with the caveat that a bug in our Cython code (an off-by-one
+error, for example) might cause a segfault because memory access isn’t
+checked. For more about `boundscheck` and `wraparound`, see the Cython docs on
+compiler directives.
+
+## Numba (JIT compilation)
+
+An alternative to statically compiling Cython code is to use a dynamic just-
+in-time (JIT) compiler with Numba.
+
+Numba allows you to write a pure Python function which can be JIT compiled to
+native machine instructions, similar in performance to C, C++ and Fortran, by
+decorating your function with `@jit`.
+
+Numba works by generating optimized machine code using the LLVM compiler
+infrastructure at import time, runtime, or statically (using the included pycc
+tool). Numba supports compilation of Python to run on either CPU or GPU
+hardware and is designed to integrate with the Python scientific software
+stack.
+
+Note
+
+The `@jit` compilation will add overhead to the runtime of the function, so
+performance benefits may not be realized especially when using small data
+sets. Consider caching your function to avoid compilation overhead each time
+your function is run.
+
+Numba can be used in 2 ways with pandas:
+
+  1. Specify the `engine="numba"` keyword in select pandas methods
+  2. Define your own Python function decorated with `@jit` and pass the underlying NumPy array of `Series` or `Dataframe` (using `to_numpy()`) into the function
+
+### pandas Numba Engine
+
+If Numba is installed, one can specify `engine="numba"` in select pandas
+methods to execute the method using Numba. Methods that support
+`engine="numba"` will also have an `engine_kwargs` keyword that accepts a
+dictionary that allows one to specify `"nogil"`, `"nopython"` and `"parallel"`
+keys with boolean values to pass into the `@jit` decorator. If `engine_kwargs`
+is not specified, it defaults to `{"nogil": False, "nopython": True,
+"parallel": False}` unless otherwise specified.
+
+In terms of performance, the first time a function is run using the Numba
+engine will be slow as Numba will have some function compilation overhead.
+However, the JIT compiled functions are cached, and subsequent calls will be
+fast. In general, the Numba engine is performant with a larger amount of data
+points (e.g. 1+ million).
+
+    
+    In [1]: data = pd.Series(range(1_000_000))  # noqa: E225
+    
+    In [2]: roll = data.rolling(10)
+    
+    In [3]: def f(x):
+       ...:     return np.sum(x) + 5
+    # Run the first time, compilation time will affect performance
+    In [4]: %timeit -r 1 -n 1 roll.apply(f, engine='numba', raw=True)
+    1.23 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+    # Function is cached and performance will improve
+    In [5]: %timeit roll.apply(f, engine='numba', raw=True)
+    188 ms ± 1.93 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+    
+    In [6]: %timeit roll.apply(f, engine='cython', raw=True)
+    3.92 s ± 59 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    
+### Custom Function Examples
+
+A custom Python function decorated with `@jit` can be used with pandas objects
+by passing their NumPy array representations with `to_numpy()`.
+
+    
+    import numba
+    
+    
+    @numba.jit
+    def f_plain(x):
+        return x * (x - 1)
+    
+    
+    @numba.jit
+    def integrate_f_numba(a, b, N):
+        s = 0
+        dx = (b - a) / N
+        for i in range(N):
+            s += f_plain(a + i * dx)
+        return s * dx
+    
+    
+    @numba.jit
+    def apply_integrate_f_numba(col_a, col_b, col_N):
+        n = len(col_N)
+        result = np.empty(n, dtype="float64")
+        assert len(col_a) == len(col_b) == n
+        for i in range(n):
+            result[i] = integrate_f_numba(col_a[i], col_b[i], col_N[i])
+        return result
+    
+    
+    def compute_numba(df):
+        result = apply_integrate_f_numba(
+            df["a"].to_numpy(), df["b"].to_numpy(), df["N"].to_numpy()
+        )
+        return pd.Series(result, index=df.index, name="result")
+    
+    
+    In [4]: %timeit compute_numba(df)
+    1000 loops, best of 3: 798 us per loop
+    
+In this example, using Numba was faster than Cython.
+
+Numba can also be used to write vectorized functions that do not require the
+user to explicitly loop over the observations of a vector; a vectorized
+function will be applied to each row automatically. Consider the following
+example of doubling each observation:
+
+    
+    import numba
+    
+    
+    def double_every_value_nonumba(x):
+        return x * 2
+    
+    
+    @numba.vectorize
+    def double_every_value_withnumba(x):  # noqa E501
+        return x * 2
+    
+    
+    # Custom function without numba
+    In [5]: %timeit df["col1_doubled"] = df["a"].apply(double_every_value_nonumba)  # noqa E501
+    1000 loops, best of 3: 797 us per loop
+    
+    # Standard implementation (faster than a custom function)
+    In [6]: %timeit df["col1_doubled"] = df["a"] * 2
+    1000 loops, best of 3: 233 us per loop
+    
+    # Custom function with numba
+    In [7]: %timeit df["col1_doubled"] = double_every_value_withnumba(df["a"].to_numpy())
+    1000 loops, best of 3: 145 us per loop
+    
+### Caveats
+
+Numba is best at accelerating functions that apply numerical functions to
+NumPy arrays. If you try to `@jit` a function that contains unsupported Python
+or NumPy code, compilation will revert object mode which will mostly likely
+not speed up your function. If you would prefer that Numba throw an error if
+it cannot compile a function in a way that speeds up your code, pass Numba the
+argument `nopython=True` (e.g. `@jit(nopython=True)`). For more on
+troubleshooting Numba modes, see the Numba troubleshooting page.
+
+Using `parallel=True` (e.g. `@jit(parallel=True)`) may result in a `SIGABRT`
+if the threading layer leads to unsafe behavior. You can first specify a safe
+threading layer before running a JIT function with `parallel=True`.
+
+Generally if the you encounter a segfault (`SIGSEGV`) while using Numba,
+please report the issue to the Numba issue tracker.
+
+## Expression evaluation via `eval()`
+
+The top-level function `pandas.eval()` implements expression evaluation of
+`Series` and `DataFrame` objects.
+
+Note
+
+To benefit from using `eval()` you need to install `numexpr`. See the
+recommended dependencies section for more details.
+
+The point of using `eval()` for expression evaluation rather than plain Python
+is two-fold: 1) large `DataFrame` objects are evaluated more efficiently and
+2) large arithmetic and boolean expressions are evaluated all at once by the
+underlying engine (by default `numexpr` is used for evaluation).
+
+Note
+
+You should not use `eval()` for simple expressions or for expressions
+involving small DataFrames. In fact, `eval()` is many orders of magnitude
+slower for smaller expressions/objects than plain ol’ Python. A good rule of
+thumb is to only use `eval()` when you have a `DataFrame` with more than
+10,000 rows.
+
+`eval()` supports all arithmetic expressions supported by the engine in
+addition to some extensions available only in pandas.
+
+Note
+
+The larger the frame and the larger the expression the more speedup you will
+see from using `eval()`.
+
+### Supported syntax
+
+These operations are supported by `pandas.eval()`:
+
+  * Arithmetic operations except for the left shift (`<<`) and right shift (`>>`) operators, e.g., `df + 2 * pi / s ** 4 % 42 - the_golden_ratio`
+  * Comparison operations, including chained comparisons, e.g., `2 < df < df2`
+  * Boolean operations, e.g., `df < df2 and df3 < df4 or not df_bool`
+  * `list` and `tuple` literals, e.g., `[1, 2]` or `(1, 2)`
+  * Attribute access, e.g., `df.a`
+  * Subscript expressions, e.g., `df[0]`
+  * Simple variable evaluation, e.g., `pd.eval("df")` (this is not very useful)
+  * Math functions: `sin`, `cos`, `exp`, `log`, `expm1`, `log1p`, `sqrt`, `sinh`, `cosh`, `tanh`, `arcsin`, `arccos`, `arctan`, `arccosh`, `arcsinh`, `arctanh`, `abs`, `arctan2` and `log10`.
+
+This Python syntax is not allowed:
+
+  * Expressions
+>     * Function calls other than math functions.
+>     * `is`/`is not` operations
+>     * `if` expressions
+>     * `lambda` expressions
+>     * `list`/`set`/`dict` comprehensions
+>     * Literal `dict` and `set` expressions
+>     * `yield` expressions
+>     * Generator expressions
+>     * Boolean expressions consisting of only scalar values
+  * Statements
+>     * Neither simple nor compound statements are allowed. This includes
+> things like `for`, `while`, and `if`.
+
+###  `eval()` examples
+
+`pandas.eval()` works well with expressions containing large arrays.
+
+First let’s create a few decent-sized arrays to play with:
+
+    
+    In [13]: nrows, ncols = 20000, 100
+    
+    In [14]: df1, df2, df3, df4 = [pd.DataFrame(np.random.randn(nrows, ncols)) for _ in range(4)]
+    
+Now let’s compare adding them together using plain ol’ Python versus `eval()`:
+
+    
+    In [15]: %timeit df1 + df2 + df3 + df4
+    8.17 ms +- 266 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+    
+    In [16]: %timeit pd.eval("df1 + df2 + df3 + df4")
+    5.46 ms +- 230 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+Now let’s do the same thing but with comparisons:
+
+    
+    In [17]: %timeit (df1 > 0) & (df2 > 0) & (df3 > 0) & (df4 > 0)
+    6.45 ms +- 277 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+    
+    In [18]: %timeit pd.eval("(df1 > 0) & (df2 > 0) & (df3 > 0) & (df4 > 0)")
+    6.07 ms +- 225 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+`eval()` also works with unaligned pandas objects:
+
+    
+    In [19]: s = pd.Series(np.random.randn(50))
+    
+    In [20]: %timeit df1 + df2 + df3 + df4 + s
+    23.1 ms +- 1.25 ms per loop (mean +- std. dev. of 7 runs, 10 loops each)
+    
+    
+    In [21]: %timeit pd.eval("df1 + df2 + df3 + df4 + s")
+    5.87 ms +- 127 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+Note
+
+Operations such as
+
+>
+>     1 and 2  # would parse to 1 & 2, but should evaluate to 2
+>     3 or 4  # would parse to 3 | 4, but should evaluate to 3
+>     ~1  # this is okay, but slower when using eval
+>  
+should be performed in Python. An exception will be raised if you try to
+perform any boolean/bitwise operations with scalar operands that are not of
+type `bool` or `np.bool_`. Again, you should perform these kinds of operations
+in plain Python.
+
+### The `DataFrame.eval` method
+
+In addition to the top level `pandas.eval()` function you can also evaluate an
+expression in the “context” of a `DataFrame`.
+
+    
+    In [22]: df = pd.DataFrame(np.random.randn(5, 2), columns=["a", "b"])
+    
+    In [23]: df.eval("a + b")
+    Out[23]: 
+    0   -0.246747
+    1    0.867786
+    2   -1.626063
+    3   -1.134978
+    4   -1.027798
+    dtype: float64
+    
+Any expression that is a valid `pandas.eval()` expression is also a valid
+`DataFrame.eval()` expression, with the added benefit that you don’t have to
+prefix the name of the `DataFrame` to the column(s) you’re interested in
+evaluating.
+
+In addition, you can perform assignment of columns within an expression. This
+allows for formulaic evaluation. The assignment target can be a new column
+name or an existing column name, and it must be a valid Python identifier.
+
+The `inplace` keyword determines whether this assignment will performed on the
+original `DataFrame` or return a copy with the new column.
+
+    
+    In [24]: df = pd.DataFrame(dict(a=range(5), b=range(5, 10)))
+    
+    In [25]: df.eval("c = a + b", inplace=True)
+    
+    In [26]: df.eval("d = a + b + c", inplace=True)
+    
+    In [27]: df.eval("a = 1", inplace=True)
+    
+    In [28]: df
+    Out[28]: 
+       a  b   c   d
+    0  1  5   5  10
+    1  1  6   7  14
+    2  1  7   9  18
+    3  1  8  11  22
+    4  1  9  13  26
+    
+When `inplace` is set to `False`, the default, a copy of the `DataFrame` with
+the new or modified columns is returned and the original frame is unchanged.
+
+    
+    In [29]: df
+    Out[29]: 
+       a  b   c   d
+    0  1  5   5  10
+    1  1  6   7  14
+    2  1  7   9  18
+    3  1  8  11  22
+    4  1  9  13  26
+    
+    In [30]: df.eval("e = a - c", inplace=False)
+    Out[30]: 
+       a  b   c   d   e
+    0  1  5   5  10  -4
+    1  1  6   7  14  -6
+    2  1  7   9  18  -8
+    3  1  8  11  22 -10
+    4  1  9  13  26 -12
+    
+    In [31]: df
+    Out[31]: 
+       a  b   c   d
+    0  1  5   5  10
+    1  1  6   7  14
+    2  1  7   9  18
+    3  1  8  11  22
+    4  1  9  13  26
+    
+As a convenience, multiple assignments can be performed by using a multi-line
+string.
+
+    
+    In [32]: df.eval(
+       ....:     """
+       ....: c = a + b
+       ....: d = a + b + c
+       ....: a = 1""",
+       ....:     inplace=False,
+       ....: )
+       ....: 
+    Out[32]: 
+       a  b   c   d
+    0  1  5   6  12
+    1  1  6   7  14
+    2  1  7   8  16
+    3  1  8   9  18
+    4  1  9  10  20
+    
+The equivalent in standard Python would be
+
+    
+    In [33]: df = pd.DataFrame(dict(a=range(5), b=range(5, 10)))
+    
+    In [34]: df["c"] = df["a"] + df["b"]
+    
+    In [35]: df["d"] = df["a"] + df["b"] + df["c"]
+    
+    In [36]: df["a"] = 1
+    
+    In [37]: df
+    Out[37]: 
+       a  b   c   d
+    0  1  5   5  10
+    1  1  6   7  14
+    2  1  7   9  18
+    3  1  8  11  22
+    4  1  9  13  26
+    
+The `query` method has a `inplace` keyword which determines whether the query
+modifies the original frame.
+
+    
+    In [38]: df = pd.DataFrame(dict(a=range(5), b=range(5, 10)))
+    
+    In [39]: df.query("a > 2")
+    Out[39]: 
+       a  b
+    3  3  8
+    4  4  9
+    
+    In [40]: df.query("a > 2", inplace=True)
+    
+    In [41]: df
+    Out[41]: 
+       a  b
+    3  3  8
+    4  4  9
+    
+### Local variables
+
+You must explicitly reference any local variable that you want to use in an
+expression by placing the `@` character in front of the name. For example,
+
+    
+    In [42]: df = pd.DataFrame(np.random.randn(5, 2), columns=list("ab"))
+    
+    In [43]: newcol = np.random.randn(len(df))
+    
+    In [44]: df.eval("b + @newcol")
+    Out[44]: 
+    0   -0.173926
+    1    2.493083
+    2   -0.881831
+    3   -0.691045
+    4    1.334703
+    dtype: float64
+    
+    In [45]: df.query("b < @newcol")
+    Out[45]: 
+              a         b
+    0  0.863987 -0.115998
+    2 -2.621419 -1.297879
+    
+If you don’t prefix the local variable with `@`, pandas will raise an
+exception telling you the variable is undefined.
+
+When using `DataFrame.eval()` and `DataFrame.query()`, this allows you to have
+a local variable and a `DataFrame` column with the same name in an expression.
+
+    
+    In [46]: a = np.random.randn()
+    
+    In [47]: df.query("@a < a")
+    Out[47]: 
+              a         b
+    0  0.863987 -0.115998
+    
+    In [48]: df.loc[a < df["a"]]  # same as the previous expression
+    Out[48]: 
+              a         b
+    0  0.863987 -0.115998
+    
+With `pandas.eval()` you cannot use the `@` prefix at all, because it isn’t
+defined in that context. pandas will let you know this if you try to use `@`
+in a top-level call to `pandas.eval()`. For example,
+
+    
+    In [49]: a, b = 1, 2
+    
+    In [50]: pd.eval("@a + b")
+    Traceback (most recent call last):
+    
+      File /opt/conda/envs/pandas/lib/python3.8/site-packages/IPython/core/interactiveshell.py:3251 in run_code
+        exec(code_obj, self.user_global_ns, self.user_ns)
+    
+      Input In [50] in <module>
+        pd.eval("@a + b")
+    
+      File /pandas/pandas/core/computation/eval.py:339 in eval
+        _check_for_locals(expr, level, parser)
+    
+      File /pandas/pandas/core/computation/eval.py:163 in _check_for_locals
+        raise SyntaxError(msg)
+    
+      File <string>
+    SyntaxError: The '@' prefix is not allowed in top-level eval calls.
+    please refer to your variables by name without the '@' prefix.
+    
+In this case, you should simply refer to the variables like you would in
+standard Python.
+
+    
+    In [51]: pd.eval("a + b")
+    Out[51]: 3
+    
+###  `pandas.eval()` parsers
+
+There are two different parsers and two different engines you can use as the
+backend.
+
+The default `'pandas'` parser allows a more intuitive syntax for expressing
+query-like operations (comparisons, conjunctions and disjunctions). In
+particular, the precedence of the `&` and `|` operators is made equal to the
+precedence of the corresponding boolean operations `and` and `or`.
+
+For example, the above conjunction can be written without parentheses.
+Alternatively, you can use the `'python'` parser to enforce strict Python
+semantics.
+
+    
+    In [52]: expr = "(df1 > 0) & (df2 > 0) & (df3 > 0) & (df4 > 0)"
+    
+    In [53]: x = pd.eval(expr, parser="python")
+    
+    In [54]: expr_no_parens = "df1 > 0 & df2 > 0 & df3 > 0 & df4 > 0"
+    
+    In [55]: y = pd.eval(expr_no_parens, parser="pandas")
+    
+    In [56]: np.all(x == y)
+    Out[56]: True
+    
+The same expression can be “anded” together with the word `and` as well:
+
+    
+    In [57]: expr = "(df1 > 0) & (df2 > 0) & (df3 > 0) & (df4 > 0)"
+    
+    In [58]: x = pd.eval(expr, parser="python")
+    
+    In [59]: expr_with_ands = "df1 > 0 and df2 > 0 and df3 > 0 and df4 > 0"
+    
+    In [60]: y = pd.eval(expr_with_ands, parser="pandas")
+    
+    In [61]: np.all(x == y)
+    Out[61]: True
+    
+The `and` and `or` operators here have the same precedence that they would in
+vanilla Python.
+
+###  `pandas.eval()` backends
+
+There’s also the option to make `eval()` operate identical to plain ol’
+Python.
+
+Note
+
+Using the `'python'` engine is generally not useful, except for testing other
+evaluation engines against it. You will achieve no performance benefits using
+`eval()` with `engine='python'` and in fact may incur a performance hit.
+
+You can see this by using `pandas.eval()` with the `'python'` engine. It is a
+bit slower (not by much) than evaluating the same expression in Python
+
+    
+    In [62]: %timeit df1 + df2 + df3 + df4
+    7.12 ms +- 296 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+    
+    In [63]: %timeit pd.eval("df1 + df2 + df3 + df4", engine="python")
+    8.41 ms +- 266 us per loop (mean +- std. dev. of 7 runs, 100 loops each)
+    
+###  `pandas.eval()` performance
+
+`eval()` is intended to speed up certain kinds of operations. In particular,
+those operations involving complex expressions with large `DataFrame`/`Series`
+objects should see a significant performance benefit. Here is a plot showing
+the running time of `pandas.eval()` as function of the size of the frame
+involved in the computation. The two lines are two different engines.
+
+![../_images/eval-
+perf.png](data:image/png;base64,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)
+
+Note
+
+Operations with smallish objects (around 15k-20k rows) are faster using plain
+Python:
+
+> ![../_images/eval-perf-
+> small.png](data:image/png;base64,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)
+This plot was created using a `DataFrame` with 3 columns each containing
+floating point values generated using `numpy.random.randn()`.
+
+### Technical minutia regarding expression evaluation
+
+Expressions that would result in an object dtype or involve datetime
+operations (because of `NaT`) must be evaluated in Python space. The main
+reason for this behavior is to maintain backwards compatibility with versions
+of NumPy < 1.7. In those versions of NumPy a call to `ndarray.astype(str)`
+will truncate any strings that are more than 60 characters in length. Second,
+we can’t pass `object` arrays to `numexpr` thus string comparisons must be
+evaluated in Python space.
+
+The upshot is that this only applies to object-dtype expressions. So, if you
+have an expression–for example
+
+    
+    In [64]: df = pd.DataFrame(
+       ....:     {"strings": np.repeat(list("cba"), 3), "nums": np.repeat(range(3), 3)}
+       ....: )
+       ....: 
+    
+    In [65]: df
+    Out[65]: 
+      strings  nums
+    0       c     0
+    1       c     0
+    2       c     0
+    3       b     1
+    4       b     1
+    5       b     1
+    6       a     2
+    7       a     2
+    8       a     2
+    
+    In [66]: df.query("strings == 'a' and nums == 1")
+    Out[66]: 
+    Empty DataFrame
+    Columns: [strings, nums]
+    Index: []
+    
+the numeric part of the comparison (`nums == 1`) will be evaluated by
+`numexpr`.
+
+In general, `DataFrame.query()`/`pandas.eval()` will evaluate the
+subexpressions that can be evaluated by `numexpr` and those that must be
+evaluated in Python space transparently to the user. This is done by inferring
+the result type of an expression from its arguments and operators.
+
+© 2008–2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData
+Development Team  
+Licensed under the 3-clause BSD License.  
+https://pandas.pydata.org/pandas-
+docs/version/1.4.0/user_guide/enhancingperf.html
+

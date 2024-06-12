@@ -1,0 +1,77 @@
+<h1>View Decorators</h1> <p>Python has a really interesting feature called function decorators. This allows some really neat things for web applications. Because each view in Flask is a function, decorators can be used to inject additional functionality to one or more functions. The <a class="reference internal" href="../../api/index#flask.Flask.route" title="flask.Flask.route"><code>route()</code></a> decorator is the one you probably used already. But there are use cases for implementing your own decorator. For instance, imagine you have a view that should only be used by people that are logged in. If a user goes to the site and is not logged in, they should be redirected to the login page. This is a good example of a use case where a decorator is an excellent solution.</p>  <h2 id="login-required-decorator">Login Required Decorator</h2> <p>So let’s implement such a decorator. A decorator is a function that wraps and replaces another function. Since the original function is replaced, you need to remember to copy the original function’s information to the new function. Use <a class="reference external" href="https://docs.python.org/3/library/functools.html#functools.wraps" title="(in Python v3.9)"><code>functools.wraps()</code></a> to handle this for you.</p> <p>This example assumes that the login page is called <code>'login'</code> and that the current user is stored in <code>g.user</code> and is <code>None</code> if there is no-one logged in.</p> <pre data-language="python">from functools import wraps
+from flask import g, request, redirect, url_for
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if g.user is None:
+            return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+</pre> <p>To use the decorator, apply it as innermost decorator to a view function. When applying further decorators, always remember that the <a class="reference internal" href="../../api/index#flask.Flask.route" title="flask.Flask.route"><code>route()</code></a> decorator is the outermost.</p> <pre data-language="python">@app.route('/secret_page')
+@login_required
+def secret_page():
+    pass
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The <code>next</code> value will exist in <code>request.args</code> after a <code>GET</code> request for the login page. You’ll have to pass it along when sending the <code>POST</code> request from the login form. You can do this with a hidden input tag, then retrieve it from <code>request.form</code> when logging the user in.</p> <pre data-language="python">&lt;input type="hidden" value="{{ request.args.get('next', '') }}"/&gt;
+</pre> </div>   <h2 id="caching-decorator">Caching Decorator</h2> <p>Imagine you have a view function that does an expensive calculation and because of that you would like to cache the generated results for a certain amount of time. A decorator would be nice for that. We’re assuming you have set up a cache like mentioned in <a class="reference internal" href="../caching/index"><span class="doc">Caching</span></a>.</p> <p>Here is an example cache function. It generates the cache key from a specific prefix (actually a format string) and the current path of the request. Notice that we are using a function that first creates the decorator that then decorates the function. Sounds awful? Unfortunately it is a little bit more complex, but the code should still be straightforward to read.</p> <p>The decorated function will then work as follows</p> <ol class="arabic simple"> <li>get the unique cache key for the current request based on the current path.</li> <li>get the value for that key from the cache. If the cache returned something we will return that value.</li> <li>otherwise the original function is called and the return value is stored in the cache for the timeout provided (by default 5 minutes).</li> </ol> <p>Here the code:</p> <pre data-language="python">from functools import wraps
+from flask import request
+
+def cached(timeout=5 * 60, key='view/{}'):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            cache_key = key.format(request.path)
+            rv = cache.get(cache_key)
+            if rv is not None:
+                return rv
+            rv = f(*args, **kwargs)
+            cache.set(cache_key, rv, timeout=timeout)
+            return rv
+        return decorated_function
+    return decorator
+</pre> <p>Notice that this assumes an instantiated <code>cache</code> object is available, see <a class="reference internal" href="../caching/index"><span class="doc">Caching</span></a>.</p>   <h2 id="templating-decorator">Templating Decorator</h2> <p>A common pattern invented by the TurboGears guys a while back is a templating decorator. The idea of that decorator is that you return a dictionary with the values passed to the template from the view function and the template is automatically rendered. With that, the following three examples do exactly the same:</p> <pre data-language="python">@app.route('/')
+def index():
+    return render_template('index.html', value=42)
+
+@app.route('/')
+@templated('index.html')
+def index():
+    return dict(value=42)
+
+@app.route('/')
+@templated()
+def index():
+    return dict(value=42)
+</pre> <p>As you can see, if no template name is provided it will use the endpoint of the URL map with dots converted to slashes + <code>'.html'</code>. Otherwise the provided template name is used. When the decorated function returns, the dictionary returned is passed to the template rendering function. If <code>None</code> is returned, an empty dictionary is assumed, if something else than a dictionary is returned we return it from the function unchanged. That way you can still use the redirect function or return simple strings.</p> <p>Here is the code for that decorator:</p> <pre data-language="python">from functools import wraps
+from flask import request, render_template
+
+def templated(template=None):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            template_name = template
+            if template_name is None:
+                template_name = f"'{request.endpoint.replace('.', '/')}.html'"
+            ctx = f(*args, **kwargs)
+            if ctx is None:
+                ctx = {}
+            elif not isinstance(ctx, dict):
+                return ctx
+            return render_template(template_name, **ctx)
+        return decorated_function
+    return decorator
+</pre>   <h2 id="endpoint-decorator">Endpoint Decorator</h2> <p>When you want to use the werkzeug routing system for more flexibility you need to map the endpoint as defined in the <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/routing/#werkzeug.routing.Rule" title="(in Werkzeug v2.0.x)"><code>Rule</code></a> to a view function. This is possible with this decorator. For example:</p> <pre data-language="python">from flask import Flask
+from werkzeug.routing import Rule
+
+app = Flask(__name__)
+app.url_map.add(Rule('/', endpoint='index'))
+
+@app.endpoint('index')
+def my_index():
+    return "Hello world"
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/viewdecorators/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/viewdecorators/</a>
+  </p>
+</div>

@@ -1,0 +1,408 @@
+# Pagination
+
+> Django provides a few classes that help you manage paginated data – that is,
+> data that’s split across several pages, with “Previous/Next” links.
+> — Django documentation
+REST framework includes support for customizable pagination styles. This
+allows you to modify how large result sets are split into individual pages of
+data.
+
+The pagination API can support either:
+
+  * Pagination links that are provided as part of the content of the response.
+  * Pagination links that are included in response headers, such as `Content-Range` or `Link`.
+
+The built-in styles currently all use links included as part of the content of
+the response. This style is more accessible when using the browsable API.
+
+Pagination is only performed automatically if you're using the generic views
+or viewsets. If you're using a regular `APIView`, you'll need to call into the
+pagination API yourself to ensure you return a paginated response. See the
+source code for the `mixins.ListModelMixin` and `generics.GenericAPIView`
+classes for an example.
+
+Pagination can be turned off by setting the pagination class to `None`.
+
+## Setting the pagination style
+
+The pagination style may be set globally, using the `DEFAULT_PAGINATION_CLASS`
+and `PAGE_SIZE` setting keys. For example, to use the built-in limit/offset
+pagination, you would do something like this:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
+        'PAGE_SIZE': 100
+    }
+    
+Note that you need to set both the pagination class, and the page size that
+should be used. Both `DEFAULT_PAGINATION_CLASS` and `PAGE_SIZE` are `None` by
+default.
+
+You can also set the pagination class on an individual view by using the
+`pagination_class` attribute. Typically you'll want to use the same pagination
+style throughout your API, although you might want to vary individual aspects
+of the pagination, such as default or maximum page size, on a per-view basis.
+
+## Modifying the pagination style
+
+If you want to modify particular aspects of the pagination style, you'll want
+to override one of the pagination classes, and set the attributes that you
+want to change.
+
+    
+    class LargeResultsSetPagination(PageNumberPagination):
+        page_size = 1000
+        page_size_query_param = 'page_size'
+        max_page_size = 10000
+    
+    class StandardResultsSetPagination(PageNumberPagination):
+        page_size = 100
+        page_size_query_param = 'page_size'
+        max_page_size = 1000
+    
+You can then apply your new style to a view using the `pagination_class`
+attribute:
+
+    
+    class BillingRecordsView(generics.ListAPIView):
+        queryset = Billing.objects.all()
+        serializer_class = BillingRecordsSerializer
+        pagination_class = LargeResultsSetPagination
+    
+Or apply the style globally, using the `DEFAULT_PAGINATION_CLASS` settings
+key. For example:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'apps.core.pagination.StandardResultsSetPagination'
+    }
+    
+# API Reference
+
+## PageNumberPagination
+
+This pagination style accepts a single number page number in the request query
+parameters.
+
+Request:
+
+    
+    GET https://api.example.org/accounts/?page=4
+    
+Response:
+
+    
+    HTTP 200 OK
+    {
+        "count": 1023
+        "next": "https://api.example.org/accounts/?page=5",
+        "previous": "https://api.example.org/accounts/?page=3",
+        "results": [
+           …
+        ]
+    }
+    
+#### Setup
+
+To enable the `PageNumberPagination` style globally, use the following
+configuration, and set the `PAGE_SIZE` as desired:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+        'PAGE_SIZE': 100
+    }
+    
+On `GenericAPIView` subclasses you may also set the `pagination_class`
+attribute to select `PageNumberPagination` on a per-view basis.
+
+#### Configuration
+
+The `PageNumberPagination` class includes a number of attributes that may be
+overridden to modify the pagination style.
+
+To set these attributes you should override the `PageNumberPagination` class,
+and then enable your custom pagination class as above.
+
+  * `django_paginator_class` \- The Django Paginator class to use. Default is `django.core.paginator.Paginator`, which should be fine for most use cases.
+  * `page_size` \- A numeric value indicating the page size. If set, this overrides the `PAGE_SIZE` setting. Defaults to the same value as the `PAGE_SIZE` settings key.
+  * `page_query_param` \- A string value indicating the name of the query parameter to use for the pagination control.
+  * `page_size_query_param` \- If set, this is a string value indicating the name of a query parameter that allows the client to set the page size on a per-request basis. Defaults to `None`, indicating that the client may not control the requested page size.
+  * `max_page_size` \- If set, this is a numeric value indicating the maximum allowable requested page size. This attribute is only valid if `page_size_query_param` is also set.
+  * `last_page_strings` \- A list or tuple of string values indicating values that may be used with the `page_query_param` to request the final page in the set. Defaults to `('last',)`
+  * `template` \- The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/numbers.html"`.
+
+## LimitOffsetPagination
+
+This pagination style mirrors the syntax used when looking up multiple
+database records. The client includes both a "limit" and an "offset" query
+parameter. The limit indicates the maximum number of items to return, and is
+equivalent to the `page_size` in other styles. The offset indicates the
+starting position of the query in relation to the complete set of unpaginated
+items.
+
+Request:
+
+    
+    GET https://api.example.org/accounts/?limit=100&offset=400
+    
+Response:
+
+    
+    HTTP 200 OK
+    {
+        "count": 1023
+        "next": "https://api.example.org/accounts/?limit=100&offset=500",
+        "previous": "https://api.example.org/accounts/?limit=100&offset=300",
+        "results": [
+           …
+        ]
+    }
+    
+#### Setup
+
+To enable the `LimitOffsetPagination` style globally, use the following
+configuration:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination'
+    }
+    
+Optionally, you may also set a `PAGE_SIZE` key. If the `PAGE_SIZE` parameter
+is also used then the `limit` query parameter will be optional, and may be
+omitted by the client.
+
+On `GenericAPIView` subclasses you may also set the `pagination_class`
+attribute to select `LimitOffsetPagination` on a per-view basis.
+
+#### Configuration
+
+The `LimitOffsetPagination` class includes a number of attributes that may be
+overridden to modify the pagination style.
+
+To set these attributes you should override the `LimitOffsetPagination` class,
+and then enable your custom pagination class as above.
+
+  * `default_limit` \- A numeric value indicating the limit to use if one is not provided by the client in a query parameter. Defaults to the same value as the `PAGE_SIZE` settings key.
+  * `limit_query_param` \- A string value indicating the name of the "limit" query parameter. Defaults to `'limit'`.
+  * `offset_query_param` \- A string value indicating the name of the "offset" query parameter. Defaults to `'offset'`.
+  * `max_limit` \- If set this is a numeric value indicating the maximum allowable limit that may be requested by the client. Defaults to `None`.
+  * `template` \- The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/numbers.html"`.
+
+## CursorPagination
+
+The cursor-based pagination presents an opaque "cursor" indicator that the
+client may use to page through the result set. This pagination style only
+presents forward and reverse controls, and does not allow the client to
+navigate to arbitrary positions.
+
+Cursor based pagination requires that there is a unique, unchanging ordering
+of items in the result set. This ordering might typically be a creation
+timestamp on the records, as this presents a consistent ordering to paginate
+against.
+
+Cursor based pagination is more complex than other schemes. It also requires
+that the result set presents a fixed ordering, and does not allow the client
+to arbitrarily index into the result set. However it does provide the
+following benefits:
+
+  * Provides a consistent pagination view. When used properly `CursorPagination` ensures that the client will never see the same item twice when paging through records, even when new items are being inserted by other clients during the pagination process.
+  * Supports usage with very large datasets. With extremely large datasets pagination using offset-based pagination styles may become inefficient or unusable. Cursor based pagination schemes instead have fixed-time properties, and do not slow down as the dataset size increases.
+
+#### Details and limitations
+
+Proper use of cursor based pagination requires a little attention to detail.
+You'll need to think about what ordering you want the scheme to be applied
+against. The default is to order by `"-created"`. This assumes that there must
+be a 'created' timestamp field on the model instances, and will present a
+"timeline" style paginated view, with the most recently added items first.
+
+You can modify the ordering by overriding the `'ordering'` attribute on the
+pagination class, or by using the `OrderingFilter` filter class together with
+`CursorPagination`. When used with `OrderingFilter` you should strongly
+consider restricting the fields that the user may order by.
+
+Proper usage of cursor pagination should have an ordering field that satisfies
+the following:
+
+  * Should be an unchanging value, such as a timestamp, slug, or other field that is only set once, on creation.
+  * Should be unique, or nearly unique. Millisecond precision timestamps are a good example. This implementation of cursor pagination uses a smart "position plus offset" style that allows it to properly support not-strictly-unique values as the ordering.
+  * Should be a non-nullable value that can be coerced to a string.
+  * Should not be a float. Precision errors easily lead to incorrect results. Hint: use decimals instead. (If you already have a float field and must paginate on that, an example `CursorPagination` subclass that uses decimals to limit precision is available here.)
+  * The field should have a database index.
+
+Using an ordering field that does not satisfy these constraints will generally
+still work, but you'll be losing some of the benefits of cursor pagination.
+
+For more technical details on the implementation we use for cursor pagination,
+the "Building cursors for the Disqus API" blog post gives a good overview of
+the basic approach.
+
+#### Setup
+
+To enable the `CursorPagination` style globally, use the following
+configuration, modifying the `PAGE_SIZE` as desired:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.CursorPagination',
+        'PAGE_SIZE': 100
+    }
+    
+On `GenericAPIView` subclasses you may also set the `pagination_class`
+attribute to select `CursorPagination` on a per-view basis.
+
+#### Configuration
+
+The `CursorPagination` class includes a number of attributes that may be
+overridden to modify the pagination style.
+
+To set these attributes you should override the `CursorPagination` class, and
+then enable your custom pagination class as above.
+
+  * `page_size` = A numeric value indicating the page size. If set, this overrides the `PAGE_SIZE` setting. Defaults to the same value as the `PAGE_SIZE` settings key.
+  * `cursor_query_param` = A string value indicating the name of the "cursor" query parameter. Defaults to `'cursor'`.
+  * `ordering` = This should be a string, or list of strings, indicating the field against which the cursor based pagination will be applied. For example: `ordering = 'slug'`. Defaults to `-created`. This value may also be overridden by using `OrderingFilter` on the view.
+  * `template` = The name of a template to use when rendering pagination controls in the browsable API. May be overridden to modify the rendering style, or set to `None` to disable HTML pagination controls completely. Defaults to `"rest_framework/pagination/previous_and_next.html"`.
+
+# Custom pagination styles
+
+To create a custom pagination serializer class, you should inherit the
+subclass `pagination.BasePagination`, override the `paginate_queryset(self,
+queryset, request, view=None)`, and `get_paginated_response(self, data)`
+methods:
+
+  * The `paginate_queryset` method is passed to the initial queryset and should return an iterable object. That object contains only the data in the requested page.
+  * The `get_paginated_response` method is passed to the serialized page data and should return a `Response` instance.
+
+Note that the `paginate_queryset` method may set state on the pagination
+instance, that may later be used by the `get_paginated_response` method.
+
+## Example
+
+Suppose we want to replace the default pagination output style with a modified
+format that includes the next and previous links under in a nested 'links'
+key. We could specify a custom pagination class like so:
+
+    
+    class CustomPagination(pagination.PageNumberPagination):
+        def get_paginated_response(self, data):
+            return Response({
+                'links': {
+                    'next': self.get_next_link(),
+                    'previous': self.get_previous_link()
+                },
+                'count': self.page.paginator.count,
+                'results': data
+            })
+    
+We'd then need to setup the custom class in our configuration:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'my_project.apps.core.pagination.CustomPagination',
+        'PAGE_SIZE': 100
+    }
+    
+Note that if you care about how the ordering of keys is displayed in responses
+in the browsable API you might choose to use an `OrderedDict` when
+constructing the body of paginated responses, but this is optional.
+
+## Using your custom pagination class
+
+To have your custom pagination class be used by default, use the
+`DEFAULT_PAGINATION_CLASS` setting:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_PAGINATION_CLASS': 'my_project.apps.core.pagination.LinkHeaderPagination',
+        'PAGE_SIZE': 100
+    }
+    
+API responses for list endpoints will now include a `Link` header, instead of
+including the pagination links as part of the body of the response, for
+example:
+
+![Link
+Header](data:image/png;base64,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)
+
+A custom pagination style, using the 'Link' header'
+
+## Pagination & schemas
+
+You can also make the pagination controls available to the schema
+autogeneration that REST framework provides, by implementing a
+`get_schema_fields()` method. This method should have the following signature:
+
+`get_schema_fields(self, view)`
+
+The method should return a list of `coreapi.Field` instances.
+
+# HTML pagination controls
+
+By default using the pagination classes will cause HTML pagination controls to
+be displayed in the browsable API. There are two built-in display styles. The
+`PageNumberPagination` and `LimitOffsetPagination` classes display a list of
+page numbers with previous and next controls. The `CursorPagination` class
+displays a simpler style that only displays a previous and next control.
+
+## Customizing the controls
+
+You can override the templates that render the HTML pagination controls. The
+two built-in styles are:
+
+  * `rest_framework/pagination/numbers.html`
+  * `rest_framework/pagination/previous_and_next.html`
+
+Providing a template with either of these paths in a global template directory
+will override the default rendering for the relevant pagination classes.
+
+Alternatively you can disable HTML pagination controls completely by
+subclassing on of the existing classes, setting `template = None` as an
+attribute on the class. You'll then need to configure your
+`DEFAULT_PAGINATION_CLASS` settings key to use your custom class as the
+default pagination style.
+
+#### Low-level API
+
+The low-level API for determining if a pagination class should display the
+controls or not is exposed as a `display_page_controls` attribute on the
+pagination instance. Custom pagination classes should be set to `True` in the
+`paginate_queryset` method if they require the HTML pagination controls to be
+displayed.
+
+The `.to_html()` and `.get_html_context()` methods may also be overridden in a
+custom pagination class in order to further customize how the controls are
+rendered.
+
+# Third party packages
+
+The following third party packages are also available.
+
+## DRF-extensions
+
+The `DRF-extensions` package includes a `PaginateByMaxMixin` mixin class that
+allows your API clients to specify `?page_size=max` to obtain the maximum
+allowed page size.
+
+## drf-proxy-pagination
+
+The `drf-proxy-pagination` package includes a `ProxyPagination` class which
+allows to choose pagination class with a query parameter.
+
+## link-header-pagination
+
+The `django-rest-framework-link-header-pagination` package includes a
+`LinkHeaderPagination` class which provides pagination via an HTTP `Link`
+header as described in Github's developer documentation.
+
+pagination.py
+
+Copyright © 2011–present Encode OSS Ltd.  
+Licensed under the BSD License.  
+https://www.django-rest-framework.org/api-guide/pagination/
+
+  *[ISP]: Internet Service Provider
+

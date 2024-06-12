@@ -1,0 +1,45 @@
+<h1 id="torch-compiler-get-started">Getting Started</h1> <p id="getting-started">Before you read this section, make sure to read the <a class="reference internal" href="torch.compiler#torch-compiler-overview"><span class="std std-ref">torch.compiler</span></a>.</p> <p>Let’s start by looking at a simple <code>torch.compile</code> example that demonstrates how to use <code>torch.compile</code> for inference. This example demonstrates the <code>torch.cos()</code> and <code>torch.sin()</code> features which are examples of pointwise operators as they operate element by element on a vector. This example might not show significant performance gains but should help you form an intuitive understanding of how you can use <code>torch.compile</code> in your own programs.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>To run this script, you need to have at least one GPU on your machine. If you do not have a GPU, you can remove the <code>cuda()</code> code in the snippet below and it will run on CPU.</p> </div> <pre data-language="python">import torch
+def fn(x, y):
+    a = torch.cos(x).cuda()
+    b = torch.sin(y).cuda()
+    return a + b
+new_fn = torch.compile(fn, backend="inductor")
+input_tensor = torch.randn(10000).to(device="cuda:0")
+a = new_fn(input_tensor, input_tensor)
+</pre> <p>A more famous pointwise operator you might want to use would be something like <code>torch.relu()</code>. Pointwise ops in eager mode are suboptimal because each one would need to read a tensor from the memory, make some changes, and then write back those changes. The single most important optimization that inductor performs is fusion. In the example above we can turn 2 reads and 2 writes into 1 read and 1 write which is crucial especially for newer GPUs where the bottleneck is memory bandwidth (how quickly you can send data to a GPU) rather than compute (how quickly your GPU can crunch floating point operations).</p> <p>Another major optimization that inductor provides is automatic support for CUDA graphs. CUDA graphs help eliminate the overhead from launching individual kernels from a Python program which is especially relevant for newer GPUs.</p> <p>TorchDynamo supports many different backends, but TorchInductor specifically works by generating <a class="reference external" href="https://github.com/openai/triton">Triton</a> kernels. Let’s save our example above into a file called <code>example.py</code>. We can inspect the code generated Triton kernels by running <code>TORCH_COMPILE_DEBUG=1 python example.py</code>. As the script executes, you should see <code>DEBUG</code> messages printed to the terminal. Closer to the end of the log, you should see a path to a folder that contains <code>torchinductor_&lt;your_username&gt;</code>. In that folder, you can find the <code>output_code.py</code> file that contains the generated kernel code similar to the following:</p> <pre data-language="python">@pointwise(size_hints=[16384], filename=__file__, meta={'signature': {0: '*fp32', 1: '*fp32', 2: 'i32'}, 'device': 0, 'constants': {}, 'configs': [instance_descriptor(divisible_by_16=(0, 1, 2), equal_to_1=())]})
+@triton.jit
+def kernel(in_ptr0, out_ptr0, xnumel, XBLOCK : tl.constexpr):
+    xnumel = 10000
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = xindex &lt; xnumel
+    x0 = xindex
+    tmp0 = tl.load(in_ptr0 + (x0), xmask)
+    tmp1 = tl.cos(tmp0)
+    tmp2 = tl.sin(tmp0)
+    tmp3 = tmp1 + tmp2
+    tl.store(out_ptr0 + (x0), tmp3, xmask)
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The above code snippet is an example. Depending on your hardware, you might see different code generated.</p> </div> <p>And you can verify that fusing the <code>cos</code> and <code>sin</code> did actually occur because the <code>cos</code> and <code>sin</code> operations occur within a single Triton kernel and the temporary variables are held in registers with very fast access.</p> <p>Read more on Triton’s performance <a class="reference external" href="https://openai.com/blog/triton/">here</a>. Because the code is written in Python, it’s fairly easy to understand even if you have not written all that many CUDA kernels.</p> <p>Next, let’s try a real model like resnet50 from the PyTorch hub.</p> <pre data-language="python">import torch
+model = torch.hub.load('pytorch/vision:v0.10.0', 'resnet50', pretrained=True)
+opt_model = torch.compile(model, backend="inductor")
+opt_model(torch.randn(1,3,64,64))
+</pre> <p>And that is not the only available backend, you can run in a REPL <code>torch.compiler.list_backends()</code> to see all the available backends. Try out the <code>cudagraphs</code> next as inspiration.</p>  <h2 id="using-a-pretrained-model">Using a pretrained model</h2> <p>PyTorch users frequently leverage pretrained models from <a class="reference external" href="https://github.com/huggingface/transformers">transformers</a> or <a class="reference external" href="https://github.com/rwightman/pytorch-image-models">TIMM</a> and one of the design goals is TorchDynamo and TorchInductor is to work out of the box with any model that people would like to author.</p> <p>Let’s download a pretrained model directly from the HuggingFace hub and optimize it:</p> <pre data-language="python">import torch
+from transformers import BertTokenizer, BertModel
+# Copy pasted from here https://huggingface.co/bert-base-uncased
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertModel.from_pretrained("bert-base-uncased").to(device="cuda:0")
+model = torch.compile(model, backend="inductor") # This is the only line of code that we changed
+text = "Replace me by any text you'd like."
+encoded_input = tokenizer(text, return_tensors='pt').to(device="cuda:0")
+output = model(**encoded_input)
+</pre> <p>If you remove the <code>to(device="cuda:0")</code> from the model and <code>encoded_input</code>, then Triton will generate C++ kernels that will be optimized for running on your CPU. You can inspect both Triton or C++ kernels for BERT. They are more complex than the trigonometry example we tried above but you can similarly skim through it and see if you understand how PyTorch works.</p> <p>Similarly, let’s try out a TIMM example:</p> <pre data-language="python">import timm
+import torch
+model = timm.create_model('resnext101_32x8d', pretrained=True, num_classes=2)
+opt_model = torch.compile(model, backend="inductor")
+opt_model(torch.randn(64,3,7,7))
+</pre>   <h2 id="next-steps">Next Steps</h2> <p>In this section, we have reviewed a few inference examples and developed a basic understanding of how torch.compile works. Here is what you check out next:</p> <ul class="simple"> <li><a class="reference external" href="https://pytorch.org/tutorials/intermediate/torch_compile_tutorial.html">torch.compile tutorial on training</a></li> <li><a class="reference internal" href="torch.compiler_api#torch-compiler-api"><span class="std std-ref">torch.compiler API reference</span></a></li> <li><a class="reference internal" href="torch.compiler_fine_grain_apis#torchdynamo-fine-grain-tracing"><span class="std std-ref">TorchDynamo APIs for fine-grained tracing</span></a></li> </ul><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch.compiler_get_started.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch.compiler_get_started.html</a>
+  </p>
+</div>

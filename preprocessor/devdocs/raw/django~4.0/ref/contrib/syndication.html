@@ -1,0 +1,689 @@
+<h1 id="the-syndication-feed-framework">The syndication feed framework</h1> <p id="s-module-django.contrib.syndication">Django comes with a high-level syndication-feed-generating framework for creating <a class="reference external" href="https://developer.mozilla.org/en-US/docs/Glossary/RSS">RSS</a> and <a class="rfc reference external" href="https://tools.ietf.org/html/rfc4287.html" id="index-0"><strong>Atom</strong></a> feeds.</p> <p>To create any syndication feed, all you have to do is write a short Python class. You can create as many feeds as you want.</p> <p>Django also comes with a lower-level feed-generating API. Use this if you want to generate feeds outside of a web context, or in some other lower-level way.</p>  <h2 id="the-high-level-framework">The high-level framework</h2>  <h3 id="overview">Overview</h3> <p id="s-the-high-level-framework">The high-level feed-generating framework is supplied by the <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class. To create a feed, write a <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class and point to an instance of it in your <a class="reference internal" href="../../topics/http/urls"><span class="doc">URLconf</span></a>.</p>   <h3 id="feed-classes">
+<code>Feed</code> classes</h3> <p id="s-feed-classes">A <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class is a Python class that represents a syndication feed. A feed can be simple (e.g., a “site news” feed, or a basic feed displaying the latest entries of a blog) or more complex (e.g., a feed displaying all the blog entries in a particular category, where the category is variable).</p> <p>Feed classes subclass <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>django.contrib.syndication.views.Feed</code></a>. They can live anywhere in your codebase.</p> <p>Instances of <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> classes are views which can be used in your <a class="reference internal" href="../../topics/http/urls"><span class="doc">URLconf</span></a>.</p>   <h3 id="a-simple-example">A simple example</h3> <p id="s-a-simple-example">This simple example, taken from a hypothetical police beat news site describes a feed of the latest five news items:</p> <pre data-language="python">from django.contrib.syndication.views import Feed
+from django.urls import reverse
+from policebeat.models import NewsItem
+
+class LatestEntriesFeed(Feed):
+    title = "Police beat site news"
+    link = "/sitenews/"
+    description = "Updates on changes and additions to police beat central."
+
+    def items(self):
+        return NewsItem.objects.order_by('-pub_date')[:5]
+
+    def item_title(self, item):
+        return item.title
+
+    def item_description(self, item):
+        return item.description
+
+    # item_link is only needed if NewsItem has no get_absolute_url method.
+    def item_link(self, item):
+        return reverse('news-item', args=[item.pk])
+</pre> <p>To connect a URL to this feed, put an instance of the Feed object in your <a class="reference internal" href="../../topics/http/urls"><span class="doc">URLconf</span></a>. For example:</p> <pre data-language="python">from django.urls import path
+from myproject.feeds import LatestEntriesFeed
+
+urlpatterns = [
+    # ...
+    path('latest/feed/', LatestEntriesFeed()),
+    # ...
+]
+</pre> <p>Note:</p> <ul class="simple"> <li>The Feed class subclasses <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>django.contrib.syndication.views.Feed</code></a>.</li> <li>
+<code>title</code>, <code>link</code> and <code>description</code> correspond to the standard RSS <code>&lt;title&gt;</code>, <code>&lt;link&gt;</code> and <code>&lt;description&gt;</code> elements, respectively.</li> <li>
+<code>items()</code> is, a method that returns a list of objects that should be included in the feed as <code>&lt;item&gt;</code> elements. Although this example returns <code>NewsItem</code> objects using Django’s <a class="reference internal" href="../models/querysets"><span class="doc">object-relational mapper</span></a>, <code>items()</code> doesn’t have to return model instances. Although you get a few bits of functionality “for free” by using Django models, <code>items()</code> can return any type of object you want.</li> <li>If you’re creating an Atom feed, rather than an RSS feed, set the <code>subtitle</code> attribute instead of the <code>description</code> attribute. See <a class="reference internal" href="#publishing-atom-and-rss-feeds-in-tandem">Publishing Atom and RSS feeds in tandem</a>, later, for an example.</li> </ul> <p>One thing is left to do. In an RSS feed, each <code>&lt;item&gt;</code> has a <code>&lt;title&gt;</code>, <code>&lt;link&gt;</code> and <code>&lt;description&gt;</code>. We need to tell the framework what data to put into those elements.</p> <ul> <li>
+<p class="first">For the contents of <code>&lt;title&gt;</code> and <code>&lt;description&gt;</code>, Django tries calling the methods <code>item_title()</code> and <code>item_description()</code> on the <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class. They are passed a single parameter, <code>item</code>, which is the object itself. These are optional; by default, the string representation of the object is used for both.</p> <p>If you want to do any special formatting for either the title or description, <a class="reference internal" href="../templates/language"><span class="doc">Django templates</span></a> can be used instead. Their paths can be specified with the <code>title_template</code> and <code>description_template</code> attributes on the <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class. The templates are rendered for each item and are passed two template context variables:</p> <ul class="simple"> <li>
+<code>{{ obj }}</code> – The current object (one of whichever objects you returned in <code>items()</code>).</li> <li>
+<code>{{ site }}</code> – A <a class="reference internal" href="sites#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>django.contrib.sites.models.Site</code></a> object representing the current site. This is useful for <code>{{ site.domain
+}}</code> or <code>{{ site.name }}</code>. If you do <em>not</em> have the Django sites framework installed, this will be set to a <a class="reference internal" href="sites#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a> object. See the <a class="reference internal" href="sites#id3"><span class="std std-ref">RequestSite section of the sites framework documentation</span></a> for more.</li> </ul> <p>See <a class="reference internal" href="#a-complex-example">a complex example</a> below that uses a description template.</p> <dl class="method"> <dt id="django.contrib.syndication.Feed.get_context_data">
+<code>Feed.get_context_data(**kwargs)</code> </dt> <dd>
+<p>There is also a way to pass additional information to title and description templates, if you need to supply more than the two variables mentioned before. You can provide your implementation of <code>get_context_data</code> method in your <code>Feed</code> subclass. For example:</p> <pre data-language="python">from mysite.models import Article
+from django.contrib.syndication.views import Feed
+
+class ArticlesFeed(Feed):
+    title = "My articles"
+    description_template = "feeds/articles.html"
+
+    def items(self):
+        return Article.objects.order_by('-pub_date')[:5]
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['foo'] = 'bar'
+        return context
+</pre> </dd>
+</dl> <p>And the template:</p> <pre data-language="markup">Something about {{ foo }}: {{ obj.description }}
+</pre> <p>This method will be called once per each item in the list returned by <code>items()</code> with the following keyword arguments:</p> <ul class="simple"> <li>
+<code>item</code>: the current item. For backward compatibility reasons, the name of this context variable is <code>{{ obj }}</code>.</li> <li>
+<code>obj</code>: the object returned by <code>get_object()</code>. By default this is not exposed to the templates to avoid confusion with <code>{{ obj }}</code> (see above), but you can use it in your implementation of <code>get_context_data()</code>.</li> <li>
+<code>site</code>: current site as described above.</li> <li>
+<code>request</code>: current request.</li> </ul> <p>The behavior of <code>get_context_data()</code> mimics that of <a class="reference internal" href="../../topics/class-based-views/generic-display#adding-extra-context"><span class="std std-ref">generic views</span></a> - you’re supposed to call <code>super()</code> to retrieve context data from parent class, add your data and return the modified dictionary.</p> </li> <li>To specify the contents of <code>&lt;link&gt;</code>, you have two options. For each item in <code>items()</code>, Django first tries calling the <code>item_link()</code> method on the <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class. In a similar way to the title and description, it is passed it a single parameter, <code>item</code>. If that method doesn’t exist, Django tries executing a <code>get_absolute_url()</code> method on that object. Both <code>get_absolute_url()</code> and <code>item_link()</code> should return the item’s URL as a normal Python string. As with <code>get_absolute_url()</code>, the result of <code>item_link()</code> will be included directly in the URL, so you are responsible for doing all necessary URL quoting and conversion to ASCII inside the method itself. </li> </ul>   <h3 id="a-complex-example">A complex example</h3> <p id="s-a-complex-example">The framework also supports more complex feeds, via arguments.</p> <p>For example, a website could offer an RSS feed of recent crimes for every police beat in a city. It’d be silly to create a separate <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class for each police beat; that would violate the <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/misc/design-philosophies/#dry"><span class="std std-ref">DRY principle</span></a> and would couple data to programming logic. Instead, the syndication framework lets you access the arguments passed from your <a class="reference internal" href="../../topics/http/urls"><span class="doc">URLconf</span></a> so feeds can output items based on information in the feed’s URL.</p> <p>The police beat feeds could be accessible via URLs like this:</p> <ul class="simple"> <li>
+<code>/beats/613/rss/</code> – Returns recent crimes for beat 613.</li> <li>
+<code>/beats/1424/rss/</code> – Returns recent crimes for beat 1424.</li> </ul> <p>These can be matched with a <a class="reference internal" href="../../topics/http/urls"><span class="doc">URLconf</span></a> line such as:</p> <pre data-language="python">path('beats/&lt;int:beat_id&gt;/rss/', BeatFeed()),
+</pre> <p>Like a view, the arguments in the URL are passed to the <code>get_object()</code> method along with the request object.</p> <p>Here’s the code for these beat-specific feeds:</p> <pre data-language="python">from django.contrib.syndication.views import Feed
+
+class BeatFeed(Feed):
+    description_template = 'feeds/beat_description.html'
+
+    def get_object(self, request, beat_id):
+        return Beat.objects.get(pk=beat_id)
+
+    def title(self, obj):
+        return "Police beat central: Crimes for beat %s" % obj.beat
+
+    def link(self, obj):
+        return obj.get_absolute_url()
+
+    def description(self, obj):
+        return "Crimes recently reported in police beat %s" % obj.beat
+
+    def items(self, obj):
+        return Crime.objects.filter(beat=obj).order_by('-crime_date')[:30]
+</pre> <p>To generate the feed’s <code>&lt;title&gt;</code>, <code>&lt;link&gt;</code> and <code>&lt;description&gt;</code>, Django uses the <code>title()</code>, <code>link()</code> and <code>description()</code> methods. In the previous example, they were string class attributes, but this example illustrates that they can be either strings <em>or</em> methods. For each of <code>title</code>, <code>link</code> and <code>description</code>, Django follows this algorithm:</p> <ul class="simple"> <li>First, it tries to call a method, passing the <code>obj</code> argument, where <code>obj</code> is the object returned by <code>get_object()</code>.</li> <li>Failing that, it tries to call a method with no arguments.</li> <li>Failing that, it uses the class attribute.</li> </ul> <p>Also note that <code>items()</code> also follows the same algorithm – first, it tries <code>items(obj)</code>, then <code>items()</code>, then finally an <code>items</code> class attribute (which should be a list).</p> <p>We are using a template for the item descriptions. It can be as minimal as this:</p> <pre data-language="markup">{{ obj.description }}
+</pre> <p>However, you are free to add formatting as desired.</p> <p>The <code>ExampleFeed</code> class below gives full documentation on methods and attributes of <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> classes.</p>   <h3 id="specifying-the-type-of-feed">Specifying the type of feed</h3> <p id="s-specifying-the-type-of-feed">By default, feeds produced in this framework use RSS 2.0.</p> <p>To change that, add a <code>feed_type</code> attribute to your <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class, like so:</p> <pre data-language="python">from django.utils.feedgenerator import Atom1Feed
+
+class MyFeed(Feed):
+    feed_type = Atom1Feed
+</pre> <p>Note that you set <code>feed_type</code> to a class object, not an instance.</p> <p>Currently available feed types are:</p> <ul class="simple"> <li>
+<a class="reference internal" href="../utils#django.utils.feedgenerator.Rss201rev2Feed" title="django.utils.feedgenerator.Rss201rev2Feed"><code>django.utils.feedgenerator.Rss201rev2Feed</code></a> (RSS 2.01. Default.)</li> <li>
+<a class="reference internal" href="../utils#django.utils.feedgenerator.RssUserland091Feed" title="django.utils.feedgenerator.RssUserland091Feed"><code>django.utils.feedgenerator.RssUserland091Feed</code></a> (RSS 0.91.)</li> <li>
+<a class="reference internal" href="../utils#django.utils.feedgenerator.Atom1Feed" title="django.utils.feedgenerator.Atom1Feed"><code>django.utils.feedgenerator.Atom1Feed</code></a> (Atom 1.0.)</li> </ul>   <h3 id="enclosures">Enclosures</h3> <p id="s-enclosures">To specify enclosures, such as those used in creating podcast feeds, use the <code>item_enclosures</code> hook or, alternatively and if you only have a single enclosure per item, the <code>item_enclosure_url</code>, <code>item_enclosure_length</code>, and <code>item_enclosure_mime_type</code> hooks. See the <code>ExampleFeed</code> class below for usage examples.</p>   <h3 id="language">Language</h3> <p id="s-language">Feeds created by the syndication framework automatically include the appropriate <code>&lt;language&gt;</code> tag (RSS 2.0) or <code>xml:lang</code> attribute (Atom). By default, this is <a class="reference internal" href="../utils#django.utils.translation.get_language" title="django.utils.translation.get_language"><code>django.utils.translation.get_language()</code></a>. You can change it by setting the <code>language</code> class attribute.</p>   <h3 id="urls">URLs</h3> <p id="s-urls">The <code>link</code> method/attribute can return either an absolute path (e.g. <code>"/blog/"</code>) or a URL with the fully-qualified domain and protocol (e.g. <code>"https://www.example.com/blog/"</code>). If <code>link</code> doesn’t return the domain, the syndication framework will insert the domain of the current site, according to your <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID setting</code></a>.</p> <p>Atom feeds require a <code>&lt;link rel="self"&gt;</code> that defines the feed’s current location. The syndication framework populates this automatically, using the domain of the current site according to the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting.</p>   <h3 id="publishing-atom-and-rss-feeds-in-tandem">Publishing Atom and RSS feeds in tandem</h3> <p id="s-publishing-atom-and-rss-feeds-in-tandem">Some developers like to make available both Atom <em>and</em> RSS versions of their feeds. To do that, you can create a subclass of your <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class and set the <code>feed_type</code> to something different. Then update your URLconf to add the extra versions.</p> <p>Here’s a full example:</p> <pre data-language="python">from django.contrib.syndication.views import Feed
+from policebeat.models import NewsItem
+from django.utils.feedgenerator import Atom1Feed
+
+class RssSiteNewsFeed(Feed):
+    title = "Police beat site news"
+    link = "/sitenews/"
+    description = "Updates on changes and additions to police beat central."
+
+    def items(self):
+        return NewsItem.objects.order_by('-pub_date')[:5]
+
+class AtomSiteNewsFeed(RssSiteNewsFeed):
+    feed_type = Atom1Feed
+    subtitle = RssSiteNewsFeed.description
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>In this example, the RSS feed uses a <code>description</code> while the Atom feed uses a <code>subtitle</code>. That’s because Atom feeds don’t provide for a feed-level “description,” but they <em>do</em> provide for a “subtitle.”</p> <p>If you provide a <code>description</code> in your <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class, Django will <em>not</em> automatically put that into the <code>subtitle</code> element, because a subtitle and description are not necessarily the same thing. Instead, you should define a <code>subtitle</code> attribute.</p> <p class="last">In the above example, we set the Atom feed’s <code>subtitle</code> to the RSS feed’s <code>description</code>, because it’s quite short already.</p> </div> <p>And the accompanying URLconf:</p> <pre data-language="python">from django.urls import path
+from myproject.feeds import AtomSiteNewsFeed, RssSiteNewsFeed
+
+urlpatterns = [
+    # ...
+    path('sitenews/rss/', RssSiteNewsFeed()),
+    path('sitenews/atom/', AtomSiteNewsFeed()),
+    # ...
+]
+</pre>   <h3 id="feed-class-reference">
+<code>Feed</code> class reference</h3> <dl class="class" id="s-feed-class-reference"> <dt id="django.contrib.syndication.views.Feed">
+<code>class views.Feed</code> </dt> 
+</dl> <p>This example illustrates all possible attributes and methods for a <a class="reference internal" href="#django.contrib.syndication.views.Feed" title="django.contrib.syndication.views.Feed"><code>Feed</code></a> class:</p> <pre data-language="python">from django.contrib.syndication.views import Feed
+from django.utils import feedgenerator
+
+class ExampleFeed(Feed):
+
+    # FEED TYPE -- Optional. This should be a class that subclasses
+    # django.utils.feedgenerator.SyndicationFeed. This designates
+    # which type of feed this should be: RSS 2.0, Atom 1.0, etc. If
+    # you don't specify feed_type, your feed will be RSS 2.0. This
+    # should be a class, not an instance of the class.
+
+    feed_type = feedgenerator.Rss201rev2Feed
+
+    # TEMPLATE NAMES -- Optional. These should be strings
+    # representing names of Django templates that the system should
+    # use in rendering the title and description of your feed items.
+    # Both are optional. If a template is not specified, the
+    # item_title() or item_description() methods are used instead.
+
+    title_template = None
+    description_template = None
+
+    # LANGUAGE -- Optional. This should be a string specifying a language
+    # code. Defaults to django.utils.translation.get_language().
+    language = 'de'
+
+    # TITLE -- One of the following three is required. The framework
+    # looks for them in this order.
+
+    def title(self, obj):
+        """
+        Takes the object returned by get_object() and returns the
+        feed's title as a normal Python string.
+        """
+
+    def title(self):
+        """
+        Returns the feed's title as a normal Python string.
+        """
+
+    title = 'foo' # Hard-coded title.
+
+    # LINK -- One of the following three is required. The framework
+    # looks for them in this order.
+
+    def link(self, obj):
+        """
+        # Takes the object returned by get_object() and returns the URL
+        # of the HTML version of the feed as a normal Python string.
+        """
+
+    def link(self):
+        """
+        Returns the URL of the HTML version of the feed as a normal Python
+        string.
+        """
+
+    link = '/blog/' # Hard-coded URL.
+
+    # FEED_URL -- One of the following three is optional. The framework
+    # looks for them in this order.
+
+    def feed_url(self, obj):
+        """
+        # Takes the object returned by get_object() and returns the feed's
+        # own URL as a normal Python string.
+        """
+
+    def feed_url(self):
+        """
+        Returns the feed's own URL as a normal Python string.
+        """
+
+    feed_url = '/blog/rss/' # Hard-coded URL.
+
+    # GUID -- One of the following three is optional. The framework looks
+    # for them in this order. This property is only used for Atom feeds
+    # (where it is the feed-level ID element). If not provided, the feed
+    # link is used as the ID.
+
+    def feed_guid(self, obj):
+        """
+        Takes the object returned by get_object() and returns the globally
+        unique ID for the feed as a normal Python string.
+        """
+
+    def feed_guid(self):
+        """
+        Returns the feed's globally unique ID as a normal Python string.
+        """
+
+    feed_guid = '/foo/bar/1234' # Hard-coded guid.
+
+    # DESCRIPTION -- One of the following three is required. The framework
+    # looks for them in this order.
+
+    def description(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        description as a normal Python string.
+        """
+
+    def description(self):
+        """
+        Returns the feed's description as a normal Python string.
+        """
+
+    description = 'Foo bar baz.' # Hard-coded description.
+
+    # AUTHOR NAME --One of the following three is optional. The framework
+    # looks for them in this order.
+
+    def author_name(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        author's name as a normal Python string.
+        """
+
+    def author_name(self):
+        """
+        Returns the feed's author's name as a normal Python string.
+        """
+
+    author_name = 'Sally Smith' # Hard-coded author name.
+
+    # AUTHOR EMAIL --One of the following three is optional. The framework
+    # looks for them in this order.
+
+    def author_email(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        author's email as a normal Python string.
+        """
+
+    def author_email(self):
+        """
+        Returns the feed's author's email as a normal Python string.
+        """
+
+    author_email = 'test@example.com' # Hard-coded author email.
+
+    # AUTHOR LINK --One of the following three is optional. The framework
+    # looks for them in this order. In each case, the URL should include
+    # the "http://" and domain name.
+
+    def author_link(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        author's URL as a normal Python string.
+        """
+
+    def author_link(self):
+        """
+        Returns the feed's author's URL as a normal Python string.
+        """
+
+    author_link = 'https://www.example.com/' # Hard-coded author URL.
+
+    # CATEGORIES -- One of the following three is optional. The framework
+    # looks for them in this order. In each case, the method/attribute
+    # should return an iterable object that returns strings.
+
+    def categories(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        categories as iterable over strings.
+        """
+
+    def categories(self):
+        """
+        Returns the feed's categories as iterable over strings.
+        """
+
+    categories = ("python", "django") # Hard-coded list of categories.
+
+    # COPYRIGHT NOTICE -- One of the following three is optional. The
+    # framework looks for them in this order.
+
+    def feed_copyright(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        copyright notice as a normal Python string.
+        """
+
+    def feed_copyright(self):
+        """
+        Returns the feed's copyright notice as a normal Python string.
+        """
+
+    feed_copyright = 'Copyright (c) 2007, Sally Smith' # Hard-coded copyright notice.
+
+    # TTL -- One of the following three is optional. The framework looks
+    # for them in this order. Ignored for Atom feeds.
+
+    def ttl(self, obj):
+        """
+        Takes the object returned by get_object() and returns the feed's
+        TTL (Time To Live) as a normal Python string.
+        """
+
+    def ttl(self):
+        """
+        Returns the feed's TTL as a normal Python string.
+        """
+
+    ttl = 600 # Hard-coded Time To Live.
+
+    # ITEMS -- One of the following three is required. The framework looks
+    # for them in this order.
+
+    def items(self, obj):
+        """
+        Takes the object returned by get_object() and returns a list of
+        items to publish in this feed.
+        """
+
+    def items(self):
+        """
+        Returns a list of items to publish in this feed.
+        """
+
+    items = ('Item 1', 'Item 2') # Hard-coded items.
+
+    # GET_OBJECT -- This is required for feeds that publish different data
+    # for different URL parameters. (See "A complex example" above.)
+
+    def get_object(self, request, *args, **kwargs):
+        """
+        Takes the current request and the arguments from the URL, and
+        returns an object represented by this feed. Raises
+        django.core.exceptions.ObjectDoesNotExist on error.
+        """
+
+    # ITEM TITLE AND DESCRIPTION -- If title_template or
+    # description_template are not defined, these are used instead. Both are
+    # optional, by default they will use the string representation of the
+    # item.
+
+    def item_title(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        title as a normal Python string.
+        """
+
+    def item_title(self):
+        """
+        Returns the title for every item in the feed.
+        """
+
+    item_title = 'Breaking News: Nothing Happening' # Hard-coded title.
+
+    def item_description(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        description as a normal Python string.
+        """
+
+    def item_description(self):
+        """
+        Returns the description for every item in the feed.
+        """
+
+    item_description = 'A description of the item.' # Hard-coded description.
+
+    def get_context_data(self, **kwargs):
+        """
+        Returns a dictionary to use as extra context if either
+        description_template or item_template are used.
+
+        Default implementation preserves the old behavior
+        of using {'obj': item, 'site': current_site} as the context.
+        """
+
+    # ITEM LINK -- One of these three is required. The framework looks for
+    # them in this order.
+
+    # First, the framework tries the two methods below, in
+    # order. Failing that, it falls back to the get_absolute_url()
+    # method on each item returned by items().
+
+    def item_link(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's URL.
+        """
+
+    def item_link(self):
+        """
+        Returns the URL for every item in the feed.
+        """
+
+    # ITEM_GUID -- The following method is optional. If not provided, the
+    # item's link is used by default.
+
+    def item_guid(self, obj):
+        """
+        Takes an item, as return by items(), and returns the item's ID.
+        """
+
+    # ITEM_GUID_IS_PERMALINK -- The following method is optional. If
+    # provided, it sets the 'isPermaLink' attribute of an item's
+    # GUID element. This method is used only when 'item_guid' is
+    # specified.
+
+    def item_guid_is_permalink(self, obj):
+        """
+        Takes an item, as returned by items(), and returns a boolean.
+        """
+
+    item_guid_is_permalink = False  # Hard coded value
+
+    # ITEM AUTHOR NAME -- One of the following three is optional. The
+    # framework looks for them in this order.
+
+    def item_author_name(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        author's name as a normal Python string.
+        """
+
+    def item_author_name(self):
+        """
+        Returns the author name for every item in the feed.
+        """
+
+    item_author_name = 'Sally Smith' # Hard-coded author name.
+
+    # ITEM AUTHOR EMAIL --One of the following three is optional. The
+    # framework looks for them in this order.
+    #
+    # If you specify this, you must specify item_author_name.
+
+    def item_author_email(self, obj):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        author's email as a normal Python string.
+        """
+
+    def item_author_email(self):
+        """
+        Returns the author email for every item in the feed.
+        """
+
+    item_author_email = 'test@example.com' # Hard-coded author email.
+
+    # ITEM AUTHOR LINK -- One of the following three is optional. The
+    # framework looks for them in this order. In each case, the URL should
+    # include the "http://" and domain name.
+    #
+    # If you specify this, you must specify item_author_name.
+
+    def item_author_link(self, obj):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        author's URL as a normal Python string.
+        """
+
+    def item_author_link(self):
+        """
+        Returns the author URL for every item in the feed.
+        """
+
+    item_author_link = 'https://www.example.com/' # Hard-coded author URL.
+
+    # ITEM ENCLOSURES -- One of the following three is optional. The
+    # framework looks for them in this order. If one of them is defined,
+    # ``item_enclosure_url``, ``item_enclosure_length``, and
+    # ``item_enclosure_mime_type`` will have no effect.
+
+    def item_enclosures(self, item):
+        """
+        Takes an item, as returned by items(), and returns a list of
+        ``django.utils.feedgenerator.Enclosure`` objects.
+        """
+
+    def item_enclosures(self):
+        """
+        Returns the ``django.utils.feedgenerator.Enclosure`` list for every
+        item in the feed.
+        """
+
+    item_enclosures = []  # Hard-coded enclosure list
+
+    # ITEM ENCLOSURE URL -- One of these three is required if you're
+    # publishing enclosures and you're not using ``item_enclosures``. The
+    # framework looks for them in this order.
+
+    def item_enclosure_url(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        enclosure URL.
+        """
+
+    def item_enclosure_url(self):
+        """
+        Returns the enclosure URL for every item in the feed.
+        """
+
+    item_enclosure_url = "/foo/bar.mp3" # Hard-coded enclosure link.
+
+    # ITEM ENCLOSURE LENGTH -- One of these three is required if you're
+    # publishing enclosures and you're not using ``item_enclosures``. The
+    # framework looks for them in this order. In each case, the returned
+    # value should be either an integer, or a string representation of the
+    # integer, in bytes.
+
+    def item_enclosure_length(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        enclosure length.
+        """
+
+    def item_enclosure_length(self):
+        """
+        Returns the enclosure length for every item in the feed.
+        """
+
+    item_enclosure_length = 32000 # Hard-coded enclosure length.
+
+    # ITEM ENCLOSURE MIME TYPE -- One of these three is required if you're
+    # publishing enclosures and you're not using ``item_enclosures``. The
+    # framework looks for them in this order.
+
+    def item_enclosure_mime_type(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        enclosure MIME type.
+        """
+
+    def item_enclosure_mime_type(self):
+        """
+        Returns the enclosure MIME type for every item in the feed.
+        """
+
+    item_enclosure_mime_type = "audio/mpeg" # Hard-coded enclosure MIME type.
+
+    # ITEM PUBDATE -- It's optional to use one of these three. This is a
+    # hook that specifies how to get the pubdate for a given item.
+    # In each case, the method/attribute should return a Python
+    # datetime.datetime object.
+
+    def item_pubdate(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        pubdate.
+        """
+
+    def item_pubdate(self):
+        """
+        Returns the pubdate for every item in the feed.
+        """
+
+    item_pubdate = datetime.datetime(2005, 5, 3) # Hard-coded pubdate.
+
+    # ITEM UPDATED -- It's optional to use one of these three. This is a
+    # hook that specifies how to get the updateddate for a given item.
+    # In each case, the method/attribute should return a Python
+    # datetime.datetime object.
+
+    def item_updateddate(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        updateddate.
+        """
+
+    def item_updateddate(self):
+        """
+        Returns the updateddate for every item in the feed.
+        """
+
+    item_updateddate = datetime.datetime(2005, 5, 3) # Hard-coded updateddate.
+
+    # ITEM CATEGORIES -- It's optional to use one of these three. This is
+    # a hook that specifies how to get the list of categories for a given
+    # item. In each case, the method/attribute should return an iterable
+    # object that returns strings.
+
+    def item_categories(self, item):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        categories.
+        """
+
+    def item_categories(self):
+        """
+        Returns the categories for every item in the feed.
+        """
+
+    item_categories = ("python", "django") # Hard-coded categories.
+
+    # ITEM COPYRIGHT NOTICE (only applicable to Atom feeds) -- One of the
+    # following three is optional. The framework looks for them in this
+    # order.
+
+    def item_copyright(self, obj):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        copyright notice as a normal Python string.
+        """
+
+    def item_copyright(self):
+        """
+        Returns the copyright notice for every item in the feed.
+        """
+
+    item_copyright = 'Copyright (c) 2007, Sally Smith' # Hard-coded copyright notice.
+
+    # ITEM COMMENTS URL -- It's optional to use one of these three. This is
+    # a hook that specifies how to get the URL of a page for comments for a
+    # given item.
+
+    def item_comments(self, obj):
+        """
+        Takes an item, as returned by items(), and returns the item's
+        comments URL as a normal Python string.
+        """
+
+    def item_comments(self):
+        """
+        Returns the comments URL for every item in the feed.
+        """
+
+    item_comments = 'https://www.example.com/comments' # Hard-coded comments URL
+</pre> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>Support for a comments URL per feed item was added through the <code>item_comments</code> hook.</p> </div>    <h2 id="the-low-level-framework">The low-level framework</h2> <p id="s-the-low-level-framework">Behind the scenes, the high-level RSS framework uses a lower-level framework for generating feeds’ XML. This framework lives in a single module: <a class="reference external" href="https://github.com/django/django/blob/main/django/utils/feedgenerator.py">django/utils/feedgenerator.py</a>.</p> <p>You use this framework on your own, for lower-level feed generation. You can also create custom feed generator subclasses for use with the <code>feed_type</code> <code>Feed</code> option.</p>  <h3 id="syndicationfeed-classes">
+<code>SyndicationFeed</code> classes</h3> <p id="s-syndicationfeed-classes">The <a class="reference internal" href="../utils#module-django.utils.feedgenerator" title="django.utils.feedgenerator: Syndication feed generation library -- used for generating RSS, etc."><code>feedgenerator</code></a> module contains a base class:</p> <ul class="simple"> <li><a class="reference internal" href="../utils#django.utils.feedgenerator.SyndicationFeed" title="django.utils.feedgenerator.SyndicationFeed"><code>django.utils.feedgenerator.SyndicationFeed</code></a></li> </ul> <p>and several subclasses:</p> <ul class="simple"> <li><a class="reference internal" href="../utils#django.utils.feedgenerator.RssUserland091Feed" title="django.utils.feedgenerator.RssUserland091Feed"><code>django.utils.feedgenerator.RssUserland091Feed</code></a></li> <li><a class="reference internal" href="../utils#django.utils.feedgenerator.Rss201rev2Feed" title="django.utils.feedgenerator.Rss201rev2Feed"><code>django.utils.feedgenerator.Rss201rev2Feed</code></a></li> <li><a class="reference internal" href="../utils#django.utils.feedgenerator.Atom1Feed" title="django.utils.feedgenerator.Atom1Feed"><code>django.utils.feedgenerator.Atom1Feed</code></a></li> </ul> <p>Each of these three classes knows how to render a certain type of feed as XML. They share this interface:</p> <dl class="docutils"> <dt>
+ <a class="reference internal" href="../utils#django.utils.feedgenerator.SyndicationFeed.__init__" title="django.utils.feedgenerator.SyndicationFeed.__init__"><code>SyndicationFeed.__init__()</code></a>
+</dt> <dd>
+<p class="first">Initialize the feed with the given dictionary of metadata, which applies to the entire feed. Required keyword arguments are:</p> <ul class="simple"> <li><code>title</code></li> <li><code>link</code></li> <li><code>description</code></li> </ul> <p>There’s also a bunch of other optional keywords:</p> <ul class="simple"> <li><code>language</code></li> <li><code>author_email</code></li> <li><code>author_name</code></li> <li><code>author_link</code></li> <li><code>subtitle</code></li> <li><code>categories</code></li> <li><code>feed_url</code></li> <li><code>feed_copyright</code></li> <li><code>feed_guid</code></li> <li><code>ttl</code></li> </ul> <p>Any extra keyword arguments you pass to <code>__init__</code> will be stored in <code>self.feed</code> for use with <a class="reference internal" href="#custom-feed-generators">custom feed generators</a>.</p> <p class="last">All parameters should be strings, except <code>categories</code>, which should be a sequence of strings. Beware that some control characters are <a class="reference external" href="https://www.w3.org/International/questions/qa-controls">not allowed</a> in XML documents. If your content has some of them, you might encounter a <a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.10)"><code>ValueError</code></a> when producing the feed.</p> </dd> <dt>
+ <a class="reference internal" href="../utils#django.utils.feedgenerator.SyndicationFeed.add_item" title="django.utils.feedgenerator.SyndicationFeed.add_item"><code>SyndicationFeed.add_item()</code></a>
+</dt> <dd>
+<p class="first">Add an item to the feed with the given parameters.</p> <p>Required keyword arguments are:</p> <ul class="simple"> <li><code>title</code></li> <li><code>link</code></li> <li><code>description</code></li> </ul> <p>Optional keyword arguments are:</p> <ul class="simple"> <li><code>author_email</code></li> <li><code>author_name</code></li> <li><code>author_link</code></li> <li><code>pubdate</code></li> <li><code>comments</code></li> <li><code>unique_id</code></li> <li><code>enclosures</code></li> <li><code>categories</code></li> <li><code>item_copyright</code></li> <li><code>ttl</code></li> <li><code>updateddate</code></li> </ul> <p>Extra keyword arguments will be stored for <a class="reference internal" href="#custom-feed-generators">custom feed generators</a>.</p> <p>All parameters, if given, should be strings, except:</p> <ul class="last simple"> <li>
+<code>pubdate</code> should be a Python <a class="reference external" href="https://docs.python.org/3/library/datetime.html#datetime.datetime" title="(in Python v3.10)"><code>datetime</code></a> object.</li> <li>
+<code>updateddate</code> should be a Python <a class="reference external" href="https://docs.python.org/3/library/datetime.html#datetime.datetime" title="(in Python v3.10)"><code>datetime</code></a> object.</li> <li>
+<code>enclosures</code> should be a list of <a class="reference internal" href="../utils#django.utils.feedgenerator.Enclosure" title="django.utils.feedgenerator.Enclosure"><code>django.utils.feedgenerator.Enclosure</code></a> instances.</li> <li>
+<code>categories</code> should be a sequence of strings.</li> </ul> </dd> <dt>
+ <a class="reference internal" href="../utils#django.utils.feedgenerator.SyndicationFeed.write" title="django.utils.feedgenerator.SyndicationFeed.write"><code>SyndicationFeed.write()</code></a>
+</dt> <dd>Outputs the feed in the given encoding to outfile, which is a file-like object.</dd> <dt>
+ <a class="reference internal" href="../utils#django.utils.feedgenerator.SyndicationFeed.writeString" title="django.utils.feedgenerator.SyndicationFeed.writeString"><code>SyndicationFeed.writeString()</code></a>
+</dt> <dd>Returns the feed as a string in the given encoding.</dd> </dl> <p>For example, to create an Atom 1.0 feed and print it to standard output:</p> <pre data-language="python">&gt;&gt;&gt; from django.utils import feedgenerator
+&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; f = feedgenerator.Atom1Feed(
+...     title="My Blog",
+...     link="https://www.example.com/",
+...     description="In which I write about what I ate today.",
+...     language="en",
+...     author_name="Myself",
+...     feed_url="https://example.com/atom.xml")
+&gt;&gt;&gt; f.add_item(title="Hot dog today",
+...     link="https://www.example.com/entries/1/",
+...     pubdate=datetime.now(),
+...     description="&lt;p&gt;Today I had a Vienna Beef hot dog. It was pink, plump and perfect.&lt;/p&gt;")
+&gt;&gt;&gt; print(f.writeString('UTF-8'))
+&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en"&gt;
+...
+&lt;/feed&gt;
+</pre>   <h3 id="custom-feed-generators">Custom feed generators</h3> <p id="s-custom-feed-generators">If you need to produce a custom feed format, you’ve got a couple of options.</p> <p>If the feed format is totally custom, you’ll want to subclass <code>SyndicationFeed</code> and completely replace the <code>write()</code> and <code>writeString()</code> methods.</p> <p>However, if the feed format is a spin-off of RSS or Atom (i.e. <a class="reference external" href="http://georss.org/">GeoRSS</a>, Apple’s <a class="reference external" href="https://help.apple.com/itc/podcasts_connect/#/itcb54353390">iTunes podcast format</a>, etc.), you’ve got a better choice. These types of feeds typically add extra elements and/or attributes to the underlying format, and there are a set of methods that <code>SyndicationFeed</code> calls to get these extra attributes. Thus, you can subclass the appropriate feed generator class (<code>Atom1Feed</code> or <code>Rss201rev2Feed</code>) and extend these callbacks. They are:</p> <dl class="docutils"> <dt>
+<code>SyndicationFeed.root_attributes(self)</code> </dt> <dd>Return a <code>dict</code> of attributes to add to the root feed element (<code>feed</code>/<code>channel</code>).</dd> <dt>
+<code>SyndicationFeed.add_root_elements(self, handler)</code> </dt> <dd>Callback to add elements inside the root feed element (<code>feed</code>/<code>channel</code>). <code>handler</code> is an <a class="reference external" href="https://docs.python.org/3/library/xml.sax.utils.html#xml.sax.saxutils.XMLGenerator" title="(in Python v3.10)"><code>XMLGenerator</code></a> from Python’s built-in SAX library; you’ll call methods on it to add to the XML document in process.</dd> <dt>
+<code>SyndicationFeed.item_attributes(self, item)</code> </dt> <dd>Return a <code>dict</code> of attributes to add to each item (<code>item</code>/<code>entry</code>) element. The argument, <code>item</code>, is a dictionary of all the data passed to <code>SyndicationFeed.add_item()</code>.</dd> <dt>
+<code>SyndicationFeed.add_item_elements(self, handler, item)</code> </dt> <dd>Callback to add elements to each item (<code>item</code>/<code>entry</code>) element. <code>handler</code> and <code>item</code> are as above.</dd> </dl> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">If you override any of these methods, be sure to call the superclass methods since they add the required elements for each feed format.</p> </div> <p>For example, you might start implementing an iTunes RSS feed generator like so:</p> <pre data-language="python">class iTunesFeed(Rss201rev2Feed):
+    def root_attributes(self):
+        attrs = super().root_attributes()
+        attrs['xmlns:itunes'] = 'http://www.itunes.com/dtds/podcast-1.0.dtd'
+        return attrs
+
+    def add_root_elements(self, handler):
+        super().add_root_elements(handler)
+        handler.addQuickElement('itunes:explicit', 'clean')
+</pre> <p>There’s a lot more work to be done for a complete custom feed class, but the above example should demonstrate the basic idea.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/syndication/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/syndication/</a>
+  </p>
+</div>

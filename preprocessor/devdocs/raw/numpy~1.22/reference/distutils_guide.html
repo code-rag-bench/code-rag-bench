@@ -1,0 +1,158 @@
+<h1 id="distutils-user-guide">NumPy Distutils - Users Guide</h1> <section id="scipy-structure"> <h2>SciPy structure</h2> <p>Currently SciPy project consists of two packages:</p> <ul class="simple"> <li>
+<p>NumPy — it provides packages like:</p> <ul> <li>numpy.distutils - extension to Python distutils</li> <li>numpy.f2py - a tool to bind Fortran/C codes to Python</li> <li>numpy.core - future replacement of Numeric and numarray packages</li> <li>numpy.lib - extra utility functions</li> <li>numpy.testing - numpy-style tools for unit testing</li> <li>etc</li> </ul> </li> <li>SciPy — a collection of scientific tools for Python.</li> </ul> <p>The aim of this document is to describe how to add new tools to SciPy.</p> </section> <section id="requirements-for-scipy-packages"> <h2>Requirements for SciPy packages</h2> <p>SciPy consists of Python packages, called SciPy packages, that are available to Python users via the <code>scipy</code> namespace. Each SciPy package may contain other SciPy packages. And so on. Therefore, the SciPy directory tree is a tree of packages with arbitrary depth and width. Any SciPy package may depend on NumPy packages but the dependence on other SciPy packages should be kept minimal or zero.</p> <p>A SciPy package contains, in addition to its sources, the following files and directories:</p>  <ul class="simple"> <li>
+<code>setup.py</code> — building script</li> <li>
+<code>__init__.py</code> — package initializer</li> <li>
+<code>tests/</code> — directory of unittests</li> </ul>  <p>Their contents are described below.</p> </section> <section id="the-setup-py-file"> <h2>The <code>setup.py</code> file</h2> <p>In order to add a Python package to SciPy, its build script (<code>setup.py</code>) must meet certain requirements. The most important requirement is that the package define a <code>configuration(parent_package='',top_path=None)</code> function which returns a dictionary suitable for passing to <code>numpy.distutils.core.setup(..)</code>. To simplify the construction of this dictionary, <code>numpy.distutils.misc_util</code> provides the <code>Configuration</code> class, described below.</p> <section id="scipy-pure-python-package-example"> <h3>SciPy pure Python package example</h3> <p>Below is an example of a minimal <code>setup.py</code> file for a pure SciPy package:</p> <pre data-language="python">#!/usr/bin/env python3
+def configuration(parent_package='',top_path=None):
+    from numpy.distutils.misc_util import Configuration
+    config = Configuration('mypackage',parent_package,top_path)
+    return config
+
+if __name__ == "__main__":
+    from numpy.distutils.core import setup
+    #setup(**configuration(top_path='').todict())
+    setup(configuration=configuration)
+</pre> <p>The arguments of the <code>configuration</code> function specify the name of parent SciPy package (<code>parent_package</code>) and the directory location of the main <code>setup.py</code> script (<code>top_path</code>). These arguments, along with the name of the current package, should be passed to the <code>Configuration</code> constructor.</p> <p>The <code>Configuration</code> constructor has a fourth optional argument, <code>package_path</code>, that can be used when package files are located in a different location than the directory of the <code>setup.py</code> file.</p> <p>Remaining <code>Configuration</code> arguments are all keyword arguments that will be used to initialize attributes of <code>Configuration</code> instance. Usually, these keywords are the same as the ones that <code>setup(..)</code> function would expect, for example, <code>packages</code>, <code>ext_modules</code>, <code>data_files</code>, <code>include_dirs</code>, <code>libraries</code>, <code>headers</code>, <code>scripts</code>, <code>package_dir</code>, etc. However, the direct specification of these keywords is not recommended as the content of these keyword arguments will not be processed or checked for the consistency of SciPy building system.</p> <p>Finally, <code>Configuration</code> has <code>.todict()</code> method that returns all the configuration data as a dictionary suitable for passing on to the <code>setup(..)</code> function.</p> </section> <section id="configuration-instance-attributes"> <h3>
+<code>Configuration</code> instance attributes</h3> <p>In addition to attributes that can be specified via keyword arguments to <code>Configuration</code> constructor, <code>Configuration</code> instance (let us denote as <code>config</code>) has the following attributes that can be useful in writing setup scripts:</p> <ul class="simple"> <li>
+<code>config.name</code> - full name of the current package. The names of parent packages can be extracted as <code>config.name.split('.')</code>.</li> <li>
+<code>config.local_path</code> - path to the location of current <code>setup.py</code> file.</li> <li>
+<code>config.top_path</code> - path to the location of main <code>setup.py</code> file.</li> </ul> </section> <section id="configuration-instance-methods"> <h3>
+<code>Configuration</code> instance methods</h3> <ul> <li>
+<code>config.todict()</code> — returns configuration dictionary suitable for passing to <code>numpy.distutils.core.setup(..)</code> function.</li> <li>
+<code>config.paths(*paths) --- applies ``glob.glob(..)</code> to items of <code>paths</code> if necessary. Fixes <code>paths</code> item that is relative to <code>config.local_path</code>.</li> <li>
+<code>config.get_subpackage(subpackage_name,subpackage_path=None)</code> — returns a list of subpackage configurations. Subpackage is looked in the current directory under the name <code>subpackage_name</code> but the path can be specified also via optional <code>subpackage_path</code> argument. If <code>subpackage_name</code> is specified as <code>None</code> then the subpackage name will be taken the basename of <code>subpackage_path</code>. Any <code>*</code> used for subpackage names are expanded as wildcards.</li> <li>
+<code>config.add_subpackage(subpackage_name,subpackage_path=None)</code> — add SciPy subpackage configuration to the current one. The meaning and usage of arguments is explained above, see <code>config.get_subpackage()</code> method.</li> <li>
+<p><code>config.add_data_files(*files)</code> — prepend <code>files</code> to <code>data_files</code> list. If <code>files</code> item is a tuple then its first element defines the suffix of where data files are copied relative to package installation directory and the second element specifies the path to data files. By default data files are copied under package installation directory. For example,</p> <pre data-language="python">config.add_data_files('foo.dat',
+                      ('fun',['gun.dat','nun/pun.dat','/tmp/sun.dat']),
+                      'bar/car.dat'.
+                      '/full/path/to/can.dat',
+                      )
+</pre> <p>will install data files to the following locations</p> <pre data-language="python">&lt;installation path of config.name package&gt;/
+  foo.dat
+  fun/
+    gun.dat
+    pun.dat
+    sun.dat
+  bar/
+    car.dat
+  can.dat
+</pre> <p>Path to data files can be a function taking no arguments and returning path(s) to data files – this is a useful when data files are generated while building the package. (XXX: explain the step when this function are called exactly)</p> </li> <li>
+<p><code>config.add_data_dir(data_path)</code> — add directory <code>data_path</code> recursively to <code>data_files</code>. The whole directory tree starting at <code>data_path</code> will be copied under package installation directory. If <code>data_path</code> is a tuple then its first element defines the suffix of where data files are copied relative to package installation directory and the second element specifies the path to data directory. By default, data directory are copied under package installation directory under the basename of <code>data_path</code>. For example,</p> <pre data-language="python">config.add_data_dir('fun')  # fun/ contains foo.dat bar/car.dat
+config.add_data_dir(('sun','fun'))
+config.add_data_dir(('gun','/full/path/to/fun'))
+</pre> <p>will install data files to the following locations</p> <pre data-language="python">&lt;installation path of config.name package&gt;/
+  fun/
+     foo.dat
+     bar/
+        car.dat
+  sun/
+     foo.dat
+     bar/
+        car.dat
+  gun/
+     foo.dat
+     bar/
+        car.dat
+</pre> </li> <li>
+<code>config.add_include_dirs(*paths)</code> — prepend <code>paths</code> to <code>include_dirs</code> list. This list will be visible to all extension modules of the current package.</li> <li>
+<code>config.add_headers(*files)</code> — prepend <code>files</code> to <code>headers</code> list. By default, headers will be installed under <code>&lt;prefix&gt;/include/pythonX.X/&lt;config.name.replace('.','/')&gt;/</code> directory. If <code>files</code> item is a tuple then it’s first argument specifies the installation suffix relative to <code>&lt;prefix&gt;/include/pythonX.X/</code> path. This is a Python distutils method; its use is discouraged for NumPy and SciPy in favour of <code>config.add_data_files(*files)</code>.</li> <li>
+<code>config.add_scripts(*files)</code> — prepend <code>files</code> to <code>scripts</code> list. Scripts will be installed under <code>&lt;prefix&gt;/bin/</code> directory.</li> <li>
+<p><code>config.add_extension(name,sources,**kw)</code> — create and add an <code>Extension</code> instance to <code>ext_modules</code> list. The first argument <code>name</code> defines the name of the extension module that will be installed under <code>config.name</code> package. The second argument is a list of sources. <code>add_extension</code> method takes also keyword arguments that are passed on to the <code>Extension</code> constructor. The list of allowed keywords is the following: <code>include_dirs</code>, <code>define_macros</code>, <code>undef_macros</code>, <code>library_dirs</code>, <code>libraries</code>, <code>runtime_library_dirs</code>, <code>extra_objects</code>, <code>extra_compile_args</code>, <code>extra_link_args</code>, <code>export_symbols</code>, <code>swig_opts</code>, <code>depends</code>, <code>language</code>, <code>f2py_options</code>, <code>module_dirs</code>, <code>extra_info</code>, <code>extra_f77_compile_args</code>, <code>extra_f90_compile_args</code>.</p> <p>Note that <code>config.paths</code> method is applied to all lists that may contain paths. <code>extra_info</code> is a dictionary or a list of dictionaries that content will be appended to keyword arguments. The list <code>depends</code> contains paths to files or directories that the sources of the extension module depend on. If any path in the <code>depends</code> list is newer than the extension module, then the module will be rebuilt.</p> <p>The list of sources may contain functions (‘source generators’) with a pattern <code>def &lt;funcname&gt;(ext, build_dir): return
+&lt;source(s) or None&gt;</code>. If <code>funcname</code> returns <code>None</code>, no sources are generated. And if the <code>Extension</code> instance has no sources after processing all source generators, no extension module will be built. This is the recommended way to conditionally define extension modules. Source generator functions are called by the <code>build_src</code> sub-command of <code>numpy.distutils</code>.</p> <p>For example, here is a typical source generator function:</p> <pre data-language="python">def generate_source(ext,build_dir):
+    import os
+    from distutils.dep_util import newer
+    target = os.path.join(build_dir,'somesource.c')
+    if newer(target,__file__):
+        # create target file
+    return target
+</pre> <p>The first argument contains the Extension instance that can be useful to access its attributes like <code>depends</code>, <code>sources</code>, etc. lists and modify them during the building process. The second argument gives a path to a build directory that must be used when creating files to a disk.</p> </li> <li>
+<code>config.add_library(name, sources, **build_info)</code> — add a library to <code>libraries</code> list. Allowed keywords arguments are <code>depends</code>, <code>macros</code>, <code>include_dirs</code>, <code>extra_compiler_args</code>, <code>f2py_options</code>, <code>extra_f77_compile_args</code>, <code>extra_f90_compile_args</code>. See <code>.add_extension()</code> method for more information on arguments.</li> <li>
+<code>config.have_f77c()</code> — return True if Fortran 77 compiler is available (read: a simple Fortran 77 code compiled successfully).</li> <li>
+<code>config.have_f90c()</code> — return True if Fortran 90 compiler is available (read: a simple Fortran 90 code compiled successfully).</li> <li>
+<code>config.get_version()</code> — return version string of the current package, <code>None</code> if version information could not be detected. This methods scans files <code>__version__.py</code>, <code>&lt;packagename&gt;_version.py</code>, <code>version.py</code>, <code>__svn_version__.py</code> for string variables <code>version</code>, <code>__version__</code>, <code>&lt;packagename&gt;_version</code>.</li> <li>
+<code>config.make_svn_version_py()</code> — appends a data function to <code>data_files</code> list that will generate <code>__svn_version__.py</code> file to the current package directory. The file will be removed from the source directory when Python exits.</li> <li>
+<code>config.get_build_temp_dir()</code> — return a path to a temporary directory. This is the place where one should build temporary files.</li> <li>
+<code>config.get_distribution()</code> — return distutils <code>Distribution</code> instance.</li> <li>
+<code>config.get_config_cmd()</code> — returns <code>numpy.distutils</code> config command instance.</li> <li>
+<code>config.get_info(*names)</code> —</li> </ul> </section> <section id="conversion-of-src-files-using-templates"> <h3 id="templating">Conversion of <code>.src</code> files using Templates</h3> <p>NumPy distutils supports automatic conversion of source files named &lt;somefile&gt;.src. This facility can be used to maintain very similar code blocks requiring only simple changes between blocks. During the build phase of setup, if a template file named &lt;somefile&gt;.src is encountered, a new file named &lt;somefile&gt; is constructed from the template and placed in the build directory to be used instead. Two forms of template conversion are supported. The first form occurs for files named &lt;file&gt;.ext.src where ext is a recognized Fortran extension (f, f90, f95, f77, for, ftn, pyf). The second form is used for all other cases.</p> </section> <section id="fortran-files"> <h3 id="index-0">Fortran files</h3> <p>This template converter will replicate all <strong>function</strong> and <strong>subroutine</strong> blocks in the file with names that contain ‘&lt;…&gt;’ according to the rules in ‘&lt;…&gt;’. The number of comma-separated words in ‘&lt;…&gt;’ determines the number of times the block is repeated. What these words are indicates what that repeat rule, ‘&lt;…&gt;’, should be replaced with in each block. All of the repeat rules in a block must contain the same number of comma-separated words indicating the number of times that block should be repeated. If the word in the repeat rule needs a comma, leftarrow, or rightarrow, then prepend it with a backslash ‘ '. If a word in the repeat rule matches ‘ \&lt;index&gt;’ then it will be replaced with the &lt;index&gt;-th word in the same repeat specification. There are two forms for the repeat rule: named and short.</p> <section id="named-repeat-rule"> <h4>Named repeat rule</h4> <p>A named repeat rule is useful when the same set of repeats must be used several times in a block. It is specified using &lt;rule1=item1, item2, item3,…, itemN&gt;, where N is the number of times the block should be repeated. On each repeat of the block, the entire expression, ‘&lt;…&gt;’ will be replaced first with item1, and then with item2, and so forth until N repeats are accomplished. Once a named repeat specification has been introduced, the same repeat rule may be used <strong>in the current block</strong> by referring only to the name (i.e. &lt;rule1&gt;).</p> </section> <section id="short-repeat-rule"> <h4>Short repeat rule</h4> <p>A short repeat rule looks like &lt;item1, item2, item3, …, itemN&gt;. The rule specifies that the entire expression, ‘&lt;…&gt;’ should be replaced first with item1, and then with item2, and so forth until N repeats are accomplished.</p> </section> <section id="pre-defined-names"> <h4>Pre-defined names</h4> <p>The following predefined named repeat rules are available:</p> <ul class="simple"> <li>&lt;prefix=s,d,c,z&gt;</li> <li>&lt;_c=s,d,c,z&gt;</li> <li>&lt;_t=real, double precision, complex, double complex&gt;</li> <li>&lt;ftype=real, double precision, complex, double complex&gt;</li> <li>&lt;ctype=float, double, complex_float, complex_double&gt;</li> <li>&lt;ftypereal=float, double precision, \0, \1&gt;</li> <li>&lt;ctypereal=float, double, \0, \1&gt;</li> </ul> </section> </section> <section id="other-files"> <h3>Other files</h3> <p>Non-Fortran files use a separate syntax for defining template blocks that should be repeated using a variable expansion similar to the named repeat rules of the Fortran-specific repeats.</p> <p>NumPy Distutils preprocesses C source files (extension: <code>.c.src</code>) written in a custom templating language to generate C code. The <code>@</code> symbol is used to wrap macro-style variables to empower a string substitution mechanism that might describe (for instance) a set of data types.</p> <p>The template language blocks are delimited by <code>/**begin repeat</code> and <code>/**end repeat**/</code> lines, which may also be nested using consecutively numbered delimiting lines such as <code>/**begin repeat1</code> and <code>/**end repeat1**/</code>:</p> <ol class="arabic simple"> <li>
+<code>/**begin repeat</code> on a line by itself marks the beginning of a segment that should be repeated.</li> <li>Named variable expansions are defined using <code>#name=item1, item2, item3,
+..., itemN#</code> and placed on successive lines. These variables are replaced in each repeat block with corresponding word. All named variables in the same repeat block must define the same number of words.</li> <li>In specifying the repeat rule for a named variable, <code>item*N</code> is short- hand for <code>item, item, ..., item</code> repeated N times. In addition, parenthesis in combination with <code>*N</code> can be used for grouping several items that should be repeated. Thus, <code>#name=(item1, item2)*4#</code> is equivalent to <code>#name=item1, item2, item1, item2, item1, item2, item1,
+item2#</code>.</li> <li>
+<code>*/</code> on a line by itself marks the end of the variable expansion naming. The next line is the first line that will be repeated using the named rules.</li> <li>Inside the block to be repeated, the variables that should be expanded are specified as <code>@name@</code>.</li> <li>
+<code>/**end repeat**/</code> on a line by itself marks the previous line as the last line of the block to be repeated.</li> <li>A loop in the NumPy C source code may have a <code>@TYPE@</code> variable, targeted for string substitution, which is preprocessed to a number of otherwise identical loops with several strings such as <code>INT</code>, <code>LONG</code>, <code>UINT</code>, <code>ULONG</code>. The <code>@TYPE@</code> style syntax thus reduces code duplication and maintenance burden by mimicking languages that have generic type support.</li> </ol> <p>The above rules may be clearer in the following template source example:</p> <pre data-language="NumPyC"> 1 /* TIMEDELTA to non-float types */
+ 2
+ 3 /**begin repeat
+ 4  *
+ 5  * #TOTYPE = BYTE, UBYTE, SHORT, USHORT, INT, UINT, LONG, ULONG,
+ 6  *           LONGLONG, ULONGLONG, DATETIME,
+ 7  *           TIMEDELTA#
+ 8  * #totype = npy_byte, npy_ubyte, npy_short, npy_ushort, npy_int, npy_uint,
+ 9  *           npy_long, npy_ulong, npy_longlong, npy_ulonglong,
+10  *           npy_datetime, npy_timedelta#
+11  */
+12
+13 /**begin repeat1
+14  *
+15  * #FROMTYPE = TIMEDELTA#
+16  * #fromtype = npy_timedelta#
+17  */
+18 static void
+19 @FROMTYPE@_to_@TOTYPE@(void *input, void *output, npy_intp n,
+20         void *NPY_UNUSED(aip), void *NPY_UNUSED(aop))
+21 {
+22     const @fromtype@ *ip = input;
+23     @totype@ *op = output;
+24
+25     while (n--) {
+26         *op++ = (@totype@)*ip++;
+27     }
+28 }
+29 /**end repeat1**/
+30
+31 /**end repeat**/
+</pre> <p>The preprocessing of generically-typed C source files (whether in NumPy proper or in any third party package using NumPy Distutils) is performed by <a class="reference external" href="https://github.com/numpy/numpy/blob/main/numpy/distutils/conv_template.py">conv_template.py</a>. The type-specific C files generated (extension: <code>.c</code>) by these modules during the build process are ready to be compiled. This form of generic typing is also supported for C header files (preprocessed to produce <code>.h</code> files).</p> </section> <section id="useful-functions-in-numpy-distutils-misc-util"> <h3>Useful functions in <code>numpy.distutils.misc_util</code>
+</h3> <ul class="simple"> <li>
+<code>get_numpy_include_dirs()</code> — return a list of NumPy base include directories. NumPy base include directories contain header files such as <code>numpy/arrayobject.h</code>, <code>numpy/funcobject.h</code> etc. For installed NumPy the returned list has length 1 but when building NumPy the list may contain more directories, for example, a path to <code>config.h</code> file that <code>numpy/base/setup.py</code> file generates and is used by <code>numpy</code> header files.</li> <li>
+<code>append_path(prefix,path)</code> — smart append <code>path</code> to <code>prefix</code>.</li> <li>
+<code>gpaths(paths, local_path='')</code> — apply glob to paths and prepend <code>local_path</code> if needed.</li> <li>
+<code>njoin(*path)</code> — join pathname components + convert <code>/</code>-separated path to <code>os.sep</code>-separated path and resolve <code>..</code>, <code>.</code> from paths. Ex. <code>njoin('a',['b','./c'],'..','g') -&gt; os.path.join('a','b','g')</code>.</li> <li>
+<code>minrelpath(path)</code> — resolves dots in <code>path</code>.</li> <li>
+<code>rel_path(path, parent_path)</code> — return <code>path</code> relative to <code>parent_path</code>.</li> <li>
+<code>def get_cmd(cmdname,_cache={})</code> — returns <code>numpy.distutils</code> command instance.</li> <li><code>all_strings(lst)</code></li> <li><code>has_f_sources(sources)</code></li> <li><code>has_cxx_sources(sources)</code></li> <li>
+<code>filter_sources(sources)</code> — return <code>c_sources, cxx_sources,
+f_sources, fmodule_sources</code>
+</li> <li><code>get_dependencies(sources)</code></li> <li><code>is_local_src_dir(directory)</code></li> <li><code>get_ext_source_files(ext)</code></li> <li><code>get_script_files(scripts)</code></li> <li><code>get_lib_source_files(lib)</code></li> <li><code>get_data_files(data)</code></li> <li>
+<code>dot_join(*args)</code> — join non-zero arguments with a dot.</li> <li>
+<code>get_frame(level=0)</code> — return frame object from call stack with given level.</li> <li><code>cyg2win32(path)</code></li> <li>
+<code>mingw32()</code> — return <code>True</code> when using mingw32 environment.</li> <li>
+<code>terminal_has_colors()</code>, <code>red_text(s)</code>, <code>green_text(s)</code>, <code>yellow_text(s)</code>, <code>blue_text(s)</code>, <code>cyan_text(s)</code>
+</li> <li>
+<code>get_path(mod_name,parent_path=None)</code> — return path of a module relative to parent_path when given. Handles also <code>__main__</code> and <code>__builtin__</code> modules.</li> <li>
+<code>allpath(name)</code> — replaces <code>/</code> with <code>os.sep</code> in <code>name</code>.</li> <li>
+<code>cxx_ext_match</code>, <code>fortran_ext_match</code>, <code>f90_ext_match</code>, <code>f90_module_name_match</code>
+</li> </ul> </section> <section id="numpy-distutils-system-info-module"> <h3>
+<code>numpy.distutils.system_info</code> module</h3> <ul class="simple"> <li><code>get_info(name,notfound_action=0)</code></li> <li><code>combine_paths(*args,**kws)</code></li> <li><code>show_all()</code></li> </ul> </section> <section id="numpy-distutils-cpuinfo-module"> <h3>
+<code>numpy.distutils.cpuinfo</code> module</h3> <ul class="simple"> <li><code>cpuinfo</code></li> </ul> </section> <section id="numpy-distutils-log-module"> <h3>
+<code>numpy.distutils.log</code> module</h3> <ul class="simple"> <li><code>set_verbosity(v)</code></li> </ul> </section> <section id="numpy-distutils-exec-command-module"> <h3>
+<code>numpy.distutils.exec_command</code> module</h3> <ul class="simple"> <li><code>get_pythonexe()</code></li> <li><code>find_executable(exe, path=None)</code></li> <li><code>exec_command( command, execute_in='', use_shell=None, use_tee=None, **env )</code></li> </ul> </section> </section> <section id="the-init-py-file"> <h2>The <code>__init__.py</code> file</h2> <p>The header of a typical SciPy <code>__init__.py</code> is:</p> <pre data-language="python">"""
+Package docstring, typically with a brief description and function listing.
+"""
+
+# import functions into module namespace
+from .subpackage import *
+...
+
+__all__ = [s for s in dir() if not s.startswith('_')]
+
+from numpy.testing import Tester
+test = Tester().test
+bench = Tester().bench
+</pre> </section> <section id="extra-features-in-numpy-distutils"> <h2>Extra features in NumPy Distutils</h2> <section id="specifying-config-fc-options-for-libraries-in-setup-py-script"> <h3>Specifying config_fc options for libraries in setup.py script</h3> <p>It is possible to specify config_fc options in setup.py scripts. For example, using</p>  <dl class="simple"> <dt>config.add_library(‘library’,</dt>
+<dd>
+<p>sources=[…], config_fc={‘noopt’:(__file__,1)})</p> </dd> </dl>  <p>will compile the <code>library</code> sources without optimization flags.</p> <p>It’s recommended to specify only those config_fc options in such a way that are compiler independent.</p> </section> <section id="getting-extra-fortran-77-compiler-options-from-source"> <h3>Getting extra Fortran 77 compiler options from source</h3> <p>Some old Fortran codes need special compiler options in order to work correctly. In order to specify compiler options per source file, <code>numpy.distutils</code> Fortran compiler looks for the following pattern:</p> <pre data-language="python">CF77FLAGS(&lt;fcompiler type&gt;) = &lt;fcompiler f77flags&gt;
+</pre> <p>in the first 20 lines of the source and use the <code>f77flags</code> for specified type of the fcompiler (the first character <code>C</code> is optional).</p> <p>TODO: This feature can be easily extended for Fortran 90 codes as well. Let us know if you would need such a feature.</p> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/reference/distutils_guide.html" class="_attribution-link">https://numpy.org/doc/1.22/reference/distutils_guide.html</a>
+  </p>
+</div>

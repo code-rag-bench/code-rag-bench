@@ -1,0 +1,280 @@
+# Imputing missing values before building an estimator
+
+Missing values can be replaced by the mean, the median or the most frequent
+value using the basic `SimpleImputer`.
+
+In this example we will investigate different imputation techniques:
+
+  * imputation by the constant value 0
+  * imputation by the mean value of each feature combined with a missing-ness indicator auxiliary variable
+  * k nearest neighbor imputation
+  * iterative imputation
+
+We will use two datasets: Diabetes dataset which consists of 10 feature
+variables collected from diabetes patients with an aim to predict disease
+progression and California Housing dataset for which the target is the median
+house value for California districts.
+
+As neither of these datasets have missing values, we will remove some values
+to create new versions with artificially missing data. The performance of
+`RandomForestRegressor` on the full original dataset is then compared the
+performance on the altered datasets with the artificially missing values
+imputed using different techniques.
+
+    
+    print(__doc__)
+    
+    # Authors: Maria Telenczuk  <https://github.com/maikia>
+    # License: BSD 3 clause
+    
+## Download the data and make missing values sets
+
+First we download the two datasets. Diabetes dataset is shipped with scikit-
+learn. It has 442 entries, each with 10 features. California Housing dataset
+is much larger with 20640 entries and 8 features. It needs to be downloaded.
+We will only use the first 400 entries for the sake of speeding up the
+calculations but feel free to use the whole dataset.
+
+    
+    import numpy as np
+    
+    from sklearn.datasets import fetch_california_housing
+    from sklearn.datasets import load_diabetes
+    
+    
+    rng = np.random.RandomState(42)
+    
+    X_diabetes, y_diabetes = load_diabetes(return_X_y=True)
+    X_california, y_california = fetch_california_housing(return_X_y=True)
+    X_california = X_california[:400]
+    y_california = y_california[:400]
+    
+    
+    def add_missing_values(X_full, y_full):
+        n_samples, n_features = X_full.shape
+    
+        # Add missing values in 75% of the lines
+        missing_rate = 0.75
+        n_missing_samples = int(n_samples * missing_rate)
+    
+        missing_samples = np.zeros(n_samples, dtype=bool)
+        missing_samples[: n_missing_samples] = True
+    
+        rng.shuffle(missing_samples)
+        missing_features = rng.randint(0, n_features, n_missing_samples)
+        X_missing = X_full.copy()
+        X_missing[missing_samples, missing_features] = np.nan
+        y_missing = y_full.copy()
+    
+        return X_missing, y_missing
+    
+    
+    X_miss_california, y_miss_california = add_missing_values(
+        X_california, y_california)
+    
+    X_miss_diabetes, y_miss_diabetes = add_missing_values(
+        X_diabetes, y_diabetes)
+    
+## Impute the missing data and score
+
+Now we will write a function which will score the results on the differently
+imputed data. Let’s look at each imputer separately:
+
+    
+    rng = np.random.RandomState(0)
+    
+    from sklearn.ensemble import RandomForestRegressor
+    
+    # To use the experimental IterativeImputer, we need to explicitly ask for it:
+    from sklearn.experimental import enable_iterative_imputer  # noqa
+    from sklearn.impute import SimpleImputer, KNNImputer, IterativeImputer
+    from sklearn.model_selection import cross_val_score
+    from sklearn.pipeline import make_pipeline
+    
+    
+    N_SPLITS = 5
+    regressor = RandomForestRegressor(random_state=0)
+    
+### Missing information
+
+In addition to imputing the missing values, the imputers have an
+`add_indicator` parameter that marks the values that were missing, which might
+carry some information.
+
+    
+    def get_scores_for_imputer(imputer, X_missing, y_missing):
+        estimator = make_pipeline(imputer, regressor)
+        impute_scores = cross_val_score(estimator, X_missing, y_missing,
+                                        scoring='neg_mean_squared_error',
+                                        cv=N_SPLITS)
+        return impute_scores
+    
+    
+    x_labels = ['Full data',
+                'Zero imputation',
+                'Mean Imputation',
+                'KNN Imputation',
+                'Iterative Imputation']
+    
+    mses_california = np.zeros(5)
+    stds_california = np.zeros(5)
+    mses_diabetes = np.zeros(5)
+    stds_diabetes = np.zeros(5)
+    
+### Estimate the score
+
+First, we want to estimate the score on the original data:
+
+    
+    def get_full_score(X_full, y_full):
+        full_scores = cross_val_score(regressor, X_full, y_full,
+                                      scoring='neg_mean_squared_error',
+                                      cv=N_SPLITS)
+        return full_scores.mean(), full_scores.std()
+    
+    
+    mses_california[0], stds_california[0] = get_full_score(X_california,
+                                                            y_california)
+    mses_diabetes[0], stds_diabetes[0] = get_full_score(X_diabetes, y_diabetes)
+    
+### Replace missing values by 0
+
+Now we will estimate the score on the data where the missing values are
+replaced by 0:
+
+    
+    def get_impute_zero_score(X_missing, y_missing):
+    
+        imputer = SimpleImputer(missing_values=np.nan, add_indicator=True,
+                                strategy='constant', fill_value=0)
+        zero_impute_scores = get_scores_for_imputer(imputer, X_missing, y_missing)
+        return zero_impute_scores.mean(), zero_impute_scores.std()
+    
+    
+    mses_california[1], stds_california[1] = get_impute_zero_score(
+        X_miss_california, y_miss_california)
+    mses_diabetes[1], stds_diabetes[1] = get_impute_zero_score(X_miss_diabetes,
+                                                               y_miss_diabetes)
+    
+### kNN-imputation of the missing values
+
+`KNNImputer` imputes missing values using the weighted or unweighted mean of
+the desired number of nearest neighbors.
+
+    
+    def get_impute_knn_score(X_missing, y_missing):
+        imputer = KNNImputer(missing_values=np.nan, add_indicator=True)
+        knn_impute_scores = get_scores_for_imputer(imputer, X_missing, y_missing)
+        return knn_impute_scores.mean(), knn_impute_scores.std()
+    
+    
+    mses_california[2], stds_california[2] = get_impute_knn_score(
+        X_miss_california, y_miss_california)
+    mses_diabetes[2], stds_diabetes[2] = get_impute_knn_score(X_miss_diabetes,
+                                                              y_miss_diabetes)
+    
+### Impute missing values with mean
+
+    
+    def get_impute_mean(X_missing, y_missing):
+        imputer = SimpleImputer(missing_values=np.nan, strategy="mean",
+                                add_indicator=True)
+        mean_impute_scores = get_scores_for_imputer(imputer, X_missing, y_missing)
+        return mean_impute_scores.mean(), mean_impute_scores.std()
+    
+    
+    mses_california[3], stds_california[3] = get_impute_mean(X_miss_california,
+                                                             y_miss_california)
+    mses_diabetes[3], stds_diabetes[3] = get_impute_mean(X_miss_diabetes,
+                                                         y_miss_diabetes)
+    
+### Iterative imputation of the missing values
+
+Another option is the `IterativeImputer`. This uses round-robin linear
+regression, modeling each feature with missing values as a function of other
+features, in turn. The version implemented assumes Gaussian (output)
+variables. If your features are obviously non-normal, consider transforming
+them to look more normal to potentially improve performance.
+
+    
+    def get_impute_iterative(X_missing, y_missing):
+        imputer = IterativeImputer(missing_values=np.nan, add_indicator=True,
+                                   random_state=0, n_nearest_features=5,
+                                   sample_posterior=True)
+        iterative_impute_scores = get_scores_for_imputer(imputer,
+                                                         X_missing,
+                                                         y_missing)
+        return iterative_impute_scores.mean(), iterative_impute_scores.std()
+    
+    
+    mses_california[4], stds_california[4] = get_impute_iterative(
+        X_miss_california, y_miss_california)
+    mses_diabetes[4], stds_diabetes[4] = get_impute_iterative(X_miss_diabetes,
+                                                              y_miss_diabetes)
+    
+    mses_diabetes = mses_diabetes * -1
+    mses_california = mses_california * -1
+    
+## Plot the results
+
+Finally we are going to visualize the score:
+
+    
+    import matplotlib.pyplot as plt
+    
+    
+    n_bars = len(mses_diabetes)
+    xval = np.arange(n_bars)
+    
+    colors = ['r', 'g', 'b', 'orange', 'black']
+    
+    # plot diabetes results
+    plt.figure(figsize=(12, 6))
+    ax1 = plt.subplot(121)
+    for j in xval:
+        ax1.barh(j, mses_diabetes[j], xerr=stds_diabetes[j],
+                 color=colors[j], alpha=0.6, align='center')
+    
+    ax1.set_title('Imputation Techniques with Diabetes Data')
+    ax1.set_xlim(left=np.min(mses_diabetes) * 0.9,
+                 right=np.max(mses_diabetes) * 1.1)
+    ax1.set_yticks(xval)
+    ax1.set_xlabel('MSE')
+    ax1.invert_yaxis()
+    ax1.set_yticklabels(x_labels)
+    
+    # plot california dataset results
+    ax2 = plt.subplot(122)
+    for j in xval:
+        ax2.barh(j, mses_california[j], xerr=stds_california[j],
+                 color=colors[j], alpha=0.6, align='center')
+    
+    ax2.set_title('Imputation Techniques with California Data')
+    ax2.set_yticks(xval)
+    ax2.set_xlabel('MSE')
+    ax2.invert_yaxis()
+    ax2.set_yticklabels([''] * n_bars)
+    
+    plt.show()
+    
+    # You can also try different techniques. For instance, the median is a more
+    # robust estimator for data with high magnitude variables which could dominate
+    # results (otherwise known as a 'long tail').
+    
+![Imputation Techniques with Diabetes Data, Imputation Techniques with
+California
+Data](data:image/png;base64,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)
+
+Total running time of the script: ( 0 minutes 25.074 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_missing_values.py`
+
+`Download Jupyter notebook: plot_missing_values.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-learn.org/0.24/auto_examples/impute/plot_missing_values.html
+

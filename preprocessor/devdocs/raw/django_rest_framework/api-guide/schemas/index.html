@@ -1,0 +1,118 @@
+<h1 id="schema">Schema</h1> <blockquote> <p>A machine-readable [schema] describes what resources are available via the API, what their URLs are, how they are represented and what operations they support.</p> <p>— Heroku, <a href="https://blog.heroku.com/archives/2014/1/8/json_schema_for_heroku_platform_api">JSON Schema for the Heroku Platform API</a></p> </blockquote> <p>API schemas are a useful tool that allow for a range of use cases, including generating reference documentation, or driving dynamic client libraries that can interact with your API.</p> <p>Django REST Framework provides support for automatic generation of <a href="https://github.com/OAI/OpenAPI-Specification">OpenAPI</a> schemas.</p> <h2 id="overview">Overview</h2> <p>Schema generation has several moving parts. It's worth having an overview:</p> <ul> <li>
+<code>SchemaGenerator</code> is a top-level class that is responsible for walking your configured URL patterns, finding <code>APIView</code> subclasses, enquiring for their schema representation, and compiling the final schema object.</li> <li>
+<code>AutoSchema</code> encapsulates all the details necessary for per-view schema introspection. Is attached to each view via the <code>schema</code> attribute. You subclass <code>AutoSchema</code> in order to customize your schema.</li> <li>The <code>generateschema</code> management command allows you to generate a static schema offline.</li> <li>Alternatively, you can route <code>SchemaView</code> to dynamically generate and serve your schema.</li> <li>
+<code>settings.DEFAULT_SCHEMA_CLASS</code> allows you to specify an <code>AutoSchema</code> subclass to serve as your project's default.</li> </ul> <p>The following sections explain more.</p> <h2 id="generating-an-openapi-schema">Generating an OpenAPI Schema</h2> <h3 id="install-dependencies">Install dependencies</h3> <pre data-language="python">pip install pyyaml uritemplate
+</pre> <ul> <li>
+<code>pyyaml</code> is used to generate schema into YAML-based OpenAPI format.</li> <li>
+<code>uritemplate</code> is used internally to get parameters in path.</li> </ul> <h3 id="generating-a-static-schema-with-the-generateschema-management-command">Generating a static schema with the generateschema management command</h3> <p>If your schema is static, you can use the <code>generateschema</code> management command:</p> <pre data-language="python">./manage.py generateschema --file openapi-schema.yml
+</pre> <p>Once you've generated a schema in this way you can annotate it with any additional information that cannot be automatically inferred by the schema generator.</p> <p>You might want to check your API schema into version control and update it with each new release, or serve the API schema from your site's static media.</p> <h3 id="generating-a-dynamic-schema-with-schemaview">Generating a dynamic schema with SchemaView</h3> <p>If you require a dynamic schema, because foreign key choices depend on database values, for example, you can route a <code>SchemaView</code> that will generate and serve your schema on demand.</p> <p>To route a <code>SchemaView</code>, use the <code>get_schema_view()</code> helper.</p> <p>In <code>urls.py</code>:</p> <pre data-language="python">from rest_framework.schemas import get_schema_view
+
+urlpatterns = [
+    # ...
+    # Use the `get_schema_view()` helper to add a `SchemaView` to project URLs.
+    #   * `title` and `description` parameters are passed to `SchemaGenerator`.
+    #   * Provide view name for use with `reverse()`.
+    path('openapi', get_schema_view(
+        title="Your Project",
+        description="API for all things …",
+        version="1.0.0"
+    ), name='openapi-schema'),
+    # ...
+]
+</pre> <h4 id="get_schema_view">get_schema_view()</h4> <p>The <code>get_schema_view()</code> helper takes the following keyword arguments:</p> <ul> <li>
+<code>title</code>: May be used to provide a descriptive title for the schema definition.</li> <li>
+<code>description</code>: Longer descriptive text.</li> <li>
+<code>version</code>: The version of the API.</li> <li> <p><code>url</code>: May be used to pass a canonical base URL for the schema.</p> <pre data-language="python">schema_view = get_schema_view(
+    title='Server Monitoring API',
+    url='https://www.example.org/api/'
+)
+</pre> </li> <li> <p><code>urlconf</code>: A string representing the import path to the URL conf that you want to generate an API schema for. This defaults to the value of Django's <code>ROOT_URLCONF</code> setting.</p> <pre data-language="python">schema_view = get_schema_view(
+    title='Server Monitoring API',
+    url='https://www.example.org/api/',
+    urlconf='myproject.urls'
+)
+</pre> </li> <li> <p><code>patterns</code>: List of url patterns to limit the schema introspection to. If you only want the <code>myproject.api</code> urls to be exposed in the schema:</p> <pre data-language="python">schema_url_patterns = [
+    path('api/', include('myproject.api.urls')),
+]
+
+schema_view = get_schema_view(
+    title='Server Monitoring API',
+    url='https://www.example.org/api/',
+    patterns=schema_url_patterns,
+)
+</pre> </li> <li> <p><code>generator_class</code>: May be used to specify a <code>SchemaGenerator</code> subclass to be passed to the <code>SchemaView</code>.</p> </li> <li>
+<code>authentication_classes</code>: May be used to specify the list of authentication classes that will apply to the schema endpoint. Defaults to <code>settings.DEFAULT_AUTHENTICATION_CLASSES</code>
+</li> <li>
+<code>permission_classes</code>: May be used to specify the list of permission classes that will apply to the schema endpoint. Defaults to <code>settings.DEFAULT_PERMISSION_CLASSES</code>.</li> <li>
+<code>renderer_classes</code>: May be used to pass the set of renderer classes that can be used to render the API root endpoint.</li> </ul> <h2 id="schemagenerator">SchemaGenerator</h2> <p><strong>Schema-level customization</strong></p> <pre data-language="python">from rest_framework.schemas.openapi import SchemaGenerator
+</pre> <p><code>SchemaGenerator</code> is a class that walks a list of routed URL patterns, requests the schema for each view and collates the resulting OpenAPI schema.</p> <p>Typically you won't need to instantiate <code>SchemaGenerator</code> yourself, but you can do so like so:</p> <pre data-language="python">generator = SchemaGenerator(title='Stock Prices API')
+</pre> <p>Arguments:</p> <ul> <li>
+<code>title</code> <strong>required</strong>: The name of the API.</li> <li>
+<code>description</code>: Longer descriptive text.</li> <li>
+<code>version</code>: The version of the API. Defaults to <code>0.1.0</code>.</li> <li>
+<code>url</code>: The root URL of the API schema. This option is not required unless the schema is included under path prefix.</li> <li>
+<code>patterns</code>: A list of URLs to inspect when generating the schema. Defaults to the project's URL conf.</li> <li>
+<code>urlconf</code>: A URL conf module name to use when generating the schema. Defaults to <code>settings.ROOT_URLCONF</code>.</li> </ul> <p>In order to customize the top-level schema, subclass <code>rest_framework.schemas.openapi.SchemaGenerator</code> and provide your subclass as an argument to the <code>generateschema</code> command or <code>get_schema_view()</code> helper function.</p> <h3 id="get_schemaself-request">get_schema(self, request)</h3> <p>Returns a dictionary that represents the OpenAPI schema:</p> <pre data-language="python">generator = SchemaGenerator(title='Stock Prices API')
+schema = generator.get_schema()
+</pre> <p>The <code>request</code> argument is optional, and may be used if you want to apply per-user permissions to the resulting schema generation.</p> <p>This is a good point to override if you want to customize the generated dictionary For example you might wish to add terms of service to the <a href="https://swagger.io/specification/#infoObject">top-level <code>info</code> object</a>:</p> <pre data-language="python">class TOSSchemaGenerator(SchemaGenerator):
+    def get_schema(self, *args, **kwargs):
+        schema = super().get_schema(*args, **kwargs)
+        schema["info"]["termsOfService"] = "https://example.com/tos.html"
+        return schema
+</pre> <h2 id="autoschema">AutoSchema</h2> <p><strong>Per-View Customization</strong></p> <pre data-language="python">from rest_framework.schemas.openapi import AutoSchema
+</pre> <p>By default, view introspection is performed by an <code>AutoSchema</code> instance accessible via the <code>schema</code> attribute on <code>APIView</code>.</p> <pre data-language="python">auto_schema = some_view.schema
+</pre> <p><code>AutoSchema</code> provides the OpenAPI elements needed for each view, request method and path:</p> <ul> <li>A list of <a href="https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#componentsObject">OpenAPI components</a>. In DRF terms these are mappings of serializers that describe request and response bodies.</li> <li>The appropriate <a href="https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#operationObject">OpenAPI operation object</a> that describes the endpoint, including path and query parameters for pagination, filtering, and so on.</li> </ul> <pre data-language="python">components = auto_schema.get_components(...)
+operation = auto_schema.get_operation(...)
+</pre> <p>In compiling the schema, <code>SchemaGenerator</code> calls <code>get_components()</code> and <code>get_operation()</code> for each view, allowed method, and path.</p>  <p><strong>Note</strong>: The automatic introspection of components, and many operation parameters relies on the relevant attributes and methods of <code>GenericAPIView</code>: <code>get_serializer()</code>, <code>pagination_class</code>, <code>filter_backends</code>, etc. For basic <code>APIView</code> subclasses, default introspection is essentially limited to the URL kwarg path parameters for this reason.</p>  <p><code>AutoSchema</code> encapsulates the view introspection needed for schema generation. Because of this all the schema generation logic is kept in a single place, rather than being spread around the already extensive view, serializer and field APIs.</p> <p>Keeping with this pattern, try not to let schema logic leak into your own views, serializers, or fields when customizing the schema generation. You might be tempted to do something like this:</p> <pre data-language="python">class CustomSchema(AutoSchema):
+    """
+    AutoSchema subclass using schema_extra_info on the view.
+    """
+    ...
+
+class CustomView(APIView):
+    schema = CustomSchema()
+    schema_extra_info = ... some extra info ...
+</pre> <p>Here, the <code>AutoSchema</code> subclass goes looking for <code>schema_extra_info</code> on the view. This is <em>OK</em> (it doesn't actually hurt) but it means you'll end up with your schema logic spread out in a number of different places.</p> <p>Instead try to subclass <code>AutoSchema</code> such that the <code>extra_info</code> doesn't leak out into the view:</p> <pre data-language="python">class BaseSchema(AutoSchema):
+    """
+    AutoSchema subclass that knows how to use extra_info.
+    """
+    ...
+
+class CustomSchema(BaseSchema):
+    extra_info = ... some extra info ...
+
+class CustomView(APIView):
+    schema = CustomSchema()
+</pre> <p>This style is slightly more verbose but maintains the encapsulation of the schema related code. It's more <em>cohesive</em> in the <em>parlance</em>. It'll keep the rest of your API code more tidy.</p> <p>If an option applies to many view classes, rather than creating a specific subclass per-view, you may find it more convenient to allow specifying the option as an <code>__init__()</code> kwarg to your base <code>AutoSchema</code> subclass:</p> <pre data-language="python">class CustomSchema(BaseSchema):
+    def __init__(self, **kwargs):
+        # store extra_info for later
+        self.extra_info = kwargs.pop("extra_info")
+        super().__init__(**kwargs)
+
+class CustomView(APIView):
+    schema = CustomSchema(
+        extra_info=... some extra info ...
+    )
+</pre> <p>This saves you having to create a custom subclass per-view for a commonly used option.</p> <p>Not all <code>AutoSchema</code> methods expose related <code>__init__()</code> kwargs, but those for the more commonly needed options do.</p> <h3 id="autoschema-methods">AutoSchema methods</h3> <h4 id="get_components">get_components()</h4> <p>Generates the OpenAPI components that describe request and response bodies, deriving their properties from the serializer.</p> <p>Returns a dictionary mapping the component name to the generated representation. By default this has just a single pair but you may override <code>get_components()</code> to return multiple pairs if your view uses multiple serializers.</p> <h4 id="get_component_name">get_component_name()</h4> <p>Computes the component's name from the serializer.</p> <p>You may see warnings if your API has duplicate component names. If so you can override <code>get_component_name()</code> or pass the <code>component_name</code> <code>__init__()</code> kwarg (see below) to provide different names.</p> <h4 id="map_serializer">map_serializer()</h4> <p>Maps serializers to their OpenAPI representations.</p> <p>Most serializers should conform to the standard OpenAPI <code>object</code> type, but you may wish to override <code>map_serializer()</code> in order to customize this or other serializer-level fields.</p> <h4 id="map_field">map_field()</h4> <p>Maps individual serializer fields to their schema representation. The base implementation will handle the default fields that Django REST Framework provides.</p> <p>For <code>SerializerMethodField</code> instances, for which the schema is unknown, or custom field subclasses you should override <code>map_field()</code> to generate the correct schema:</p> <pre data-language="python">class CustomSchema(AutoSchema):
+    """Extension of ``AutoSchema`` to add support for custom field schemas."""
+
+    def map_field(self, field):
+        # Handle SerializerMethodFields or custom fields here...
+        # ...
+        return super().map_field(field)
+</pre> <p>Authors of third-party packages should aim to provide an <code>AutoSchema</code> subclass, and a mixin, overriding <code>map_field()</code> so that users can easily generate schemas for their custom fields.</p> <h4 id="get_tags">get_tags()</h4> <p>OpenAPI groups operations by tags. By default tags taken from the first path segment of the routed URL. For example, a URL like <code>/users/{id}/</code> will generate the tag <code>users</code>.</p> <p>You can pass an <code>__init__()</code> kwarg to manually specify tags (see below), or override <code>get_tags()</code> to provide custom logic.</p> <h4 id="get_operation">get_operation()</h4> <p>Returns the <a href="https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#operationObject">OpenAPI operation object</a> that describes the endpoint, including path and query parameters for pagination, filtering, and so on.</p> <p>Together with <code>get_components()</code>, this is the main entry point to the view introspection.</p> <h4 id="get_operation_id">get_operation_id()</h4> <p>There must be a unique <a href="openapi-operationid">operationid</a> for each operation. By default the <code>operationId</code> is deduced from the model name, serializer name or view name. The operationId looks like "listItems", "retrieveItem", "updateItem", etc. The <code>operationId</code> is camelCase by convention.</p> <h4 id="get_operation_id_base">get_operation_id_base()</h4> <p>If you have several views with the same model name, you may see duplicate operationIds.</p> <p>In order to work around this, you can override <code>get_operation_id_base()</code> to provide a different base for name part of the ID.</p> <h4 id="get_serializer">get_serializer()</h4> <p>If the view has implemented <code>get_serializer()</code>, returns the result.</p> <h4 id="get_request_serializer">get_request_serializer()</h4> <p>By default returns <code>get_serializer()</code> but can be overridden to differentiate between request and response objects.</p> <h4 id="get_response_serializer">get_response_serializer()</h4> <p>By default returns <code>get_serializer()</code> but can be overridden to differentiate between request and response objects.</p> <h3 id="autoschema__init__-kwargs">AutoSchema.__init__() kwargs</h3> <p><code>AutoSchema</code> provides a number of <code>__init__()</code> kwargs that can be used for common customizations, if the default generated values are not appropriate.</p> <p>The available kwargs are:</p> <ul> <li>
+<code>tags</code>: Specify a list of tags.</li> <li>
+<code>component_name</code>: Specify the component name.</li> <li>
+<code>operation_id_base</code>: Specify the resource-name part of operation IDs.</li> </ul> <p>You pass the kwargs when declaring the <code>AutoSchema</code> instance on your view:</p> <pre data-language="python">class PetDetailView(generics.RetrieveUpdateDestroyAPIView):
+    schema = AutoSchema(
+        tags=['Pets'],
+        component_name='Pet',
+        operation_id_base='Pet',
+    )
+    ...
+</pre> <p>Assuming a <code>Pet</code> model and <code>PetSerializer</code> serializer, the kwargs in this example are probably not needed. Often, though, you'll need to pass the kwargs if you have multiple view targeting the same model, or have multiple views with identically named serializers.</p> <p>If your views have related customizations that are needed frequently, you can create a base <code>AutoSchema</code> subclass for your project that takes additional <code>__init__()</code> kwargs to save subclassing <code>AutoSchema</code> for each view.</p> <p class="_links"><a class="_links-link" href="https://github.com/encode/django-rest-framework/tree/master/rest_framework/schemas">schemas</a></p><div class="_attribution">
+  <p class="_attribution-p">
+    Copyright &copy; 2011&ndash;present Encode OSS Ltd.<br>Licensed under the BSD License.<br>
+    <a href="https://www.django-rest-framework.org/api-guide/schemas/" class="_attribution-link">https://www.django-rest-framework.org/api-guide/schemas/</a>
+  </p>
+</div>

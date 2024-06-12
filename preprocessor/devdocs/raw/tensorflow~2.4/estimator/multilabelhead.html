@@ -1,0 +1,124 @@
+<h1 class="devsite-page-title">tf.estimator.MultiLabelHead</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/multi_label_head.py#L37-L591">  View source on GitHub </a> </td> </table> <p>Creates a <code translate="no" dir="ltr">Head</code> for multi-label classification.</p> <p>Inherits From: <a href="head"><code translate="no" dir="ltr">Head</code></a></p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/estimator/MultiLabelHead"><code translate="no" dir="ltr">tf.compat.v1.estimator.MultiLabelHead</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.estimator.MultiLabelHead(
+    n_classes, weight_column=None, thresholds=None, label_vocabulary=None,
+    loss_reduction=losses_utils.ReductionV2.SUM_OVER_BATCH_SIZE, loss_fn=None,
+    classes_for_class_based_metrics=None, name=None
+)
+</pre>  <p>Multi-label classification handles the case where each example may have zero or more associated labels, from a discrete set. This is distinct from <code translate="no" dir="ltr">MultiClassHead</code> which has exactly one label per example.</p> <p>Uses <code translate="no" dir="ltr">sigmoid_cross_entropy</code> loss average over classes and weighted sum over the batch. Namely, if the input logits have shape <code translate="no" dir="ltr">[batch_size, n_classes]</code>, the loss is the average over <code translate="no" dir="ltr">n_classes</code> and the weighted sum over <code translate="no" dir="ltr">batch_size</code>.</p> <p>The head expects <code translate="no" dir="ltr">logits</code> with shape <code translate="no" dir="ltr">[D0, D1, ... DN, n_classes]</code>. In many applications, the shape is <code translate="no" dir="ltr">[batch_size, n_classes]</code>.</p> <h4 id="labels_can_be" data-text="Labels can be:">Labels can be:</h4> <ul> <li>A multi-hot tensor of shape <code translate="no" dir="ltr">[D0, D1, ... DN, n_classes]</code>
+</li> <li>An integer <code translate="no" dir="ltr">SparseTensor</code> of class indices. The <code translate="no" dir="ltr">dense_shape</code> must be <code translate="no" dir="ltr">[D0, D1, ... DN, ?]</code> and the values within <code translate="no" dir="ltr">[0, n_classes)</code>.</li> <li>If <code translate="no" dir="ltr">label_vocabulary</code> is given, a string <code translate="no" dir="ltr">SparseTensor</code>. The <code translate="no" dir="ltr">dense_shape</code> must be <code translate="no" dir="ltr">[D0, D1, ... DN, ?]</code> and the values within <code translate="no" dir="ltr">label_vocabulary</code> or a multi-hot tensor of shape <code translate="no" dir="ltr">[D0, D1, ... DN, n_classes]</code>.</li> </ul> <p>If <code translate="no" dir="ltr">weight_column</code> is specified, weights must be of shape <code translate="no" dir="ltr">[D0, D1, ... DN]</code>, or <code translate="no" dir="ltr">[D0, D1, ... DN, 1]</code>.</p> <p>Also supports custom <code translate="no" dir="ltr">loss_fn</code>. <code translate="no" dir="ltr">loss_fn</code> takes <code translate="no" dir="ltr">(labels, logits)</code> or <code translate="no" dir="ltr">(labels, logits, features)</code> as arguments and returns unreduced loss with shape <code translate="no" dir="ltr">[D0, D1, ... DN, 1]</code>. <code translate="no" dir="ltr">loss_fn</code> must support indicator <code translate="no" dir="ltr">labels</code> with shape <code translate="no" dir="ltr">[D0, D1, ... DN, n_classes]</code>. Namely, the head applies <code translate="no" dir="ltr">label_vocabulary</code> to the input labels before passing them to <code translate="no" dir="ltr">loss_fn</code>.</p> <h4 id="usage" data-text="Usage:">Usage:</h4> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+n_classes = 2
+head = tf.estimator.MultiLabelHead(n_classes)
+logits = np.array([[-1., 1.], [-1.5, 1.5]], dtype=np.float32)
+labels = np.array([[1, 0], [1, 1]], dtype=np.int64)
+features = {'x': np.array([[41], [42]], dtype=np.int32)}
+# expected_loss = sum(_sigmoid_cross_entropy(labels, logits)) / batch_size
+#               = sum(1.31326169, 0.9514133) / 2 = 1.13
+loss = head.loss(labels, logits, features=features)
+print('{:.2f}'.format(loss.numpy()))
+1.13
+eval_metrics = head.metrics()
+updated_metrics = head.update_metrics(
+  eval_metrics, features, logits, labels)
+for k in sorted(updated_metrics):
+ print('{} : {:.2f}'.format(k, updated_metrics[k].result().numpy()))
+auc : 0.33
+auc_precision_recall : 0.77
+average_loss : 1.13
+preds = head.predictions(logits)
+print(preds['logits'])
+tf.Tensor(
+  [[-1.   1. ]
+   [-1.5  1.5]], shape=(2, 2), dtype=float32)
+</pre> <p>Usage with a canned estimator:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">my_head = tf.estimator.MultiLabelHead(n_classes=3)
+my_estimator = tf.estimator.DNNEstimator(
+    head=my_head,
+    hidden_units=...,
+    feature_columns=...)
+</pre> <p>It can also be used with a custom <code translate="no" dir="ltr">model_fn</code>. Example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">def _my_model_fn(features, labels, mode):
+  my_head = tf.estimator.MultiLabelHead(n_classes=3)
+  logits = tf.keras.Model(...)(features)
+
+  return my_head.create_estimator_spec(
+      features=features,
+      mode=mode,
+      labels=labels,
+      optimizer=tf.keras.optimizers.Adagrad(lr=0.1),
+      logits=logits)
+
+my_estimator = tf.estimator.Estimator(model_fn=_my_model_fn)
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">n_classes</code> </td> <td> Number of classes, must be greater than 1 (for 1 class, use <code translate="no" dir="ltr">BinaryClassHead</code>). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">weight_column</code> </td> <td> A string or a <code translate="no" dir="ltr">NumericColumn</code> created by <a href="../feature_column/numeric_column"><code translate="no" dir="ltr">tf.feature_column.numeric_column</code></a> defining feature column representing weights. It is used to down weight or boost examples during training. It will be multiplied by the loss of the example. Per-class weighting is not supported. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">thresholds</code> </td> <td> Iterable of floats in the range <code translate="no" dir="ltr">(0, 1)</code>. Accuracy, precision and recall metrics are evaluated for each threshold value. The threshold is applied to the predicted probabilities, i.e. above the threshold is <code translate="no" dir="ltr">true</code>, below is <code translate="no" dir="ltr">false</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">label_vocabulary</code> </td> <td> A list of strings represents possible label values. If it is not given, that means labels are already encoded as integer within [0, n_classes) or multi-hot Tensor. If given, labels must be SparseTensor <code translate="no" dir="ltr">string</code> type and have any value in <code translate="no" dir="ltr">label_vocabulary</code>. Also there will be errors if vocabulary is not provided and labels are string. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">loss_reduction</code> </td> <td> One of <a href="../keras/losses/reduction"><code translate="no" dir="ltr">tf.losses.Reduction</code></a> except <code translate="no" dir="ltr">NONE</code>. Decides how to reduce training loss over batch. Defaults to <code translate="no" dir="ltr">SUM_OVER_BATCH_SIZE</code>, namely weighted sum of losses divided by batch size. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">loss_fn</code> </td> <td> Optional loss function. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">classes_for_class_based_metrics</code> </td> <td> List of integer class IDs or string class names for which per-class metrics are evaluated. If integers, all must be in the range <code translate="no" dir="ltr">[0, n_classes - 1]</code>. If strings, all must be in <code translate="no" dir="ltr">label_vocabulary</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Name of the head. If provided, summary and metrics keys will be suffixed by <code translate="no" dir="ltr">"/" + name</code>. Also used as <code translate="no" dir="ltr">name_scope</code> when creating ops. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">logits_dimension</code> </td> <td> See <code translate="no" dir="ltr">base_head.Head</code> for details. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">loss_reduction</code> </td> <td> See <code translate="no" dir="ltr">base_head.Head</code> for details. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> See <code translate="no" dir="ltr">base_head.Head</code> for details. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="create_estimator_spec" data-text="create_estimator_spec"><code translate="no" dir="ltr">create_estimator_spec</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/base_head.py#L229-L297">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+create_estimator_spec(
+    features, mode, logits, labels=None, optimizer=None, trainable_variables=None,
+    train_op_fn=None, update_ops=None, regularization_losses=None
+)
+</pre> <p>Returns <code translate="no" dir="ltr">EstimatorSpec</code> that a model_fn can return.</p> <p>It is recommended to pass all args via name.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">features</code> </td> <td> Input <code translate="no" dir="ltr">dict</code> mapping string feature names to <code translate="no" dir="ltr">Tensor</code> or <code translate="no" dir="ltr">SparseTensor</code> objects containing the values for that feature in a minibatch. Often to be used to fetch example-weight tensor. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">mode</code> </td> <td> Estimator's <code translate="no" dir="ltr">ModeKeys</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">logits</code> </td> <td> Logits <code translate="no" dir="ltr">Tensor</code> to be used by the head. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">labels</code> </td> <td> Labels <code translate="no" dir="ltr">Tensor</code>, or <code translate="no" dir="ltr">dict</code> mapping string label names to <code translate="no" dir="ltr">Tensor</code> objects of the label values. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">optimizer</code> </td> <td> An <a href="../keras/optimizers/optimizer"><code translate="no" dir="ltr">tf.keras.optimizers.Optimizer</code></a> instance to optimize the loss in TRAIN mode. Namely, sets <code translate="no" dir="ltr">train_op = optimizer.get_updates(loss, trainable_variables)</code>, which updates variables to minimize <code translate="no" dir="ltr">loss</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">trainable_variables</code> </td> <td> A list or tuple of <code translate="no" dir="ltr">Variable</code> objects to update to minimize <code translate="no" dir="ltr">loss</code>. In Tensorflow 1.x, by default these are the list of variables collected in the graph under the key <code translate="no" dir="ltr">GraphKeys.TRAINABLE_VARIABLES</code>. As Tensorflow 2.x doesn't have collections and GraphKeys, trainable_variables need to be passed explicitly here. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">train_op_fn</code> </td> <td> Function that takes a scalar loss <code translate="no" dir="ltr">Tensor</code> and returns an op to optimize the model with the loss in TRAIN mode. Used if <code translate="no" dir="ltr">optimizer</code> is <code translate="no" dir="ltr">None</code>. Exactly one of <code translate="no" dir="ltr">train_op_fn</code> and <code translate="no" dir="ltr">optimizer</code> must be set in TRAIN mode. By default, it is <code translate="no" dir="ltr">None</code> in other modes. If you want to optimize loss yourself, you can pass <code translate="no" dir="ltr">lambda _: tf.no_op()</code> and then use <a href="estimatorspec#loss"><code translate="no" dir="ltr">EstimatorSpec.loss</code></a> to compute and apply gradients. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">update_ops</code> </td> <td> A list or tuple of update ops to be run at training time. For example, layers such as BatchNormalization create mean and variance update ops that need to be run at training time. In Tensorflow 1.x, these are thrown into an UPDATE_OPS collection. As Tensorflow 2.x doesn't have collections, update_ops need to be passed explicitly here. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">regularization_losses</code> </td> <td> A list of additional scalar losses to be added to the training loss, such as regularization losses. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> <code translate="no" dir="ltr">EstimatorSpec</code>. </td> </tr> 
+</table> <h3 id="loss" data-text="loss"><code translate="no" dir="ltr">loss</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/multi_label_head.py#L341-L364">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+loss(
+    labels, logits, features=None, mode=None, regularization_losses=None
+)
+</pre> <p>Returns regularized training loss. See <code translate="no" dir="ltr">base_head.Head</code> for details.</p> <h3 id="metrics" data-text="metrics"><code translate="no" dir="ltr">metrics</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/multi_label_head.py#L401-L427">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+metrics(
+    regularization_losses=None
+)
+</pre> <p>Creates metrics. See <code translate="no" dir="ltr">base_head.Head</code> for details.</p> <h3 id="predictions" data-text="predictions"><code translate="no" dir="ltr">predictions</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/multi_label_head.py#L366-L399">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+predictions(
+    logits, keys=None
+)
+</pre> <p>Return predictions based on keys.</p> <p>See <code translate="no" dir="ltr">base_head.Head</code> for details.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">logits</code> </td> <td> logits <code translate="no" dir="ltr">Tensor</code> with shape <code translate="no" dir="ltr">[D0, D1, ... DN, logits_dimension]</code>. For many applications, the shape is <code translate="no" dir="ltr">[batch_size, logits_dimension]</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">keys</code> </td> <td> a list of prediction keys. Key can be either the class variable of prediction_keys.PredictionKeys or its string value, such as: prediction_keys.PredictionKeys.LOGITS or 'logits'. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A dict of predictions. </td> </tr> 
+</table> <h3 id="update_metrics" data-text="update_metrics"><code translate="no" dir="ltr">update_metrics</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/estimator/tree/master/tensorflow_estimator/python/estimator/head/multi_label_head.py#L429-L480">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+update_metrics(
+    eval_metrics, features, logits, labels, regularization_losses=None
+)
+</pre> <p>Updates eval metrics. See <code translate="no" dir="ltr">base_head.Head</code> for details.</p>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/estimator/MultiLabelHead" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/estimator/MultiLabelHead</a>
+  </p>
+</div>

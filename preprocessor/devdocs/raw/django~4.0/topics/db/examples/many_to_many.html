@@ -1,0 +1,178 @@
+<h1 id="many-to-many-relationships">Many-to-many relationships</h1> <p id="s-many-to-many-relationships">To define a many-to-many relationship, use <a class="reference internal" href="../../../ref/models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a>.</p> <p>In this example, an <code>Article</code> can be published in multiple <code>Publication</code> objects, and a <code>Publication</code> has multiple <code>Article</code> objects:</p> <pre data-language="python">from django.db import models
+
+class Publication(models.Model):
+    title = models.CharField(max_length=30)
+
+    class Meta:
+        ordering = ['title']
+
+    def __str__(self):
+        return self.title
+
+class Article(models.Model):
+    headline = models.CharField(max_length=100)
+    publications = models.ManyToManyField(Publication)
+
+    class Meta:
+        ordering = ['headline']
+
+    def __str__(self):
+        return self.headline
+</pre> <p>What follows are examples of operations that can be performed using the Python API facilities.</p> <p>Create a few <code>Publications</code>:</p> <pre data-language="pycon">&gt;&gt;&gt; p1 = Publication(title='The Python Journal')
+&gt;&gt;&gt; p1.save()
+&gt;&gt;&gt; p2 = Publication(title='Science News')
+&gt;&gt;&gt; p2.save()
+&gt;&gt;&gt; p3 = Publication(title='Science Weekly')
+&gt;&gt;&gt; p3.save()
+</pre> <p>Create an <code>Article</code>:</p> <pre data-language="pycon">&gt;&gt;&gt; a1 = Article(headline='Django lets you build web apps easily')
+</pre> <p>You can’t associate it with a <code>Publication</code> until it’s been saved:</p> <pre data-language="pycon">&gt;&gt;&gt; a1.publications.add(p1)
+Traceback (most recent call last):
+...
+ValueError: "&lt;Article: Django lets you build web apps easily&gt;" needs to have a value for field "id" before this many-to-many relationship can be used.
+</pre> <p>Save it!</p> <pre data-language="pycon">&gt;&gt;&gt; a1.save()
+</pre> <p>Associate the <code>Article</code> with a <code>Publication</code>:</p> <pre data-language="pycon">&gt;&gt;&gt; a1.publications.add(p1)
+</pre> <p>Create another <code>Article</code>, and set it to appear in the <code>Publications</code>:</p> <pre data-language="pycon">&gt;&gt;&gt; a2 = Article(headline='NASA uses Python')
+&gt;&gt;&gt; a2.save()
+&gt;&gt;&gt; a2.publications.add(p1, p2)
+&gt;&gt;&gt; a2.publications.add(p3)
+</pre> <p>Adding a second time is OK, it will not duplicate the relation:</p> <pre data-language="pycon">&gt;&gt;&gt; a2.publications.add(p3)
+</pre> <p>Adding an object of the wrong type raises <a class="reference external" href="https://docs.python.org/3/library/exceptions.html#TypeError" title="(in Python v3.10)"><code>TypeError</code></a>:</p> <pre data-language="pycon">&gt;&gt;&gt; a2.publications.add(a1)
+Traceback (most recent call last):
+...
+TypeError: 'Publication' instance expected
+</pre> <p>Create and add a <code>Publication</code> to an <code>Article</code> in one step using <a class="reference internal" href="../../../ref/models/relations#django.db.models.fields.related.RelatedManager.create" title="django.db.models.fields.related.RelatedManager.create"><code>create()</code></a>:</p> <pre data-language="pycon">&gt;&gt;&gt; new_publication = a2.publications.create(title='Highlights for Children')
+</pre> <p><code>Article</code> objects have access to their related <code>Publication</code> objects:</p> <pre data-language="pycon">&gt;&gt;&gt; a1.publications.all()
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; a2.publications.all()
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;, &lt;Publication: The Python Journal&gt;]&gt;
+</pre> <p><code>Publication</code> objects have access to their related <code>Article</code> objects:</p> <pre data-language="pycon">&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; p1.article_set.all()
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.get(id=4).article_set.all()
+&lt;QuerySet [&lt;Article: NASA uses Python&gt;]&gt;
+</pre> <p>Many-to-many relationships can be queried using <a class="reference internal" href="../queries#lookups-that-span-relationships"><span class="std std-ref">lookups across relationships</span></a>:</p> <pre data-language="pycon">&gt;&gt;&gt; Article.objects.filter(publications__id=1)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; Article.objects.filter(publications__pk=1)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; Article.objects.filter(publications=1)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; Article.objects.filter(publications=p1)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+
+&gt;&gt;&gt; Article.objects.filter(publications__title__startswith="Science")
+&lt;QuerySet [&lt;Article: NASA uses Python&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+
+&gt;&gt;&gt; Article.objects.filter(publications__title__startswith="Science").distinct()
+&lt;QuerySet [&lt;Article: NASA uses Python&gt;]&gt;
+</pre> <p>The <a class="reference internal" href="../../../ref/models/querysets#django.db.models.query.QuerySet.count" title="django.db.models.query.QuerySet.count"><code>count()</code></a> function respects <a class="reference internal" href="../../../ref/models/querysets#django.db.models.query.QuerySet.distinct" title="django.db.models.query.QuerySet.distinct"><code>distinct()</code></a> as well:</p> <pre data-language="pycon">&gt;&gt;&gt; Article.objects.filter(publications__title__startswith="Science").count()
+2
+
+&gt;&gt;&gt; Article.objects.filter(publications__title__startswith="Science").distinct().count()
+1
+
+&gt;&gt;&gt; Article.objects.filter(publications__in=[1,2]).distinct()
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+&gt;&gt;&gt; Article.objects.filter(publications__in=[p1,p2]).distinct()
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA uses Python&gt;]&gt;
+</pre> <p>Reverse m2m queries are supported (i.e., starting at the table that doesn’t have a <a class="reference internal" href="../../../ref/models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a>):</p> <pre data-language="pycon">&gt;&gt;&gt; Publication.objects.filter(id=1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.filter(pk=1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+
+&gt;&gt;&gt; Publication.objects.filter(article__headline__startswith="NASA")
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;, &lt;Publication: The Python Journal&gt;]&gt;
+
+&gt;&gt;&gt; Publication.objects.filter(article__id=1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.filter(article__pk=1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.filter(article=1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.filter(article=a1)
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+
+&gt;&gt;&gt; Publication.objects.filter(article__in=[1,2]).distinct()
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;, &lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Publication.objects.filter(article__in=[a1,a2]).distinct()
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;, &lt;Publication: The Python Journal&gt;]&gt;
+</pre> <p>Excluding a related item works as you would expect, too (although the SQL involved is a little complex):</p> <pre data-language="pycon">&gt;&gt;&gt; Article.objects.exclude(publications=p2)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;]&gt;
+</pre> <p>If we delete a <code>Publication</code>, its <code>Articles</code> won’t be able to access it:</p> <pre data-language="pycon">&gt;&gt;&gt; p1.delete()
+&gt;&gt;&gt; Publication.objects.all()
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;]&gt;
+&gt;&gt;&gt; a1 = Article.objects.get(pk=1)
+&gt;&gt;&gt; a1.publications.all()
+&lt;QuerySet []&gt;
+</pre> <p>If we delete an <code>Article</code>, its <code>Publications</code> won’t be able to access it:</p> <pre data-language="pycon">&gt;&gt;&gt; a2.delete()
+&gt;&gt;&gt; Article.objects.all()
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;]&gt;
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet []&gt;
+</pre> <p>Adding via the ‘other’ end of an m2m:</p> <pre data-language="pycon">&gt;&gt;&gt; a4 = Article(headline='NASA finds intelligent life on Earth')
+&gt;&gt;&gt; a4.save()
+&gt;&gt;&gt; p2.article_set.add(a4)
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: NASA finds intelligent life on Earth&gt;]&gt;
+&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet [&lt;Publication: Science News&gt;]&gt;
+</pre> <p>Adding via the other end using keywords:</p> <pre data-language="pycon">&gt;&gt;&gt; new_article = p2.article_set.create(headline='Oxygen-free diet works wonders')
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: NASA finds intelligent life on Earth&gt;, &lt;Article: Oxygen-free diet works wonders&gt;]&gt;
+&gt;&gt;&gt; a5 = p2.article_set.all()[1]
+&gt;&gt;&gt; a5.publications.all()
+&lt;QuerySet [&lt;Publication: Science News&gt;]&gt;
+</pre> <p>Removing <code>Publication</code> from an <code>Article</code>:</p> <pre data-language="pycon">&gt;&gt;&gt; a4.publications.remove(p2)
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: Oxygen-free diet works wonders&gt;]&gt;
+&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet []&gt;
+</pre> <p>And from the other end:</p> <pre data-language="pycon">&gt;&gt;&gt; p2.article_set.remove(a5)
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet []&gt;
+&gt;&gt;&gt; a5.publications.all()
+&lt;QuerySet []&gt;
+</pre> <p>Relation sets can be set:</p> <pre data-language="pycon">&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet [&lt;Publication: Science News&gt;]&gt;
+&gt;&gt;&gt; a4.publications.set([p3])
+&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet [&lt;Publication: Science Weekly&gt;]&gt;
+</pre> <p>Relation sets can be cleared:</p> <pre data-language="pycon">&gt;&gt;&gt; p2.article_set.clear()
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet []&gt;
+</pre> <p>And you can clear from the other end:</p> <pre data-language="pycon">&gt;&gt;&gt; p2.article_set.add(a4, a5)
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: NASA finds intelligent life on Earth&gt;, &lt;Article: Oxygen-free diet works wonders&gt;]&gt;
+&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet [&lt;Publication: Science News&gt;, &lt;Publication: Science Weekly&gt;]&gt;
+&gt;&gt;&gt; a4.publications.clear()
+&gt;&gt;&gt; a4.publications.all()
+&lt;QuerySet []&gt;
+&gt;&gt;&gt; p2.article_set.all()
+&lt;QuerySet [&lt;Article: Oxygen-free diet works wonders&gt;]&gt;
+</pre> <p>Recreate the <code>Article</code> and <code>Publication</code> we have deleted:</p> <pre data-language="pycon">&gt;&gt;&gt; p1 = Publication(title='The Python Journal')
+&gt;&gt;&gt; p1.save()
+&gt;&gt;&gt; a2 = Article(headline='NASA uses Python')
+&gt;&gt;&gt; a2.save()
+&gt;&gt;&gt; a2.publications.add(p1, p2, p3)
+</pre> <p>Bulk delete some <code>Publications</code> - references to deleted publications should go:</p> <pre data-language="pycon">&gt;&gt;&gt; Publication.objects.filter(title__startswith='Science').delete()
+&gt;&gt;&gt; Publication.objects.all()
+&lt;QuerySet [&lt;Publication: Highlights for Children&gt;, &lt;Publication: The Python Journal&gt;]&gt;
+&gt;&gt;&gt; Article.objects.all()
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;, &lt;Article: NASA finds intelligent life on Earth&gt;, &lt;Article: NASA uses Python&gt;, &lt;Article: Oxygen-free diet works wonders&gt;]&gt;
+&gt;&gt;&gt; a2.publications.all()
+&lt;QuerySet [&lt;Publication: The Python Journal&gt;]&gt;
+</pre> <p>Bulk delete some articles - references to deleted objects should go:</p> <pre data-language="pycon">&gt;&gt;&gt; q = Article.objects.filter(headline__startswith='Django')
+&gt;&gt;&gt; print(q)
+&lt;QuerySet [&lt;Article: Django lets you build web apps easily&gt;]&gt;
+&gt;&gt;&gt; q.delete()
+</pre> <p>After the <a class="reference internal" href="../../../ref/models/querysets#django.db.models.query.QuerySet.delete" title="django.db.models.query.QuerySet.delete"><code>delete()</code></a>, the <a class="reference internal" href="../../../ref/models/querysets#django.db.models.query.QuerySet" title="django.db.models.query.QuerySet"><code>QuerySet</code></a> cache needs to be cleared, and the referenced objects should be gone:</p> <pre data-language="pycon">&gt;&gt;&gt; print(q)
+&lt;QuerySet []&gt;
+&gt;&gt;&gt; p1.article_set.all()
+&lt;QuerySet [&lt;Article: NASA uses Python&gt;]&gt;
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/db/examples/many_to_many/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/db/examples/many_to_many/</a>
+  </p>
+</div>

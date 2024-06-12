@@ -1,0 +1,351 @@
+<h1 id="id1">email: Examples</h1> <p id="email-examples">Here are a few examples of how to use the <a class="reference internal" href="email#module-email" title="email: Package supporting the parsing, manipulating, and generating email messages."><code>email</code></a> package to read, write, and send simple email messages, as well as more complex MIME messages.</p> <p>First, let’s see how to create and send a simple text message (both the text content and the addresses may contain unicode characters):</p> <pre data-language="python"># Import smtplib for the actual sending function
+import smtplib
+
+# Import the email modules we'll need
+from email.message import EmailMessage
+
+# Open the plain text file whose name is in textfile for reading.
+with open(textfile) as fp:
+    # Create a text/plain message
+    msg = EmailMessage()
+    msg.set_content(fp.read())
+
+# me == the sender's email address
+# you == the recipient's email address
+msg['Subject'] = f'The contents of {textfile}'
+msg['From'] = me
+msg['To'] = you
+
+# Send the message via our own SMTP server.
+s = smtplib.SMTP('localhost')
+s.send_message(msg)
+s.quit()
+</pre> <p>Parsing <a class="rfc reference external" href="https://tools.ietf.org/html/rfc822.html" id="index-0"><strong>RFC 822</strong></a> headers can easily be done by the using the classes from the <a class="reference internal" href="email.parser#module-email.parser" title="email.parser: Parse flat text email messages to produce a message object structure."><code>parser</code></a> module:</p> <pre data-language="python"># Import the email modules we'll need
+from email.parser import BytesParser, Parser
+from email.policy import default
+
+# If the e-mail headers are in a file, uncomment these two lines:
+# with open(messagefile, 'rb') as fp:
+#     headers = BytesParser(policy=default).parse(fp)
+
+#  Or for parsing headers in a string (this is an uncommon operation), use:
+headers = Parser(policy=default).parsestr(
+        'From: Foo Bar &lt;user@example.com&gt;\n'
+        'To: &lt;someone_else@example.com&gt;\n'
+        'Subject: Test message\n'
+        '\n'
+        'Body would go here\n')
+
+#  Now the header items can be accessed as a dictionary:
+print('To: {}'.format(headers['to']))
+print('From: {}'.format(headers['from']))
+print('Subject: {}'.format(headers['subject']))
+
+# You can also access the parts of the addresses:
+print('Recipient username: {}'.format(headers['to'].addresses[0].username))
+print('Sender name: {}'.format(headers['from'].addresses[0].display_name))
+</pre> <p>Here’s an example of how to send a MIME message containing a bunch of family pictures that may be residing in a directory:</p> <pre data-language="python"># Import smtplib for the actual sending function
+import smtplib
+
+# And imghdr to find the types of our images
+import imghdr
+
+# Here are the email package modules we'll need
+from email.message import EmailMessage
+
+# Create the container email message.
+msg = EmailMessage()
+msg['Subject'] = 'Our family reunion'
+# me == the sender's email address
+# family = the list of all recipients' email addresses
+msg['From'] = me
+msg['To'] = ', '.join(family)
+msg.preamble = 'You will not see this in a MIME-aware mail reader.\n'
+
+# Open the files in binary mode.  Use imghdr to figure out the
+# MIME subtype for each specific image.
+for file in pngfiles:
+    with open(file, 'rb') as fp:
+        img_data = fp.read()
+    msg.add_attachment(img_data, maintype='image',
+                                 subtype=imghdr.what(None, img_data))
+
+# Send the email via our own SMTP server.
+with smtplib.SMTP('localhost') as s:
+    s.send_message(msg)
+</pre> <p>Here’s an example of how to send the entire contents of a directory as an email message: <a class="footnote-reference brackets" href="#id3" id="id2">1</a></p> <pre data-language="python">#!/usr/bin/env python3
+
+"""Send the contents of a directory as a MIME message."""
+
+import os
+import smtplib
+# For guessing MIME type based on file name extension
+import mimetypes
+
+from argparse import ArgumentParser
+
+from email.message import EmailMessage
+from email.policy import SMTP
+
+
+def main():
+    parser = ArgumentParser(description="""\
+Send the contents of a directory as a MIME message.
+Unless the -o option is given, the email is sent by forwarding to your local
+SMTP server, which then does the normal delivery process.  Your local machine
+must be running an SMTP server.
+""")
+    parser.add_argument('-d', '--directory',
+                        help="""Mail the contents of the specified directory,
+                        otherwise use the current directory.  Only the regular
+                        files in the directory are sent, and we don't recurse to
+                        subdirectories.""")
+    parser.add_argument('-o', '--output',
+                        metavar='FILE',
+                        help="""Print the composed message to FILE instead of
+                        sending the message to the SMTP server.""")
+    parser.add_argument('-s', '--sender', required=True,
+                        help='The value of the From: header (required)')
+    parser.add_argument('-r', '--recipient', required=True,
+                        action='append', metavar='RECIPIENT',
+                        default=[], dest='recipients',
+                        help='A To: header value (at least one required)')
+    args = parser.parse_args()
+    directory = args.directory
+    if not directory:
+        directory = '.'
+    # Create the message
+    msg = EmailMessage()
+    msg['Subject'] = f'Contents of directory {os.path.abspath(directory)}'
+    msg['To'] = ', '.join(args.recipients)
+    msg['From'] = args.sender
+    msg.preamble = 'You will not see this in a MIME-aware mail reader.\n'
+
+    for filename in os.listdir(directory):
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path):
+            continue
+        # Guess the content type based on the file's extension.  Encoding
+        # will be ignored, although we should check for simple things like
+        # gzip'd or compressed files.
+        ctype, encoding = mimetypes.guess_type(path)
+        if ctype is None or encoding is not None:
+            # No guess could be made, or the file is encoded (compressed), so
+            # use a generic bag-of-bits type.
+            ctype = 'application/octet-stream'
+        maintype, subtype = ctype.split('/', 1)
+        with open(path, 'rb') as fp:
+            msg.add_attachment(fp.read(),
+                               maintype=maintype,
+                               subtype=subtype,
+                               filename=filename)
+    # Now send or store the message
+    if args.output:
+        with open(args.output, 'wb') as fp:
+            fp.write(msg.as_bytes(policy=SMTP))
+    else:
+        with smtplib.SMTP('localhost') as s:
+            s.send_message(msg)
+
+
+if __name__ == '__main__':
+    main()
+</pre> <p>Here’s an example of how to unpack a MIME message like the one above, into a directory of files:</p> <pre data-language="python">#!/usr/bin/env python3
+
+"""Unpack a MIME message into a directory of files."""
+
+import os
+import email
+import mimetypes
+
+from email.policy import default
+
+from argparse import ArgumentParser
+
+
+def main():
+    parser = ArgumentParser(description="""\
+Unpack a MIME message into a directory of files.
+""")
+    parser.add_argument('-d', '--directory', required=True,
+                        help="""Unpack the MIME message into the named
+                        directory, which will be created if it doesn't already
+                        exist.""")
+    parser.add_argument('msgfile')
+    args = parser.parse_args()
+
+    with open(args.msgfile, 'rb') as fp:
+        msg = email.message_from_binary_file(fp, policy=default)
+
+    try:
+        os.mkdir(args.directory)
+    except FileExistsError:
+        pass
+
+    counter = 1
+    for part in msg.walk():
+        # multipart/* are just containers
+        if part.get_content_maintype() == 'multipart':
+            continue
+        # Applications should really sanitize the given filename so that an
+        # email message can't be used to overwrite important files
+        filename = part.get_filename()
+        if not filename:
+            ext = mimetypes.guess_extension(part.get_content_type())
+            if not ext:
+                # Use a generic bag-of-bits extension
+                ext = '.bin'
+            filename = f'part-{counter:03d}{ext}'
+        counter += 1
+        with open(os.path.join(args.directory, filename), 'wb') as fp:
+            fp.write(part.get_payload(decode=True))
+
+
+if __name__ == '__main__':
+    main()
+</pre> <p>Here’s an example of how to create an HTML message with an alternative plain text version. To make things a bit more interesting, we include a related image in the html part, and we save a copy of what we are going to send to disk, as well as sending it.</p> <pre data-language="python">#!/usr/bin/env python3
+
+import smtplib
+
+from email.message import EmailMessage
+from email.headerregistry import Address
+from email.utils import make_msgid
+
+# Create the base text message.
+msg = EmailMessage()
+msg['Subject'] = "Ayons asperges pour le déjeuner"
+msg['From'] = Address("Pepé Le Pew", "pepe", "example.com")
+msg['To'] = (Address("Penelope Pussycat", "penelope", "example.com"),
+             Address("Fabrette Pussycat", "fabrette", "example.com"))
+msg.set_content("""\
+Salut!
+
+Cela ressemble à un excellent recipie[1] déjeuner.
+
+[1] http://www.yummly.com/recipe/Roasted-Asparagus-Epicurious-203718
+
+--Pepé
+""")
+
+# Add the html version.  This converts the message into a multipart/alternative
+# container, with the original text message as the first part and the new html
+# message as the second part.
+asparagus_cid = make_msgid()
+msg.add_alternative("""\
+&lt;html&gt;
+  &lt;head&gt;&lt;/head&gt;
+  &lt;body&gt;
+    &lt;p&gt;Salut!&lt;/p&gt;
+    &lt;p&gt;Cela ressemble à un excellent
+        &lt;a href="http://www.yummly.com/recipe/Roasted-Asparagus-Epicurious-203718"&gt;
+            recipie
+        &lt;/a&gt; déjeuner.
+    &lt;/p&gt;
+    &lt;img src="cid:{asparagus_cid}" /&gt;
+  &lt;/body&gt;
+&lt;/html&gt;
+""".format(asparagus_cid=asparagus_cid[1:-1]), subtype='html')
+# note that we needed to peel the &lt;&gt; off the msgid for use in the html.
+
+# Now add the related image to the html part.
+with open("roasted-asparagus.jpg", 'rb') as img:
+    msg.get_payload()[1].add_related(img.read(), 'image', 'jpeg',
+                                     cid=asparagus_cid)
+
+# Make a local copy of what we are going to send.
+with open('outgoing.msg', 'wb') as f:
+    f.write(bytes(msg))
+
+# Send the message via local SMTP server.
+with smtplib.SMTP('localhost') as s:
+    s.send_message(msg)
+</pre> <p>If we were sent the message from the last example, here is one way we could process it:</p> <pre data-language="python">import os
+import sys
+import tempfile
+import mimetypes
+import webbrowser
+
+# Import the email modules we'll need
+from email import policy
+from email.parser import BytesParser
+
+# An imaginary module that would make this work and be safe.
+from imaginary import magic_html_parser
+
+# In a real program you'd get the filename from the arguments.
+with open('outgoing.msg', 'rb') as fp:
+    msg = BytesParser(policy=policy.default).parse(fp)
+
+# Now the header items can be accessed as a dictionary, and any non-ASCII will
+# be converted to unicode:
+print('To:', msg['to'])
+print('From:', msg['from'])
+print('Subject:', msg['subject'])
+
+# If we want to print a preview of the message content, we can extract whatever
+# the least formatted payload is and print the first three lines.  Of course,
+# if the message has no plain text part printing the first three lines of html
+# is probably useless, but this is just a conceptual example.
+simplest = msg.get_body(preferencelist=('plain', 'html'))
+print()
+print(''.join(simplest.get_content().splitlines(keepends=True)[:3]))
+
+ans = input("View full message?")
+if ans.lower()[0] == 'n':
+    sys.exit()
+
+# We can extract the richest alternative in order to display it:
+richest = msg.get_body()
+partfiles = {}
+if richest['content-type'].maintype == 'text':
+    if richest['content-type'].subtype == 'plain':
+        for line in richest.get_content().splitlines():
+            print(line)
+        sys.exit()
+    elif richest['content-type'].subtype == 'html':
+        body = richest
+    else:
+        print("Don't know how to display {}".format(richest.get_content_type()))
+        sys.exit()
+elif richest['content-type'].content_type == 'multipart/related':
+    body = richest.get_body(preferencelist=('html'))
+    for part in richest.iter_attachments():
+        fn = part.get_filename()
+        if fn:
+            extension = os.path.splitext(part.get_filename())[1]
+        else:
+            extension = mimetypes.guess_extension(part.get_content_type())
+        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as f:
+            f.write(part.get_content())
+            # again strip the &lt;&gt; to go from email form of cid to html form.
+            partfiles[part['content-id'][1:-1]] = f.name
+else:
+    print("Don't know how to display {}".format(richest.get_content_type()))
+    sys.exit()
+with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+    # The magic_html_parser has to rewrite the href="cid:...." attributes to
+    # point to the filenames in partfiles.  It also has to do a safety-sanitize
+    # of the html.  It could be written using html.parser.
+    f.write(magic_html_parser(body.get_content(), partfiles))
+webbrowser.open(f.name)
+os.remove(f.name)
+for fn in partfiles.values():
+    os.remove(fn)
+
+# Of course, there are lots of email messages that could break this simple
+# minded program, but it will handle the most common ones.
+</pre> <p>Up to the prompt, the output from the above is:</p> <pre data-language="none">To: Penelope Pussycat &lt;penelope@example.com&gt;, Fabrette Pussycat &lt;fabrette@example.com&gt;
+From: Pepé Le Pew &lt;pepe@example.com&gt;
+Subject: Ayons asperges pour le déjeuner
+
+Salut!
+
+Cela ressemble à un excellent recipie[1] déjeuner.
+</pre> <h4 class="rubric">Footnotes</h4> <dl class="footnote brackets"> <dt class="label" id="id3">
+<code>1</code> </dt> <dd>
+<p>Thanks to Matthew Dixon Cowles for the original inspiration and examples.</p> </dd> </dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/email.examples.html" class="_attribution-link">https://docs.python.org/3.9/library/email.examples.html</a>
+  </p>
+</div>

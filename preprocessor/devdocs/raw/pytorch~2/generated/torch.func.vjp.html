@@ -1,0 +1,50 @@
+<h1 id="torch-func-vjp">torch.func.vjp</h1> <dl class="py function"> <dt class="sig sig-object py" id="torch.func.vjp">
+<code>torch.func.vjp(func, *primals, has_aux=False)</code> </dt> <dd>
+<p>Standing for the vector-Jacobian product, returns a tuple containing the results of <code>func</code> applied to <code>primals</code> and a function that, when given <code>cotangents</code>, computes the reverse-mode Jacobian of <code>func</code> with respect to <code>primals</code> times <code>cotangents</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>func</strong> (<em>Callable</em>) – A Python function that takes one or more arguments. Must return one or more Tensors.</li> <li>
+<strong>primals</strong> (<em>Tensors</em>) – Positional arguments to <code>func</code> that must all be Tensors. The returned function will also be computing the derivative with respect to these arguments</li> <li>
+<strong>has_aux</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Flag indicating that <code>func</code> returns a <code>(output, aux)</code> tuple where the first element is the output of the function to be differentiated and the second element is other auxiliary objects that will not be differentiated. Default: False.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a <code>(output, vjp_fn)</code> tuple containing the output of <code>func</code> applied to <code>primals</code> and a function that computes the vjp of <code>func</code> with respect to all <code>primals</code> using the cotangents passed to the returned function. If <code>has_aux is True</code>, then instead returns a <code>(output, vjp_fn, aux)</code> tuple. The returned <code>vjp_fn</code> function will return a tuple of each VJP.</p> </dd> </dl> <p>When used in simple cases, <a class="reference internal" href="#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> behaves the same as <a class="reference internal" href="torch.func.grad#torch.func.grad" title="torch.func.grad"><code>grad()</code></a></p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn([5])
+&gt;&gt;&gt; f = lambda x: x.sin().sum()
+&gt;&gt;&gt; (_, vjpfunc) = torch.func.vjp(f, x)
+&gt;&gt;&gt; grad = vjpfunc(torch.tensor(1.))[0]
+&gt;&gt;&gt; assert torch.allclose(grad, torch.func.grad(f)(x))
+</pre> <p>However, <a class="reference internal" href="#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> can support functions with multiple outputs by passing in the cotangents for each of the outputs</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn([5])
+&gt;&gt;&gt; f = lambda x: (x.sin(), x.cos())
+&gt;&gt;&gt; (_, vjpfunc) = torch.func.vjp(f, x)
+&gt;&gt;&gt; vjps = vjpfunc((torch.ones([5]), torch.ones([5])))
+&gt;&gt;&gt; assert torch.allclose(vjps[0], x.cos() + -x.sin())
+</pre> <p><a class="reference internal" href="#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> can even support outputs being Python structs</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn([5])
+&gt;&gt;&gt; f = lambda x: {'first': x.sin(), 'second': x.cos()}
+&gt;&gt;&gt; (_, vjpfunc) = torch.func.vjp(f, x)
+&gt;&gt;&gt; cotangents = {'first': torch.ones([5]), 'second': torch.ones([5])}
+&gt;&gt;&gt; vjps = vjpfunc(cotangents)
+&gt;&gt;&gt; assert torch.allclose(vjps[0], x.cos() + -x.sin())
+</pre> <p>The function returned by <a class="reference internal" href="#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> will compute the partials with respect to each of the <code>primals</code></p> <pre data-language="python">&gt;&gt;&gt; x, y = torch.randn([5, 4]), torch.randn([4, 5])
+&gt;&gt;&gt; (_, vjpfunc) = torch.func.vjp(torch.matmul, x, y)
+&gt;&gt;&gt; cotangents = torch.randn([5, 5])
+&gt;&gt;&gt; vjps = vjpfunc(cotangents)
+&gt;&gt;&gt; assert len(vjps) == 2
+&gt;&gt;&gt; assert torch.allclose(vjps[0], torch.matmul(cotangents, y.transpose(0, 1)))
+&gt;&gt;&gt; assert torch.allclose(vjps[1], torch.matmul(x.transpose(0, 1), cotangents))
+</pre> <p><code>primals</code> are the positional arguments for <code>f</code>. All kwargs use their default value</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn([5])
+&gt;&gt;&gt; def f(x, scale=4.):
+&gt;&gt;&gt;   return x * scale
+&gt;&gt;&gt;
+&gt;&gt;&gt; (_, vjpfunc) = torch.func.vjp(f, x)
+&gt;&gt;&gt; vjps = vjpfunc(torch.ones_like(x))
+&gt;&gt;&gt; assert torch.allclose(vjps[0], torch.full(x.shape, 4.))
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Using PyTorch <code>torch.no_grad</code> together with <code>vjp</code>. Case 1: Using <code>torch.no_grad</code> inside a function:</p> <pre data-language="python">&gt;&gt;&gt; def f(x):
+&gt;&gt;&gt;     with torch.no_grad():
+&gt;&gt;&gt;         c = x ** 2
+&gt;&gt;&gt;     return x - c
+</pre> <p>In this case, <code>vjp(f)(x)</code> will respect the inner <code>torch.no_grad</code>.</p> <p>Case 2: Using <code>vjp</code> inside <code>torch.no_grad</code> context manager:</p> <pre data-language="python">&gt;&gt;&gt; with torch.no_grad():
+&gt;&gt;&gt;     vjp(f)(x)
+</pre> <p>In this case, <code>vjp</code> will respect the inner <code>torch.no_grad</code>, but not the outer one. This is because <code>vjp</code> is a “function transform”: its result should not depend on the result of a context manager outside of <code>f</code>.</p> </div> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/generated/torch.func.vjp.html" class="_attribution-link">https://pytorch.org/docs/2.1/generated/torch.func.vjp.html</a>
+  </p>
+</div>

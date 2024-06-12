@@ -1,0 +1,368 @@
+<h1 id="coroutines-and-tasks">Coroutines and Tasks</h1> <p>This section outlines high-level asyncio APIs to work with coroutines and Tasks.</p>  <ul class="simple"> <li><a class="reference internal" href="#coroutines" id="id1">Coroutines</a></li> <li><a class="reference internal" href="#awaitables" id="id2">Awaitables</a></li> <li><a class="reference internal" href="#running-an-asyncio-program" id="id3">Running an asyncio Program</a></li> <li><a class="reference internal" href="#creating-tasks" id="id4">Creating Tasks</a></li> <li><a class="reference internal" href="#sleeping" id="id5">Sleeping</a></li> <li><a class="reference internal" href="#running-tasks-concurrently" id="id6">Running Tasks Concurrently</a></li> <li><a class="reference internal" href="#shielding-from-cancellation" id="id7">Shielding From Cancellation</a></li> <li><a class="reference internal" href="#timeouts" id="id8">Timeouts</a></li> <li><a class="reference internal" href="#waiting-primitives" id="id9">Waiting Primitives</a></li> <li><a class="reference internal" href="#running-in-threads" id="id10">Running in Threads</a></li> <li><a class="reference internal" href="#scheduling-from-other-threads" id="id11">Scheduling From Other Threads</a></li> <li><a class="reference internal" href="#introspection" id="id12">Introspection</a></li> <li><a class="reference internal" href="#task-object" id="id13">Task Object</a></li> <li><a class="reference internal" href="#generator-based-coroutines" id="id14">Generator-based Coroutines</a></li> </ul>   <h2 id="coroutine">Coroutines</h2> <p id="coroutines"><a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-coroutine"><span class="xref std std-term">Coroutines</span></a> declared with the async/await syntax is the preferred way of writing asyncio applications. For example, the following snippet of code (requires Python 3.7+) prints “hello”, waits 1 second, and then prints “world”:</p> <pre data-language="python">&gt;&gt;&gt; import asyncio
+
+&gt;&gt;&gt; async def main():
+...     print('hello')
+...     await asyncio.sleep(1)
+...     print('world')
+
+&gt;&gt;&gt; asyncio.run(main())
+hello
+world
+</pre> <p>Note that simply calling a coroutine will not schedule it to be executed:</p> <pre data-language="python">&gt;&gt;&gt; main()
+&lt;coroutine object main at 0x1053bb7c8&gt;
+</pre> <p>To actually run a coroutine, asyncio provides three main mechanisms:</p> <ul> <li>The <a class="reference internal" href="#asyncio.run" title="asyncio.run"><code>asyncio.run()</code></a> function to run the top-level entry point “main()” function (see the above example.)</li> <li>
+<p>Awaiting on a coroutine. The following snippet of code will print “hello” after waiting for 1 second, and then print “world” after waiting for <em>another</em> 2 seconds:</p> <pre data-language="python">import asyncio
+import time
+
+async def say_after(delay, what):
+    await asyncio.sleep(delay)
+    print(what)
+
+async def main():
+    print(f"started at {time.strftime('%X')}")
+
+    await say_after(1, 'hello')
+    await say_after(2, 'world')
+
+    print(f"finished at {time.strftime('%X')}")
+
+asyncio.run(main())
+</pre> <p>Expected output:</p> <pre data-language="python">started at 17:13:52
+hello
+world
+finished at 17:13:55
+</pre> </li> <li>
+<p>The <a class="reference internal" href="#asyncio.create_task" title="asyncio.create_task"><code>asyncio.create_task()</code></a> function to run coroutines concurrently as asyncio <a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>Tasks</code></a>.</p> <p>Let’s modify the above example and run two <code>say_after</code> coroutines <em>concurrently</em>:</p> <pre data-language="python">async def main():
+    task1 = asyncio.create_task(
+        say_after(1, 'hello'))
+
+    task2 = asyncio.create_task(
+        say_after(2, 'world'))
+
+    print(f"started at {time.strftime('%X')}")
+
+    # Wait until both tasks are completed (should take
+    # around 2 seconds.)
+    await task1
+    await task2
+
+    print(f"finished at {time.strftime('%X')}")
+</pre> <p>Note that expected output now shows that the snippet runs 1 second faster than before:</p> <pre data-language="python">started at 17:14:32
+hello
+world
+finished at 17:14:34
+</pre> </li> </ul>   <h2 id="asyncio-awaitables">Awaitables</h2> <p id="awaitables">We say that an object is an <strong>awaitable</strong> object if it can be used in an <a class="reference internal" href="https://docs.python.org/3.9/reference/expressions.html#await"><code>await</code></a> expression. Many asyncio APIs are designed to accept awaitables.</p> <p>There are three main types of <em>awaitable</em> objects: <strong>coroutines</strong>, <strong>Tasks</strong>, and <strong>Futures</strong>.</p> <h4 class="rubric">Coroutines</h4> <p>Python coroutines are <em>awaitables</em> and therefore can be awaited from other coroutines:</p> <pre data-language="python">import asyncio
+
+async def nested():
+    return 42
+
+async def main():
+    # Nothing happens if we just call "nested()".
+    # A coroutine object is created but not awaited,
+    # so it *won't run at all*.
+    nested()
+
+    # Let's do it differently now and await it:
+    print(await nested())  # will print "42".
+
+asyncio.run(main())
+</pre> <div class="admonition important"> <p class="admonition-title">Important</p> <p>In this documentation the term “coroutine” can be used for two closely related concepts:</p> <ul class="simple"> <li>a <em>coroutine function</em>: an <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#async-def"><code>async def</code></a> function;</li> <li>a <em>coroutine object</em>: an object returned by calling a <em>coroutine function</em>.</li> </ul> </div> <p>asyncio also supports legacy <a class="reference internal" href="#asyncio-generator-based-coro"><span class="std std-ref">generator-based</span></a> coroutines.</p> <h4 class="rubric">Tasks</h4> <p><em>Tasks</em> are used to schedule coroutines <em>concurrently</em>.</p> <p>When a coroutine is wrapped into a <em>Task</em> with functions like <a class="reference internal" href="#asyncio.create_task" title="asyncio.create_task"><code>asyncio.create_task()</code></a> the coroutine is automatically scheduled to run soon:</p> <pre data-language="python">import asyncio
+
+async def nested():
+    return 42
+
+async def main():
+    # Schedule nested() to run soon concurrently
+    # with "main()".
+    task = asyncio.create_task(nested())
+
+    # "task" can now be used to cancel "nested()", or
+    # can simply be awaited to wait until it is complete:
+    await task
+
+asyncio.run(main())
+</pre> <h4 class="rubric">Futures</h4> <p>A <a class="reference internal" href="asyncio-future#asyncio.Future" title="asyncio.Future"><code>Future</code></a> is a special <strong>low-level</strong> awaitable object that represents an <strong>eventual result</strong> of an asynchronous operation.</p> <p>When a Future object is <em>awaited</em> it means that the coroutine will wait until the Future is resolved in some other place.</p> <p>Future objects in asyncio are needed to allow callback-based code to be used with async/await.</p> <p>Normally <strong>there is no need</strong> to create Future objects at the application level code.</p> <p>Future objects, sometimes exposed by libraries and some asyncio APIs, can be awaited:</p> <pre data-language="python">async def main():
+    await function_that_returns_a_future_object()
+
+    # this is also valid:
+    await asyncio.gather(
+        function_that_returns_a_future_object(),
+        some_python_coroutine()
+    )
+</pre> <p>A good example of a low-level function that returns a Future object is <a class="reference internal" href="asyncio-eventloop#asyncio.loop.run_in_executor" title="asyncio.loop.run_in_executor"><code>loop.run_in_executor()</code></a>.</p>   <h2 id="running-an-asyncio-program">Running an asyncio Program</h2> <dl class="function"> <dt id="asyncio.run">
+<code>asyncio.run(coro, *, debug=False)</code> </dt> <dd>
+<p>Execute the <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-coroutine"><span class="xref std std-term">coroutine</span></a> <em>coro</em> and return the result.</p> <p>This function runs the passed coroutine, taking care of managing the asyncio event loop, <em>finalizing asynchronous generators</em>, and closing the threadpool.</p> <p>This function cannot be called when another asyncio event loop is running in the same thread.</p> <p>If <em>debug</em> is <code>True</code>, the event loop will be run in debug mode.</p> <p>This function always creates a new event loop and closes it at the end. It should be used as a main entry point for asyncio programs, and should ideally only be called once.</p> <p>Example:</p> <pre data-language="python">async def main():
+    await asyncio.sleep(1)
+    print('hello')
+
+asyncio.run(main())
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.</span></p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.9: </span>Updated to use <a class="reference internal" href="asyncio-eventloop#asyncio.loop.shutdown_default_executor" title="asyncio.loop.shutdown_default_executor"><code>loop.shutdown_default_executor()</code></a>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The source code for <code>asyncio.run()</code> can be found in <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/asyncio/runners.py">Lib/asyncio/runners.py</a>.</p> </div> </dd>
+</dl>   <h2 id="creating-tasks">Creating Tasks</h2> <dl class="function"> <dt id="asyncio.create_task">
+<code>asyncio.create_task(coro, *, name=None)</code> </dt> <dd>
+<p>Wrap the <em>coro</em> <a class="reference internal" href="#coroutine"><span class="std std-ref">coroutine</span></a> into a <a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>Task</code></a> and schedule its execution. Return the Task object.</p> <p>If <em>name</em> is not <code>None</code>, it is set as the name of the task using <a class="reference internal" href="#asyncio.Task.set_name" title="asyncio.Task.set_name"><code>Task.set_name()</code></a>.</p> <p>The task is executed in the loop returned by <a class="reference internal" href="asyncio-eventloop#asyncio.get_running_loop" title="asyncio.get_running_loop"><code>get_running_loop()</code></a>, <a class="reference internal" href="exceptions#RuntimeError" title="RuntimeError"><code>RuntimeError</code></a> is raised if there is no running loop in current thread.</p> <p>This function has been <strong>added in Python 3.7</strong>. Prior to Python 3.7, the low-level <a class="reference internal" href="asyncio-future#asyncio.ensure_future" title="asyncio.ensure_future"><code>asyncio.ensure_future()</code></a> function can be used instead:</p> <pre data-language="python">async def coro():
+    ...
+
+# In Python 3.7+
+task = asyncio.create_task(coro())
+...
+
+# This works in all Python versions but is less readable
+task = asyncio.ensure_future(coro())
+...
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.</span></p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added the <code>name</code> parameter.</p> </div> </dd>
+</dl>   <h2 id="sleeping">Sleeping</h2> <dl class="function"> <dt id="asyncio.sleep">
+<code>coroutine asyncio.sleep(delay, result=None, *, loop=None)</code> </dt> <dd>
+<p>Block for <em>delay</em> seconds.</p> <p>If <em>result</em> is provided, it is returned to the caller when the coroutine completes.</p> <p><code>sleep()</code> always suspends the current task, allowing other tasks to run.</p> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <p id="asyncio-example-sleep">Example of coroutine displaying the current date every second for 5 seconds:</p> <pre data-language="python">import asyncio
+import datetime
+
+async def display_date():
+    loop = asyncio.get_running_loop()
+    end_time = loop.time() + 5.0
+    while True:
+        print(datetime.datetime.now())
+        if (loop.time() + 1.0) &gt;= end_time:
+            break
+        await asyncio.sleep(1)
+
+asyncio.run(display_date())
+</pre> </dd>
+</dl>   <h2 id="running-tasks-concurrently">Running Tasks Concurrently</h2> <dl class="function"> <dt id="asyncio.gather">
+<code>awaitable asyncio.gather(*aws, loop=None, return_exceptions=False)</code> </dt> <dd>
+<p>Run <a class="reference internal" href="#asyncio-awaitables"><span class="std std-ref">awaitable objects</span></a> in the <em>aws</em> sequence <em>concurrently</em>.</p> <p>If any awaitable in <em>aws</em> is a coroutine, it is automatically scheduled as a Task.</p> <p>If all awaitables are completed successfully, the result is an aggregate list of returned values. The order of result values corresponds to the order of awaitables in <em>aws</em>.</p> <p>If <em>return_exceptions</em> is <code>False</code> (default), the first raised exception is immediately propagated to the task that awaits on <code>gather()</code>. Other awaitables in the <em>aws</em> sequence <strong>won’t be cancelled</strong> and will continue to run.</p> <p>If <em>return_exceptions</em> is <code>True</code>, exceptions are treated the same as successful results, and aggregated in the result list.</p> <p>If <code>gather()</code> is <em>cancelled</em>, all submitted awaitables (that have not completed yet) are also <em>cancelled</em>.</p> <p>If any Task or Future from the <em>aws</em> sequence is <em>cancelled</em>, it is treated as if it raised <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> – the <code>gather()</code> call is <strong>not</strong> cancelled in this case. This is to prevent the cancellation of one submitted Task/Future to cause other Tasks/Futures to be cancelled.</p> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <p id="asyncio-example-gather">Example:</p> <pre data-language="python">import asyncio
+
+async def factorial(name, number):
+    f = 1
+    for i in range(2, number + 1):
+        print(f"Task {name}: Compute factorial({i})...")
+        await asyncio.sleep(1)
+        f *= i
+    print(f"Task {name}: factorial({number}) = {f}")
+
+async def main():
+    # Schedule three calls *concurrently*:
+    await asyncio.gather(
+        factorial("A", 2),
+        factorial("B", 3),
+        factorial("C", 4),
+    )
+
+asyncio.run(main())
+
+# Expected output:
+#
+#     Task A: Compute factorial(2)...
+#     Task B: Compute factorial(2)...
+#     Task C: Compute factorial(2)...
+#     Task A: factorial(2) = 2
+#     Task B: Compute factorial(3)...
+#     Task C: Compute factorial(3)...
+#     Task B: factorial(3) = 6
+#     Task C: Compute factorial(4)...
+#     Task C: factorial(4) = 24
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>If <em>return_exceptions</em> is False, cancelling gather() after it has been marked done won’t cancel any submitted awaitables. For instance, gather can be marked done after propagating an exception to the caller, therefore, calling <code>gather.cancel()</code> after catching an exception (raised by one of the awaitables) from gather won’t cancel any other awaitables.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>If the <em>gather</em> itself is cancelled, the cancellation is propagated regardless of <em>return_exceptions</em>.</p> </div> </dd>
+</dl>   <h2 id="shielding-from-cancellation">Shielding From Cancellation</h2> <dl class="function"> <dt id="asyncio.shield">
+<code>awaitable asyncio.shield(aw, *, loop=None)</code> </dt> <dd>
+<p>Protect an <a class="reference internal" href="#asyncio-awaitables"><span class="std std-ref">awaitable object</span></a> from being <a class="reference internal" href="#asyncio.Task.cancel" title="asyncio.Task.cancel"><code>cancelled</code></a>.</p> <p>If <em>aw</em> is a coroutine it is automatically scheduled as a Task.</p> <p>The statement:</p> <pre data-language="python">res = await shield(something())
+</pre> <p>is equivalent to:</p> <pre data-language="python">res = await something()
+</pre> <p><em>except</em> that if the coroutine containing it is cancelled, the Task running in <code>something()</code> is not cancelled. From the point of view of <code>something()</code>, the cancellation did not happen. Although its caller is still cancelled, so the “await” expression still raises a <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a>.</p> <p>If <code>something()</code> is cancelled by other means (i.e. from within itself) that would also cancel <code>shield()</code>.</p> <p>If it is desired to completely ignore cancellation (not recommended) the <code>shield()</code> function should be combined with a try/except clause, as follows:</p> <pre data-language="python">try:
+    res = await shield(something())
+except CancelledError:
+    res = None
+</pre> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> </dd>
+</dl>   <h2 id="timeouts">Timeouts</h2> <dl class="function"> <dt id="asyncio.wait_for">
+<code>coroutine asyncio.wait_for(aw, timeout, *, loop=None)</code> </dt> <dd>
+<p>Wait for the <em>aw</em> <a class="reference internal" href="#asyncio-awaitables"><span class="std std-ref">awaitable</span></a> to complete with a timeout.</p> <p>If <em>aw</em> is a coroutine it is automatically scheduled as a Task.</p> <p><em>timeout</em> can either be <code>None</code> or a float or int number of seconds to wait for. If <em>timeout</em> is <code>None</code>, block until the future completes.</p> <p>If a timeout occurs, it cancels the task and raises <a class="reference internal" href="asyncio-exceptions#asyncio.TimeoutError" title="asyncio.TimeoutError"><code>asyncio.TimeoutError</code></a>.</p> <p>To avoid the task <a class="reference internal" href="#asyncio.Task.cancel" title="asyncio.Task.cancel"><code>cancellation</code></a>, wrap it in <a class="reference internal" href="#asyncio.shield" title="asyncio.shield"><code>shield()</code></a>.</p> <p>The function will wait until the future is actually cancelled, so the total wait time may exceed the <em>timeout</em>. If an exception happens during cancellation, it is propagated.</p> <p>If the wait is cancelled, the future <em>aw</em> is also cancelled.</p> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <p id="asyncio-example-waitfor">Example:</p> <pre data-language="python">async def eternity():
+    # Sleep for one hour
+    await asyncio.sleep(3600)
+    print('yay!')
+
+async def main():
+    # Wait for at most 1 second
+    try:
+        await asyncio.wait_for(eternity(), timeout=1.0)
+    except asyncio.TimeoutError:
+        print('timeout!')
+
+asyncio.run(main())
+
+# Expected output:
+#
+#     timeout!
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>When <em>aw</em> is cancelled due to a timeout, <code>wait_for</code> waits for <em>aw</em> to be cancelled. Previously, it raised <a class="reference internal" href="asyncio-exceptions#asyncio.TimeoutError" title="asyncio.TimeoutError"><code>asyncio.TimeoutError</code></a> immediately.</p> </div> </dd>
+</dl>   <h2 id="waiting-primitives">Waiting Primitives</h2> <dl class="function"> <dt id="asyncio.wait">
+<code>coroutine asyncio.wait(aws, *, loop=None, timeout=None, return_when=ALL_COMPLETED)</code> </dt> <dd>
+<p>Run <a class="reference internal" href="#asyncio-awaitables"><span class="std std-ref">awaitable objects</span></a> in the <em>aws</em> iterable concurrently and block until the condition specified by <em>return_when</em>.</p> <p>The <em>aws</em> iterable must not be empty.</p> <p>Returns two sets of Tasks/Futures: <code>(done, pending)</code>.</p> <p>Usage:</p> <pre data-language="python">done, pending = await asyncio.wait(aws)
+</pre> <p><em>timeout</em> (a float or int), if specified, can be used to control the maximum number of seconds to wait before returning.</p> <p>Note that this function does not raise <a class="reference internal" href="asyncio-exceptions#asyncio.TimeoutError" title="asyncio.TimeoutError"><code>asyncio.TimeoutError</code></a>. Futures or Tasks that aren’t done when the timeout occurs are simply returned in the second set.</p> <p><em>return_when</em> indicates when this function should return. It must be one of the following constants:</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p>Constant</p></th> <th class="head"><p>Description</p></th> </tr> </thead>  <tr>
+<td><p><code>FIRST_COMPLETED</code></p></td> <td><p>The function will return when any future finishes or is cancelled.</p></td> </tr> <tr>
+<td><p><code>FIRST_EXCEPTION</code></p></td> <td><p>The function will return when any future finishes by raising an exception. If no future raises an exception then it is equivalent to <code>ALL_COMPLETED</code>.</p></td> </tr> <tr>
+<td><p><code>ALL_COMPLETED</code></p></td> <td><p>The function will return when all futures finish or are cancelled.</p></td> </tr>  </table> <p>Unlike <a class="reference internal" href="#asyncio.wait_for" title="asyncio.wait_for"><code>wait_for()</code></a>, <code>wait()</code> does not cancel the futures when a timeout occurs.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.8: </span>If any awaitable in <em>aws</em> is a coroutine, it is automatically scheduled as a Task. Passing coroutines objects to <code>wait()</code> directly is deprecated as it leads to <a class="reference internal" href="#asyncio-example-wait-coroutine"><span class="std std-ref">confusing behavior</span></a>.</p> </div> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <div class="admonition note" id="asyncio-example-wait-coroutine"> <p class="admonition-title">Note</p> <p><code>wait()</code> schedules coroutines as Tasks automatically and later returns those implicitly created Task objects in <code>(done, pending)</code> sets. Therefore the following code won’t work as expected:</p> <pre data-language="python">async def foo():
+    return 42
+
+coro = foo()
+done, pending = await asyncio.wait({coro})
+
+if coro in done:
+    # This branch will never be run!
+</pre> <p>Here is how the above snippet can be fixed:</p> <pre data-language="python">async def foo():
+    return 42
+
+task = asyncio.create_task(foo())
+done, pending = await asyncio.wait({task})
+
+if task in done:
+    # Everything will work as expected now.
+</pre> </div> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.11: </span>Passing coroutine objects to <code>wait()</code> directly is deprecated.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="asyncio.as_completed">
+<code>asyncio.as_completed(aws, *, loop=None, timeout=None)</code> </dt> <dd>
+<p>Run <a class="reference internal" href="#asyncio-awaitables"><span class="std std-ref">awaitable objects</span></a> in the <em>aws</em> iterable concurrently. Return an iterator of coroutines. Each coroutine returned can be awaited to get the earliest next result from the iterable of the remaining awaitables.</p> <p>Raises <a class="reference internal" href="asyncio-exceptions#asyncio.TimeoutError" title="asyncio.TimeoutError"><code>asyncio.TimeoutError</code></a> if the timeout occurs before all Futures are done.</p> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <p>Example:</p> <pre data-language="python">for coro in as_completed(aws):
+    earliest_result = await coro
+    # ...
+</pre> </dd>
+</dl>   <h2 id="running-in-threads">Running in Threads</h2> <dl class="function"> <dt id="asyncio.to_thread">
+<code>coroutine asyncio.to_thread(func, /, *args, **kwargs)</code> </dt> <dd>
+<p>Asynchronously run function <em>func</em> in a separate thread.</p> <p>Any *args and **kwargs supplied for this function are directly passed to <em>func</em>. Also, the current <a class="reference internal" href="contextvars#contextvars.Context" title="contextvars.Context"><code>contextvars.Context</code></a> is propagated, allowing context variables from the event loop thread to be accessed in the separate thread.</p> <p>Return a coroutine that can be awaited to get the eventual result of <em>func</em>.</p> <p>This coroutine function is primarily intended to be used for executing IO-bound functions/methods that would otherwise block the event loop if they were ran in the main thread. For example:</p> <pre data-language="python">def blocking_io():
+    print(f"start blocking_io at {time.strftime('%X')}")
+    # Note that time.sleep() can be replaced with any blocking
+    # IO-bound operation, such as file operations.
+    time.sleep(1)
+    print(f"blocking_io complete at {time.strftime('%X')}")
+
+async def main():
+    print(f"started main at {time.strftime('%X')}")
+
+    await asyncio.gather(
+        asyncio.to_thread(blocking_io),
+        asyncio.sleep(1))
+
+    print(f"finished main at {time.strftime('%X')}")
+
+
+asyncio.run(main())
+
+# Expected output:
+#
+# started main at 19:50:53
+# start blocking_io at 19:50:53
+# blocking_io complete at 19:50:54
+# finished main at 19:50:54
+</pre> <p>Directly calling <code>blocking_io()</code> in any coroutine would block the event loop for its duration, resulting in an additional 1 second of run time. Instead, by using <code>asyncio.to_thread()</code>, we can run it in a separate thread without blocking the event loop.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Due to the <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-gil"><span class="xref std std-term">GIL</span></a>, <code>asyncio.to_thread()</code> can typically only be used to make IO-bound functions non-blocking. However, for extension modules that release the GIL or alternative Python implementations that don’t have one, <code>asyncio.to_thread()</code> can also be used for CPU-bound functions.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.9.</span></p> </div> </dd>
+</dl>   <h2 id="scheduling-from-other-threads">Scheduling From Other Threads</h2> <dl class="function"> <dt id="asyncio.run_coroutine_threadsafe">
+<code>asyncio.run_coroutine_threadsafe(coro, loop)</code> </dt> <dd>
+<p>Submit a coroutine to the given event loop. Thread-safe.</p> <p>Return a <a class="reference internal" href="concurrent.futures#concurrent.futures.Future" title="concurrent.futures.Future"><code>concurrent.futures.Future</code></a> to wait for the result from another OS thread.</p> <p>This function is meant to be called from a different OS thread than the one where the event loop is running. Example:</p> <pre data-language="python"># Create a coroutine
+coro = asyncio.sleep(1, result=3)
+
+# Submit the coroutine to a given loop
+future = asyncio.run_coroutine_threadsafe(coro, loop)
+
+# Wait for the result with an optional timeout argument
+assert future.result(timeout) == 3
+</pre> <p>If an exception is raised in the coroutine, the returned Future will be notified. It can also be used to cancel the task in the event loop:</p> <pre data-language="python">try:
+    result = future.result(timeout)
+except asyncio.TimeoutError:
+    print('The coroutine took too long, cancelling the task...')
+    future.cancel()
+except Exception as exc:
+    print(f'The coroutine raised an exception: {exc!r}')
+else:
+    print(f'The coroutine returned: {result!r}')
+</pre> <p>See the <a class="reference internal" href="asyncio-dev#asyncio-multithreading"><span class="std std-ref">concurrency and multithreading</span></a> section of the documentation.</p> <p>Unlike other asyncio functions this function requires the <em>loop</em> argument to be passed explicitly.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.1.</span></p> </div> </dd>
+</dl>   <h2 id="introspection">Introspection</h2> <dl class="function"> <dt id="asyncio.current_task">
+<code>asyncio.current_task(loop=None)</code> </dt> <dd>
+<p>Return the currently running <a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>Task</code></a> instance, or <code>None</code> if no task is running.</p> <p>If <em>loop</em> is <code>None</code> <a class="reference internal" href="asyncio-eventloop#asyncio.get_running_loop" title="asyncio.get_running_loop"><code>get_running_loop()</code></a> is used to get the current loop.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.</span></p> </div> </dd>
+</dl> <dl class="function"> <dt id="asyncio.all_tasks">
+<code>asyncio.all_tasks(loop=None)</code> </dt> <dd>
+<p>Return a set of not yet finished <a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>Task</code></a> objects run by the loop.</p> <p>If <em>loop</em> is <code>None</code>, <a class="reference internal" href="asyncio-eventloop#asyncio.get_running_loop" title="asyncio.get_running_loop"><code>get_running_loop()</code></a> is used for getting current loop.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.</span></p> </div> </dd>
+</dl>   <h2 id="task-object">Task Object</h2> <dl class="class"> <dt id="asyncio.Task">
+<code>class asyncio.Task(coro, *, loop=None, name=None)</code> </dt> <dd>
+<p>A <a class="reference internal" href="asyncio-future#asyncio.Future" title="asyncio.Future"><code>Future-like</code></a> object that runs a Python <a class="reference internal" href="#coroutine"><span class="std std-ref">coroutine</span></a>. Not thread-safe.</p> <p>Tasks are used to run coroutines in event loops. If a coroutine awaits on a Future, the Task suspends the execution of the coroutine and waits for the completion of the Future. When the Future is <em>done</em>, the execution of the wrapped coroutine resumes.</p> <p>Event loops use cooperative scheduling: an event loop runs one Task at a time. While a Task awaits for the completion of a Future, the event loop runs other Tasks, callbacks, or performs IO operations.</p> <p>Use the high-level <a class="reference internal" href="#asyncio.create_task" title="asyncio.create_task"><code>asyncio.create_task()</code></a> function to create Tasks, or the low-level <a class="reference internal" href="asyncio-eventloop#asyncio.loop.create_task" title="asyncio.loop.create_task"><code>loop.create_task()</code></a> or <a class="reference internal" href="asyncio-future#asyncio.ensure_future" title="asyncio.ensure_future"><code>ensure_future()</code></a> functions. Manual instantiation of Tasks is discouraged.</p> <p>To cancel a running Task use the <a class="reference internal" href="#asyncio.Task.cancel" title="asyncio.Task.cancel"><code>cancel()</code></a> method. Calling it will cause the Task to throw a <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception into the wrapped coroutine. If a coroutine is awaiting on a Future object during cancellation, the Future object will be cancelled.</p> <p><a class="reference internal" href="#asyncio.Task.cancelled" title="asyncio.Task.cancelled"><code>cancelled()</code></a> can be used to check if the Task was cancelled. The method returns <code>True</code> if the wrapped coroutine did not suppress the <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception and was actually cancelled.</p> <p><a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>asyncio.Task</code></a> inherits from <a class="reference internal" href="asyncio-future#asyncio.Future" title="asyncio.Future"><code>Future</code></a> all of its APIs except <a class="reference internal" href="asyncio-future#asyncio.Future.set_result" title="asyncio.Future.set_result"><code>Future.set_result()</code></a> and <a class="reference internal" href="asyncio-future#asyncio.Future.set_exception" title="asyncio.Future.set_exception"><code>Future.set_exception()</code></a>.</p> <p>Tasks support the <a class="reference internal" href="contextvars#module-contextvars" title="contextvars: Context Variables"><code>contextvars</code></a> module. When a Task is created it copies the current context and later runs its coroutine in the copied context.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Added support for the <a class="reference internal" href="contextvars#module-contextvars" title="contextvars: Context Variables"><code>contextvars</code></a> module.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added the <code>name</code> parameter.</p> </div> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>The <em>loop</em> parameter.</p> </div> <dl class="method"> <dt id="asyncio.Task.cancel">
+<code>cancel(msg=None)</code> </dt> <dd>
+<p>Request the Task to be cancelled.</p> <p>This arranges for a <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception to be thrown into the wrapped coroutine on the next cycle of the event loop.</p> <p>The coroutine then has a chance to clean up or even deny the request by suppressing the exception with a <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#try"><code>try</code></a> … … <code>except CancelledError</code> … <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#finally"><code>finally</code></a> block. Therefore, unlike <a class="reference internal" href="asyncio-future#asyncio.Future.cancel" title="asyncio.Future.cancel"><code>Future.cancel()</code></a>, <a class="reference internal" href="#asyncio.Task.cancel" title="asyncio.Task.cancel"><code>Task.cancel()</code></a> does not guarantee that the Task will be cancelled, although suppressing cancellation completely is not common and is actively discouraged.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.9: </span>Added the <code>msg</code> parameter.</p> </div> <p id="asyncio-example-task-cancel">The following example illustrates how coroutines can intercept the cancellation request:</p> <pre data-language="python">async def cancel_me():
+    print('cancel_me(): before sleep')
+
+    try:
+        # Wait for 1 hour
+        await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        print('cancel_me(): cancel sleep')
+        raise
+    finally:
+        print('cancel_me(): after sleep')
+
+async def main():
+    # Create a "cancel_me" Task
+    task = asyncio.create_task(cancel_me())
+
+    # Wait for 1 second
+    await asyncio.sleep(1)
+
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        print("main(): cancel_me is cancelled now")
+
+asyncio.run(main())
+
+# Expected output:
+#
+#     cancel_me(): before sleep
+#     cancel_me(): cancel sleep
+#     cancel_me(): after sleep
+#     main(): cancel_me is cancelled now
+</pre> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.cancelled">
+<code>cancelled()</code> </dt> <dd>
+<p>Return <code>True</code> if the Task is <em>cancelled</em>.</p> <p>The Task is <em>cancelled</em> when the cancellation was requested with <a class="reference internal" href="#asyncio.Task.cancel" title="asyncio.Task.cancel"><code>cancel()</code></a> and the wrapped coroutine propagated the <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception thrown into it.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.done">
+<code>done()</code> </dt> <dd>
+<p>Return <code>True</code> if the Task is <em>done</em>.</p> <p>A Task is <em>done</em> when the wrapped coroutine either returned a value, raised an exception, or the Task was cancelled.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.result">
+<code>result()</code> </dt> <dd>
+<p>Return the result of the Task.</p> <p>If the Task is <em>done</em>, the result of the wrapped coroutine is returned (or if the coroutine raised an exception, that exception is re-raised.)</p> <p>If the Task has been <em>cancelled</em>, this method raises a <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception.</p> <p>If the Task’s result isn’t yet available, this method raises a <a class="reference internal" href="asyncio-exceptions#asyncio.InvalidStateError" title="asyncio.InvalidStateError"><code>InvalidStateError</code></a> exception.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.exception">
+<code>exception()</code> </dt> <dd>
+<p>Return the exception of the Task.</p> <p>If the wrapped coroutine raised an exception that exception is returned. If the wrapped coroutine returned normally this method returns <code>None</code>.</p> <p>If the Task has been <em>cancelled</em>, this method raises a <a class="reference internal" href="asyncio-exceptions#asyncio.CancelledError" title="asyncio.CancelledError"><code>CancelledError</code></a> exception.</p> <p>If the Task isn’t <em>done</em> yet, this method raises an <a class="reference internal" href="asyncio-exceptions#asyncio.InvalidStateError" title="asyncio.InvalidStateError"><code>InvalidStateError</code></a> exception.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.add_done_callback">
+<code>add_done_callback(callback, *, context=None)</code> </dt> <dd>
+<p>Add a callback to be run when the Task is <em>done</em>.</p> <p>This method should only be used in low-level callback-based code.</p> <p>See the documentation of <a class="reference internal" href="asyncio-future#asyncio.Future.add_done_callback" title="asyncio.Future.add_done_callback"><code>Future.add_done_callback()</code></a> for more details.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.remove_done_callback">
+<code>remove_done_callback(callback)</code> </dt> <dd>
+<p>Remove <em>callback</em> from the callbacks list.</p> <p>This method should only be used in low-level callback-based code.</p> <p>See the documentation of <a class="reference internal" href="asyncio-future#asyncio.Future.remove_done_callback" title="asyncio.Future.remove_done_callback"><code>Future.remove_done_callback()</code></a> for more details.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.get_stack">
+<code>get_stack(*, limit=None)</code> </dt> <dd>
+<p>Return the list of stack frames for this Task.</p> <p>If the wrapped coroutine is not done, this returns the stack where it is suspended. If the coroutine has completed successfully or was cancelled, this returns an empty list. If the coroutine was terminated by an exception, this returns the list of traceback frames.</p> <p>The frames are always ordered from oldest to newest.</p> <p>Only one stack frame is returned for a suspended coroutine.</p> <p>The optional <em>limit</em> argument sets the maximum number of frames to return; by default all available frames are returned. The ordering of the returned list differs depending on whether a stack or a traceback is returned: the newest frames of a stack are returned, but the oldest frames of a traceback are returned. (This matches the behavior of the traceback module.)</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.print_stack">
+<code>print_stack(*, limit=None, file=None)</code> </dt> <dd>
+<p>Print the stack or traceback for this Task.</p> <p>This produces output similar to that of the traceback module for the frames retrieved by <a class="reference internal" href="#asyncio.Task.get_stack" title="asyncio.Task.get_stack"><code>get_stack()</code></a>.</p> <p>The <em>limit</em> argument is passed to <a class="reference internal" href="#asyncio.Task.get_stack" title="asyncio.Task.get_stack"><code>get_stack()</code></a> directly.</p> <p>The <em>file</em> argument is an I/O stream to which the output is written; by default output is written to <a class="reference internal" href="sys#sys.stderr" title="sys.stderr"><code>sys.stderr</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.get_coro">
+<code>get_coro()</code> </dt> <dd>
+<p>Return the coroutine object wrapped by the <a class="reference internal" href="#asyncio.Task" title="asyncio.Task"><code>Task</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.get_name">
+<code>get_name()</code> </dt> <dd>
+<p>Return the name of the Task.</p> <p>If no name has been explicitly assigned to the Task, the default asyncio Task implementation generates a default name during instantiation.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="asyncio.Task.set_name">
+<code>set_name(value)</code> </dt> <dd>
+<p>Set the name of the Task.</p> <p>The <em>value</em> argument can be any object, which is then converted to a string.</p> <p>In the default Task implementation, the name will be visible in the <a class="reference internal" href="functions#repr" title="repr"><code>repr()</code></a> output of a task object.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> </dd>
+</dl>   <h2 id="asyncio-generator-based-coro">Generator-based Coroutines</h2> <div class="admonition note" id="generator-based-coroutines"> <p class="admonition-title">Note</p> <p>Support for generator-based coroutines is <strong>deprecated</strong> and is scheduled for removal in Python 3.10.</p> </div> <p>Generator-based coroutines predate async/await syntax. They are Python generators that use <code>yield from</code> expressions to await on Futures and other coroutines.</p> <p>Generator-based coroutines should be decorated with <a class="reference internal" href="#asyncio.coroutine" title="asyncio.coroutine"><code>@asyncio.coroutine</code></a>, although this is not enforced.</p> <dl class="function"> <dt id="asyncio.coroutine">
+<code>@asyncio.coroutine</code> </dt> <dd>
+<p>Decorator to mark generator-based coroutines.</p> <p>This decorator enables legacy generator-based coroutines to be compatible with async/await code:</p> <pre data-language="python">@asyncio.coroutine
+def old_style_coroutine():
+    yield from asyncio.sleep(1)
+
+async def main():
+    await old_style_coroutine()
+</pre> <p>This decorator should not be used for <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#async-def"><code>async def</code></a> coroutines.</p> <div class="deprecated-removed"> <p><span class="versionmodified">Deprecated since version 3.8, will be removed in version 3.10: </span>Use <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#async-def"><code>async def</code></a> instead.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="asyncio.iscoroutine">
+<code>asyncio.iscoroutine(obj)</code> </dt> <dd>
+<p>Return <code>True</code> if <em>obj</em> is a <a class="reference internal" href="#coroutine"><span class="std std-ref">coroutine object</span></a>.</p> <p>This method is different from <a class="reference internal" href="inspect#inspect.iscoroutine" title="inspect.iscoroutine"><code>inspect.iscoroutine()</code></a> because it returns <code>True</code> for generator-based coroutines.</p> </dd>
+</dl> <dl class="function"> <dt id="asyncio.iscoroutinefunction">
+<code>asyncio.iscoroutinefunction(func)</code> </dt> <dd>
+<p>Return <code>True</code> if <em>func</em> is a <a class="reference internal" href="#coroutine"><span class="std std-ref">coroutine function</span></a>.</p> <p>This method is different from <a class="reference internal" href="inspect#inspect.iscoroutinefunction" title="inspect.iscoroutinefunction"><code>inspect.iscoroutinefunction()</code></a> because it returns <code>True</code> for generator-based coroutine functions decorated with <a class="reference internal" href="#asyncio.coroutine" title="asyncio.coroutine"><code>@coroutine</code></a>.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/asyncio-task.html" class="_attribution-link">https://docs.python.org/3.9/library/asyncio-task.html</a>
+  </p>
+</div>

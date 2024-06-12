@@ -1,0 +1,95 @@
+<h1 class="devsite-page-title">tf.autodiff.ForwardAccumulator</h1>       <p>Computes Jacobian-vector products ("JVP"s) using forward-mode autodiff.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.autodiff.ForwardAccumulator(
+    primals, tangents
+)
+</pre>  <p>Compare to <a href="../gradienttape"><code translate="no" dir="ltr">tf.GradientTape</code></a> which computes vector-Jacobian products ("VJP"s) using reverse-mode autodiff (backprop). Reverse mode is more attractive when computing gradients of a scalar-valued function with respect to many inputs (e.g. a neural network with many parameters and a scalar loss). Forward mode works best on functions with many outputs and few inputs. Since it does not hold on to intermediate activations, it is much more memory efficient than backprop where it is applicable.</p> <p>Consider a simple linear regression:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+x = tf.constant([[2.0, 3.0], [1.0, 4.0]])
+dense = tf.keras.layers.Dense(1)
+dense.build([None, 2])
+with tf.autodiff.ForwardAccumulator(
+   primals=dense.kernel,
+   tangents=tf.constant([[1.], [0.]])) as acc:
+  loss = tf.reduce_sum((dense(x) - tf.constant([1., -1.])) ** 2.)
+acc.jvp(loss)
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=...&gt;
+</pre> <p>The example has two variables containing parameters, <code translate="no" dir="ltr">dense.kernel</code> (2 parameters) and <code translate="no" dir="ltr">dense.bias</code> (1 parameter). Considering the training data <code translate="no" dir="ltr">x</code> as a constant, this means the Jacobian matrix for the function mapping from parameters to loss has one row and three columns.</p> <p>With forwardprop, we specify a length-three vector in advance which multiplies the Jacobian. The <code translate="no" dir="ltr">primals</code> constructor argument is the parameter (a <a href="../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> or <a href="../variable"><code translate="no" dir="ltr">tf.Variable</code></a>) we're specifying a vector for, and the <code translate="no" dir="ltr">tangents</code> argument is the "vector" in Jacobian-vector product. If our goal is to compute the entire Jacobian matrix, forwardprop computes one column at a time while backprop computes one row at a time. Since the Jacobian in the linear regression example has only one row, backprop requires fewer invocations:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+x = tf.constant([[2.0, 3.0], [1.0, 4.0]])
+dense = tf.keras.layers.Dense(1)
+dense.build([None, 2])
+loss_fn = lambda: tf.reduce_sum((dense(x) - tf.constant([1., -1.])) ** 2.)
+kernel_fprop = []
+with tf.autodiff.ForwardAccumulator(
+    dense.kernel, tf.constant([[1.], [0.]])) as acc:
+  kernel_fprop.append(acc.jvp(loss_fn()))
+with tf.autodiff.ForwardAccumulator(
+    dense.kernel, tf.constant([[0.], [1.]])) as acc:
+  kernel_fprop.append(acc.jvp(loss_fn()))
+with tf.autodiff.ForwardAccumulator(dense.bias, tf.constant([1.])) as acc:
+  bias_fprop = acc.jvp(loss_fn())
+with tf.GradientTape() as tape:
+  loss = loss_fn()
+kernel_grad, bias_grad = tape.gradient(loss, (dense.kernel, dense.bias))
+np.testing.assert_allclose(
+    kernel_grad, tf.stack(kernel_fprop)[:, tf.newaxis])
+np.testing.assert_allclose(bias_grad, bias_fprop[tf.newaxis])
+</pre> <p>Implicit in the <code translate="no" dir="ltr">tape.gradient</code> call is a length-one vector which left-multiplies the Jacobian, a vector-Jacobian product.</p> <p><code translate="no" dir="ltr">ForwardAccumulator</code> maintains JVPs corresponding primal tensors it is watching, derived from the original <code translate="no" dir="ltr">primals</code> specified in the constructor. As soon as a primal tensor is deleted, <code translate="no" dir="ltr">ForwardAccumulator</code> deletes the corresponding JVP.</p> <p><code translate="no" dir="ltr">acc.jvp(x)</code> retrieves <code translate="no" dir="ltr">acc</code>'s JVP corresponding to the primal tensor <code translate="no" dir="ltr">x</code>. It does not perform any computation. <code translate="no" dir="ltr">acc.jvp</code> calls can be repeated as long as <code translate="no" dir="ltr">acc</code> is accessible, whether the context manager is active or not. New JVPs are only computed while the context manager is active.</p> <p>Note that <code translate="no" dir="ltr">ForwardAccumulator</code>s are always applied in the order their context managers were entered, so inner accumulators will not see JVP computation from outer accumulators. Take higher-order JVPs from outer accumulators:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+primal = tf.constant(1.1)
+with tf.autodiff.ForwardAccumulator(primal, tf.constant(1.)) as outer:
+  with tf.autodiff.ForwardAccumulator(primal, tf.constant(1.)) as inner:
+    primal_out = primal ** tf.constant(3.5)
+inner_jvp = inner.jvp(primal_out)
+inner_jvp  # 3.5 * 1.1 ** 2.5
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=4.4417057&gt;
+outer.jvp(inner_jvp)  # 3.5 * 2.5 * 1.1 ** 1.5
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=10.094786&gt;
+</pre> <p>Reversing the collection in the last line to instead retrieve <code translate="no" dir="ltr">inner.jvp(outer.jvp(primal_out))</code> will not work.</p> <p>Strict nesting also applies to combinations of <code translate="no" dir="ltr">ForwardAccumulator</code> and <a href="../gradienttape"><code translate="no" dir="ltr">tf.GradientTape</code></a>. More deeply nested <code translate="no" dir="ltr">GradientTape</code> objects will ignore the products of outer <code translate="no" dir="ltr">ForwardAccumulator</code> objects. This allows (for example) memory-efficient forward-over-backward computation of Hessian-vector products, where the inner <code translate="no" dir="ltr">GradientTape</code> would otherwise hold on to all intermediate JVPs:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+v = tf.Variable([1., 2.])
+with tf.autodiff.ForwardAccumulator(
+    v,
+    # The "vector" in Hessian-vector product.
+    tf.constant([1., 0.])) as acc:
+  with tf.GradientTape() as tape:
+    y = tf.reduce_sum(v ** 3.)
+  backward = tape.gradient(y, v)
+backward  # gradient from backprop
+&lt;tf.Tensor: shape=(2,), dtype=float32, numpy=array([ 3., 12.], dtype=float32)&gt;
+acc.jvp(backward)  # forward-over-backward Hessian-vector product
+&lt;tf.Tensor: shape=(2,), dtype=float32, numpy=array([6., 0.], dtype=float32)&gt;
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">primals</code> </td> <td> A tensor or nested structure of tensors to watch. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">tangents</code> </td> <td> A tensor or nested structure of tensors, with the same nesting structure as <code translate="no" dir="ltr">primals</code>, with each element being a vector with the same size as the corresponding primal element. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If the same tensor or variable is specified multiple times in <code translate="no" dir="ltr">primals</code>. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="jvp" data-text="jvp"><code translate="no" dir="ltr">jvp</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/eager/forwardprop.py#L416-L454">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+jvp(
+    primals, unconnected_gradients=tf.UnconnectedGradients.NONE
+)
+</pre> <p>Fetches the Jacobian-vector product computed for <code translate="no" dir="ltr">primals</code>.</p> <p>Note that this method performs no computation, and simply looks up a JVP that was already computed (unlike backprop using a <a href="../gradienttape"><code translate="no" dir="ltr">tf.GradientTape</code></a>, where the computation happens on the call to <code translate="no" dir="ltr">tape.gradient</code>).</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">primals</code> </td> <td> A watched Tensor or structure of Tensors to fetch the JVPs for. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">unconnected_gradients</code> </td> <td> A value which can either hold 'none' or 'zero' and alters the value which will be returned if no JVP was computed for <code translate="no" dir="ltr">primals</code>. The possible values and effects are detailed in 'tf.UnconnectedGradients' and it defaults to 'none'. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> Tensors with the same shapes and dtypes as <code translate="no" dir="ltr">primals</code>, or None if no JVP is available. </td> </tr> 
+</table> <h3 id="__enter__" data-text="__enter__"><code translate="no" dir="ltr">__enter__</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/eager/forwardprop.py#L365-L367">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+__enter__()
+</pre> <h3 id="__exit__" data-text="__exit__"><code translate="no" dir="ltr">__exit__</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/eager/forwardprop.py#L369-L371">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+__exit__(
+    typ, value, traceback
+)
+</pre>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/autodiff/ForwardAccumulator" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/autodiff/ForwardAccumulator</a>
+  </p>
+</div>

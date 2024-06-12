@@ -1,0 +1,76 @@
+<h1 id="graphlib-functionality-to-operate-with-graph-like-structures">graphlib — Functionality to operate with graph-like structures</h1> <p id="module-graphlib"><strong>Source code:</strong> <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/graphlib.py">Lib/graphlib.py</a></p>  <dl class="class"> <dt id="graphlib.TopologicalSorter">
+<code>class graphlib.TopologicalSorter(graph=None)</code> </dt> <dd>
+<p>Provides functionality to topologically sort a graph of hashable nodes.</p> <p>A topological order is a linear ordering of the vertices in a graph such that for every directed edge u -&gt; v from vertex u to vertex v, vertex u comes before vertex v in the ordering. For instance, the vertices of the graph may represent tasks to be performed, and the edges may represent constraints that one task must be performed before another; in this example, a topological ordering is just a valid sequence for the tasks. A complete topological ordering is possible if and only if the graph has no directed cycles, that is, if it is a directed acyclic graph.</p> <p>If the optional <em>graph</em> argument is provided it must be a dictionary representing a directed acyclic graph where the keys are nodes and the values are iterables of all predecessors of that node in the graph (the nodes that have edges that point to the value in the key). Additional nodes can be added to the graph using the <a class="reference internal" href="#graphlib.TopologicalSorter.add" title="graphlib.TopologicalSorter.add"><code>add()</code></a> method.</p> <p>In the general case, the steps required to perform the sorting of a given graph are as follows:</p>  <ul class="simple"> <li>Create an instance of the <a class="reference internal" href="#graphlib.TopologicalSorter" title="graphlib.TopologicalSorter"><code>TopologicalSorter</code></a> with an optional initial graph.</li> <li>Add additional nodes to the graph.</li> <li>Call <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>prepare()</code></a> on the graph.</li> <li>While <a class="reference internal" href="#graphlib.TopologicalSorter.is_active" title="graphlib.TopologicalSorter.is_active"><code>is_active()</code></a> is <code>True</code>, iterate over the nodes returned by <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>get_ready()</code></a> and process them. Call <a class="reference internal" href="#graphlib.TopologicalSorter.done" title="graphlib.TopologicalSorter.done"><code>done()</code></a> on each node as it finishes processing.</li> </ul>  <p>In case just an immediate sorting of the nodes in the graph is required and no parallelism is involved, the convenience method <a class="reference internal" href="#graphlib.TopologicalSorter.static_order" title="graphlib.TopologicalSorter.static_order"><code>TopologicalSorter.static_order()</code></a> can be used directly:</p> <pre data-language="pycon3">&gt;&gt;&gt; graph = {"D": {"B", "C"}, "C": {"A"}, "B": {"A"}}
+&gt;&gt;&gt; ts = TopologicalSorter(graph)
+&gt;&gt;&gt; tuple(ts.static_order())
+('A', 'C', 'B', 'D')
+</pre> <p>The class is designed to easily support parallel processing of the nodes as they become ready. For instance:</p> <pre data-language="python">topological_sorter = TopologicalSorter()
+
+# Add nodes to 'topological_sorter'...
+
+topological_sorter.prepare()
+while topological_sorter.is_active():
+    for node in topological_sorter.get_ready():
+        # Worker threads or processes take nodes to work on off the
+        # 'task_queue' queue.
+        task_queue.put(node)
+
+    # When the work for a node is done, workers put the node in
+    # 'finalized_tasks_queue' so we can get more nodes to work on.
+    # The definition of 'is_active()' guarantees that, at this point, at
+    # least one node has been placed on 'task_queue' that hasn't yet
+    # been passed to 'done()', so this blocking 'get()' must (eventually)
+    # succeed.  After calling 'done()', we loop back to call 'get_ready()'
+    # again, so put newly freed nodes on 'task_queue' as soon as
+    # logically possible.
+    node = finalized_tasks_queue.get()
+    topological_sorter.done(node)
+</pre> <dl class="method"> <dt id="graphlib.TopologicalSorter.add">
+<code>add(node, *predecessors)</code> </dt> <dd>
+<p>Add a new node and its predecessors to the graph. Both the <em>node</em> and all elements in <em>predecessors</em> must be hashable.</p> <p>If called multiple times with the same node argument, the set of dependencies will be the union of all dependencies passed in.</p> <p>It is possible to add a node with no dependencies (<em>predecessors</em> is not provided) or to provide a dependency twice. If a node that has not been provided before is included among <em>predecessors</em> it will be automatically added to the graph with no predecessors of its own.</p> <p>Raises <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> if called after <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>prepare()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="graphlib.TopologicalSorter.prepare">
+<code>prepare()</code> </dt> <dd>
+<p>Mark the graph as finished and check for cycles in the graph. If any cycle is detected, <a class="reference internal" href="#graphlib.CycleError" title="graphlib.CycleError"><code>CycleError</code></a> will be raised, but <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>get_ready()</code></a> can still be used to obtain as many nodes as possible until cycles block more progress. After a call to this function, the graph cannot be modified, and therefore no more nodes can be added using <a class="reference internal" href="#graphlib.TopologicalSorter.add" title="graphlib.TopologicalSorter.add"><code>add()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="graphlib.TopologicalSorter.is_active">
+<code>is_active()</code> </dt> <dd>
+<p>Returns <code>True</code> if more progress can be made and <code>False</code> otherwise. Progress can be made if cycles do not block the resolution and either there are still nodes ready that haven’t yet been returned by <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>TopologicalSorter.get_ready()</code></a> or the number of nodes marked <a class="reference internal" href="#graphlib.TopologicalSorter.done" title="graphlib.TopologicalSorter.done"><code>TopologicalSorter.done()</code></a> is less than the number that have been returned by <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>TopologicalSorter.get_ready()</code></a>.</p> <p>The <code>__bool__()</code> method of this class defers to this function, so instead of:</p> <pre data-language="python">if ts.is_active():
+    ...
+</pre> <p>it is possible to simply do:</p> <pre data-language="python">if ts:
+    ...
+</pre> <p>Raises <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> if called without calling <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>prepare()</code></a> previously.</p> </dd>
+</dl> <dl class="method"> <dt id="graphlib.TopologicalSorter.done">
+<code>done(*nodes)</code> </dt> <dd>
+<p>Marks a set of nodes returned by <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>TopologicalSorter.get_ready()</code></a> as processed, unblocking any successor of each node in <em>nodes</em> for being returned in the future by a call to <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>TopologicalSorter.get_ready()</code></a>.</p> <p>Raises <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> if any node in <em>nodes</em> has already been marked as processed by a previous call to this method or if a node was not added to the graph by using <a class="reference internal" href="#graphlib.TopologicalSorter.add" title="graphlib.TopologicalSorter.add"><code>TopologicalSorter.add()</code></a>, if called without calling <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>prepare()</code></a> or if node has not yet been returned by <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>get_ready()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="graphlib.TopologicalSorter.get_ready">
+<code>get_ready()</code> </dt> <dd>
+<p>Returns a <code>tuple</code> with all the nodes that are ready. Initially it returns all nodes with no predecessors, and once those are marked as processed by calling <a class="reference internal" href="#graphlib.TopologicalSorter.done" title="graphlib.TopologicalSorter.done"><code>TopologicalSorter.done()</code></a>, further calls will return all new nodes that have all their predecessors already processed. Once no more progress can be made, empty tuples are returned.</p> <p>Raises <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> if called without calling <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>prepare()</code></a> previously.</p> </dd>
+</dl> <dl class="method"> <dt id="graphlib.TopologicalSorter.static_order">
+<code>static_order()</code> </dt> <dd>
+<p>Returns an iterable of nodes in a topological order. Using this method does not require to call <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>TopologicalSorter.prepare()</code></a> or <a class="reference internal" href="#graphlib.TopologicalSorter.done" title="graphlib.TopologicalSorter.done"><code>TopologicalSorter.done()</code></a>. This method is equivalent to:</p> <pre data-language="python">def static_order(self):
+    self.prepare()
+    while self.is_active():
+        node_group = self.get_ready()
+        yield from node_group
+        self.done(*node_group)
+</pre> <p>The particular order that is returned may depend on the specific order in which the items were inserted in the graph. For example:</p> <pre data-language="pycon3">&gt;&gt;&gt; ts = TopologicalSorter()
+&gt;&gt;&gt; ts.add(3, 2, 1)
+&gt;&gt;&gt; ts.add(1, 0)
+&gt;&gt;&gt; print([*ts.static_order()])
+[2, 0, 1, 3]
+
+&gt;&gt;&gt; ts2 = TopologicalSorter()
+&gt;&gt;&gt; ts2.add(1, 0)
+&gt;&gt;&gt; ts2.add(3, 2, 1)
+&gt;&gt;&gt; print([*ts2.static_order()])
+[0, 2, 1, 3]
+</pre> <p>This is due to the fact that “0” and “2” are in the same level in the graph (they would have been returned in the same call to <a class="reference internal" href="#graphlib.TopologicalSorter.get_ready" title="graphlib.TopologicalSorter.get_ready"><code>get_ready()</code></a>) and the order between them is determined by the order of insertion.</p> <p>If any cycle is detected, <a class="reference internal" href="#graphlib.CycleError" title="graphlib.CycleError"><code>CycleError</code></a> will be raised.</p> </dd>
+</dl> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.9.</span></p> </div> </dd>
+</dl>  <h2 id="exceptions">Exceptions</h2> <p>The <a class="reference internal" href="#module-graphlib" title="graphlib: Functionality to operate with graph-like structures"><code>graphlib</code></a> module defines the following exception classes:</p> <dl class="exception"> <dt id="graphlib.CycleError">
+<code>exception graphlib.CycleError</code> </dt> <dd>
+<p>Subclass of <a class="reference internal" href="exceptions#ValueError" title="ValueError"><code>ValueError</code></a> raised by <a class="reference internal" href="#graphlib.TopologicalSorter.prepare" title="graphlib.TopologicalSorter.prepare"><code>TopologicalSorter.prepare()</code></a> if cycles exist in the working graph. If multiple cycles exist, only one undefined choice among them will be reported and included in the exception.</p> <p>The detected cycle can be accessed via the second element in the <code>args</code> attribute of the exception instance and consists in a list of nodes, such that each node is, in the graph, an immediate predecessor of the next node in the list. In the reported list, the first and the last node will be the same, to make it clear that it is cyclic.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/graphlib.html" class="_attribution-link">https://docs.python.org/3.9/library/graphlib.html</a>
+  </p>
+</div>

@@ -1,0 +1,108 @@
+<h1 id="profiling-to-understand-torch-compile-performance">Profiling to understand torch.compile performance</h1>  <h2 id="what-to-use-torch-profiler-for">What to use torch.profiler for:</h2> <p>torch.profiler is helpful for understanding the performance of your program at a kernel-level granularity - for example, it can show graph breaks and GPU utilization at the level of the program. The data provided by the profiler can often help users understand where to investigate further to understand model performance.</p> <p>To understand kernel-level performance, other toosl exist. NVIDIA’s ncu tool can be used, or <a class="reference internal" href="torch.compiler_inductor_profiling#torchinductor-gpu-profiling"><span class="std std-ref">inductor’s profiling tools</span></a>.</p> <p>See also the <a class="reference external" href="https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html">general pytorch profiler guide</a>.</p>   <h2 id="basics-of-using-torch-profiler-and-viewing-traces">Basics of using torch.profiler and viewing traces</h2> <p><strong>Example program</strong>: We’ll use this example of profiling resnet18. Notice the following parts of this example program:</p> <ul class="simple"> <li>Include a warm-up run to wait for compilation to complete (this will warm up systems like the CUDA caching allocator)</li> <li>Use <code>torch.profiler.profile()</code> context for profiling the section we are interested in</li> <li>Use <code>prof.export_chrome_trace("trace.json")</code> to export the profiling artifact.</li> </ul> <pre data-language="python">import torch
+from torchvision.models import resnet18
+
+model = resnet18().cuda()
+inputs = [torch.randn((5, 3, 224, 224), device='cuda') for _ in range(10)]
+
+model_c = torch.compile(model)
+
+def fwd_bwd(inp):
+    out = model_c(inp)
+    out.sum().backward()
+
+# warm up
+fwd_bwd(inputs[0])
+
+with torch.profiler.profile() as prof:
+    for i in range(1, 4):
+        fwd_bwd(inputs[i])
+        prof.step()
+
+prof.export_chrome_trace("trace.json")
+</pre> <p><strong>Viewing chrome traces</strong>: In the Chrome browser, open chrome://tracing and load the json file. Use the “w” and “s” keys to zoom in and out, and use “a” and “d” to scroll left and right. “?” will show a “help” screen with a list of shortcuts.</p> <div class="figure align-default"> <img alt="Example of a basic chrome trace, visualized in the chrome://tracing viewer" src="https://pytorch.org/docs/2.1/_images/basic_chrome_trace.png"> </div> <p>Here, we observe: * CompiledFunction and CompiledFunctionBackward events, which correspond to the dynamo-compiled regions. * CPU events at the top, and GPU events at the bottom.</p> <p><strong>Flows between CPU and GPU events</strong></p> <p>Every kernel on the GPU occurs after being launched by code running on the CPU. The profiler can draw connections (i.e. “flows”) between the GPU and CPU events to show which CPU event launched a GPU kernel. This is particularly helpful because, with a few exceptions, GPU kernels are launched asynchronously.</p> <p>To view a flow connection, click on a GPU kernel and click “ac2g”:</p> <div class="figure align-default"> <img alt="Visualization in the chrome://trace viewer, showing an async flow between a kernel and its launching location." src="https://pytorch.org/docs/2.1/_images/ac2g.png"> </div> <p>Alternatively, turn on <em>all</em> flows with the “Flow events” dropdown at the top.</p>   <h2 id="working-around-cuda-graph-profiling-issues">Working around CUDA Graph profiling issues</h2> <p>When CUDA graphs are enabled, some cuda configurations (driver version under 525.85.12 or CUDA &lt; 12) can encounter issues between the profiling tools and CUDA graphs. To fix these issues, add an empty profiling context at the top of your program:</p> <pre data-language="python">import torch
+
+torch.profiler._utils._init_for_cuda_graphs()
+
+# ... rest of program
+</pre>   <h2 id="understanding-compilation-time">Understanding compilation time</h2> <p>To understand why compilation is taking a long time, you can profile the first invocation of a torch.compile-ed program. Keep in mind that profile traces of compilations can be distorted more than typical profiling, because compilation workloads can be quite different from typical PyTorch workloads. In some cases, trace files may also be quite large. Traces &gt; 1GB can be difficult to open with the chrome tracing tool.</p> <p>Note: roughly the same information can also be obtained in non-graphical format with <code>torch._dynamo.utils.compile_times()</code>. This utility won’t show when the compilation steps occur, but it will show the amount of time spent on each step - and times will not be affected by any profiling overhead.</p> <p>See an example below:</p> <pre data-language="python">import torch
+from torchvision.models import resnet18
+
+model = resnet18().cuda()
+inputs = [torch.randn((5, 3, 224, 224), device='cuda') for _ in range(10)]
+
+model_c = torch.compile(model)
+
+def fwd_bwd(inp):
+    out = model_c(inp)
+    out.sum().backward()
+
+def warmup_compile():
+    def fn(x):
+        return x.sin().relu()
+
+    x = torch.rand((2, 2), device='cuda', requires_grad=True)
+    fn_c = torch.compile(fn)
+    out = fn_c(x)
+    out.sum().backward()
+
+with torch.profiler.profile() as prof:
+    with torch.profiler.record_function("warmup compile"):
+        warmup_compile()
+
+    with torch.profiler.record_function("resnet18 compile"):
+        fwd_bwd(inputs[0])
+
+prof.export_chrome_trace("trace_compile.json")
+</pre> <div class="figure align-default"> <img alt="A visualization in the chrome://trace viewer, showing dynamo and inductor compilation steps" src="https://pytorch.org/docs/2.1/_images/compilation_profiling.png"> </div> <p>Note a few things:</p> <ul class="simple"> <li>The first invocation should occur <em>during</em> profiling in order to capture compilation</li> <li>Add a warm-up compilation in order to initialize any systems that need to be lazily initialized.</li> </ul>   <h2 id="finding-graph-breaks">Finding graph breaks</h2> <p>Although there are logging tools for identifying graph breaks, the profiler provides a quick visual method of identifying graph breaks.</p> <p>When gradients are required for any inputs, graph breaks are easy to identify: each graph break will interrupt a CompiledFunction block, splitting it in two.</p> <p>See the synthetic example below for a demonstration:</p> <pre data-language="python">import torch
+import torch._dynamo
+
+class ModelWithBreaks(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        def create_sequential():
+            return torch.nn.Sequential(
+                torch.nn.Linear(128, 128),
+                torch.nn.ReLU(),
+                torch.nn.Linear(128, 128),
+                torch.nn.ReLU(),
+            )
+        self.mod1 = create_sequential()
+        self.mod2 = create_sequential()
+        self.mod3 = create_sequential()
+        self.mod4 = create_sequential()
+
+    def forward(self, inp):
+        mod1 = self.mod1(inp)
+        torch._dynamo.graph_break()
+        mod2 = self.mod2(mod1)
+        torch._dynamo.graph_break()
+        mod3 = self.mod3(mod2)
+        torch._dynamo.graph_break()
+        mod4 = self.mod4(mod3)
+        return mod4
+
+
+model = ModelWithBreaks().cuda()
+inputs = [torch.randn((128, 128), device='cuda') for _ in range(10)]
+
+model_c = torch.compile(model)
+
+def fwd_bwd(inp):
+    out = model_c(inp)
+    out.sum().backward()
+
+# warm up
+fwd_bwd(inputs[0])
+
+with torch.profiler.profile() as prof:
+    for i in range(1, 4):
+        fwd_bwd(inputs[i])
+        prof.step()
+
+prof.export_chrome_trace("trace_break.json")
+</pre> <div class="figure align-default"> <img alt="Visualization in the chrome://trace viewer, showing multiple CompiledFunction events - indicating graph breaks." src="https://pytorch.org/docs/2.1/_images/graph_breaks.png"> </div>   <h2 id="launch-overhead">Launch overhead</h2> <p>One common issue is bad GPU utilization. A quick way to identify this is if there are large gaps between kernels on the GPU:</p> <div class="figure align-default"> <img alt="Visualization in the chrome://trace viewer, showing large gaps between GPU kernels. This indicates that the model is CPU bound, likely due to overhead during kernel launches." src="https://pytorch.org/docs/2.1/_images/cpu_bound.png"> </div> <p>This is often the result of CPU overhead, e.g. if the amount of time spent on the CPU between kernel launches is larger than the amount of time spent by the GPU to process the kernels. The issue is more common for small batch sizes.</p> <p>When using inductor, enabling CUDA graphs can often help improve performance when launch overhead is a concern.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch.compiler_profiling_torch_compile.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch.compiler_profiling_torch_compile.html</a>
+  </p>
+</div>

@@ -1,0 +1,296 @@
+<h1 id="postgresql-specific-model-fields">PostgreSQL specific model fields</h1> <p id="s-postgresql-specific-model-fields">All of these fields are available from the <code>django.contrib.postgres.fields</code> module.</p>  <h2 id="indexing-these-fields">Indexing these fields</h2> <p id="s-indexing-these-fields"><a class="reference internal" href="../../models/indexes#django.db.models.Index" title="django.db.models.Index"><code>Index</code></a> and <a class="reference internal" href="../../models/fields#django.db.models.Field.db_index" title="django.db.models.Field.db_index"><code>Field.db_index</code></a> both create a B-tree index, which isn’t particularly helpful when querying complex data types. Indexes such as <a class="reference internal" href="indexes#django.contrib.postgres.indexes.GinIndex" title="django.contrib.postgres.indexes.GinIndex"><code>GinIndex</code></a> and <a class="reference internal" href="indexes#django.contrib.postgres.indexes.GistIndex" title="django.contrib.postgres.indexes.GistIndex"><code>GistIndex</code></a> are better suited, though the index choice is dependent on the queries that you’re using. Generally, GiST may be a good choice for the <a class="reference internal" href="#range-fields"><span class="std std-ref">range fields</span></a> and <a class="reference internal" href="#django.contrib.postgres.fields.HStoreField" title="django.contrib.postgres.fields.HStoreField"><code>HStoreField</code></a>, and GIN may be helpful for <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a>.</p>   <h2 id="arrayfield"><code>ArrayField</code></h2> <dl class="class" id="s-arrayfield"> <dt id="django.contrib.postgres.fields.ArrayField">
+<code>class ArrayField(base_field, size=None, **options)</code> </dt> <dd>
+<p>A field for storing lists of data. Most field types can be used, and you pass another field instance as the <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField.base_field" title="django.contrib.postgres.fields.ArrayField.base_field"><code>base_field</code></a>. You may also specify a <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField.size" title="django.contrib.postgres.fields.ArrayField.size"><code>size</code></a>. <code>ArrayField</code> can be nested to store multi-dimensional arrays.</p> <p>If you give the field a <a class="reference internal" href="../../models/fields#django.db.models.Field.default" title="django.db.models.Field.default"><code>default</code></a>, ensure it’s a callable such as <code>list</code> (for an empty default) or a callable that returns a list (such as a function). Incorrectly using <code>default=[]</code> creates a mutable default that is shared between all instances of <code>ArrayField</code>.</p> <dl class="attribute"> <dt id="django.contrib.postgres.fields.ArrayField.base_field">
+<code>base_field</code> </dt> <dd>
+<p>This is a required argument.</p> <p>Specifies the underlying data type and behavior for the array. It should be an instance of a subclass of <a class="reference internal" href="../../models/fields#django.db.models.Field" title="django.db.models.Field"><code>Field</code></a>. For example, it could be an <a class="reference internal" href="../../models/fields#django.db.models.IntegerField" title="django.db.models.IntegerField"><code>IntegerField</code></a> or a <a class="reference internal" href="../../models/fields#django.db.models.CharField" title="django.db.models.CharField"><code>CharField</code></a>. Most field types are permitted, with the exception of those handling relational data (<a class="reference internal" href="../../models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.OneToOneField" title="django.db.models.OneToOneField"><code>OneToOneField</code></a> and <a class="reference internal" href="../../models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a>).</p> <p>It is possible to nest array fields - you can specify an instance of <code>ArrayField</code> as the <code>base_field</code>. For example:</p> <pre data-language="python">from django.contrib.postgres.fields import ArrayField
+from django.db import models
+
+class ChessBoard(models.Model):
+    board = ArrayField(
+        ArrayField(
+            models.CharField(max_length=10, blank=True),
+            size=8,
+        ),
+        size=8,
+    )
+</pre> <p>Transformation of values between the database and the model, validation of data and configuration, and serialization are all delegated to the underlying base field.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.postgres.fields.ArrayField.size">
+<code>size</code> </dt> <dd>
+<p>This is an optional argument.</p> <p>If passed, the array will have a maximum size as specified. This will be passed to the database, although PostgreSQL at present does not enforce the restriction.</p> </dd>
+</dl> </dd>
+</dl> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>When nesting <code>ArrayField</code>, whether you use the <code>size</code> parameter or not, PostgreSQL requires that the arrays are rectangular:</p> <pre data-language="python">from django.contrib.postgres.fields import ArrayField
+from django.db import models
+
+class Board(models.Model):
+    pieces = ArrayField(ArrayField(models.IntegerField()))
+
+# Valid
+Board(pieces=[
+    [2, 3],
+    [2, 1],
+])
+
+# Not valid
+Board(pieces=[
+    [2, 3],
+    [2],
+])
+</pre> <p class="last">If irregular shapes are required, then the underlying field should be made nullable and the values padded with <code>None</code>.</p> </div>  <h3 id="querying-arrayfield">Querying <code>ArrayField</code>
+</h3> <p id="s-querying-arrayfield">There are a number of custom lookups and transforms for <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a>. We will use the following example model:</p> <pre data-language="python">from django.contrib.postgres.fields import ArrayField
+from django.db import models
+
+class Post(models.Model):
+    name = models.CharField(max_length=200)
+    tags = ArrayField(models.CharField(max_length=200), blank=True)
+
+    def __str__(self):
+        return self.name
+</pre>  <h4 id="std:fieldlookup-arrayfield.contains"><code>contains</code></h4> <p id="s-contains">The <a class="reference internal" href="../../models/querysets#std:fieldlookup-contains"><code>contains</code></a> lookup is overridden on <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a>. The returned objects will be those where the values passed are a subset of the data. It uses the SQL operator <code>@&gt;</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+&gt;&gt;&gt; Post.objects.create(name='Third post', tags=['tutorial', 'django'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__contains=['thoughts'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__contains=['django'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Third post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__contains=['django', 'thoughts'])
+&lt;QuerySet [&lt;Post: First post&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-arrayfield.contained_by"><code>contained_by</code></h4> <p id="s-contained-by">This is the inverse of the <a class="reference internal" href="#std:fieldlookup-arrayfield.contains"><code>contains</code></a> lookup - the objects returned will be those where the data is a subset of the values passed. It uses the SQL operator <code>&lt;@</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+&gt;&gt;&gt; Post.objects.create(name='Third post', tags=['tutorial', 'django'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__contained_by=['thoughts', 'django'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__contained_by=['thoughts', 'django', 'tutorial'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;, &lt;Post: Third post&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-arrayfield.overlap"><code>overlap</code></h4> <p id="s-overlap">Returns objects where the data shares any results with the values passed. Uses the SQL operator <code>&amp;&amp;</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+&gt;&gt;&gt; Post.objects.create(name='Third post', tags=['tutorial', 'django'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__overlap=['thoughts'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__overlap=['thoughts', 'tutorial'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;, &lt;Post: Third post&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-arrayfield.len"><code>len</code></h4> <p id="s-len">Returns the length of the array. The lookups available afterward are those available for <a class="reference internal" href="../../models/fields#django.db.models.IntegerField" title="django.db.models.IntegerField"><code>IntegerField</code></a>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__len=1)
+&lt;QuerySet [&lt;Post: Second post&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-arrayfield.index">Index transforms</h4> <p id="s-index-transforms">Index transforms index into the array. Any non-negative integer can be used. There are no errors if it exceeds the <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField.size" title="django.contrib.postgres.fields.ArrayField.size"><code>size</code></a> of the array. The lookups available after the transform are those from the <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField.base_field" title="django.contrib.postgres.fields.ArrayField.base_field"><code>base_field</code></a>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__0='thoughts')
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__1__iexact='Django')
+&lt;QuerySet [&lt;Post: First post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__276='javascript')
+&lt;QuerySet []&gt;
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">PostgreSQL uses 1-based indexing for array fields when writing raw SQL. However these indexes and those used in <a class="reference internal" href="#std:fieldlookup-arrayfield.slice"><code>slices</code></a> use 0-based indexing to be consistent with Python.</p> </div>   <h4 id="std:fieldlookup-arrayfield.slice">Slice transforms</h4> <p id="s-slice-transforms">Slice transforms take a slice of the array. Any two non-negative integers can be used, separated by a single underscore. The lookups available after the transform do not change. For example:</p> <pre data-language="python">&gt;&gt;&gt; Post.objects.create(name='First post', tags=['thoughts', 'django'])
+&gt;&gt;&gt; Post.objects.create(name='Second post', tags=['thoughts'])
+&gt;&gt;&gt; Post.objects.create(name='Third post', tags=['django', 'python', 'thoughts'])
+
+&gt;&gt;&gt; Post.objects.filter(tags__0_1=['thoughts'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+
+&gt;&gt;&gt; Post.objects.filter(tags__0_2__contains=['thoughts'])
+&lt;QuerySet [&lt;Post: First post&gt;, &lt;Post: Second post&gt;]&gt;
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">PostgreSQL uses 1-based indexing for array fields when writing raw SQL. However these slices and those used in <a class="reference internal" href="#std:fieldlookup-arrayfield.index"><code>indexes</code></a> use 0-based indexing to be consistent with Python.</p> </div> <div class="admonition-multidimensional-arrays-with-indexes-and-slices admonition"> <p class="first admonition-title">Multidimensional arrays with indexes and slices</p> <p class="last">PostgreSQL has some rather esoteric behavior when using indexes and slices on multidimensional arrays. It will always work to use indexes to reach down to the final underlying data, but most other slices behave strangely at the database level and cannot be supported in a logical, consistent fashion by Django.</p> </div>     <h2 id="citext-fields">
+<code>CIText</code> fields</h2> <dl class="class" id="s-citext-fields"> <dt id="django.contrib.postgres.fields.CIText">
+<code>class CIText(**options)</code> </dt> <dd>
+<p>A mixin to create case-insensitive text fields backed by the <a class="reference external" href="https://www.postgresql.org/docs/current/citext.html">citext</a> type. Read about <a class="reference external" href="https://www.postgresql.org/docs/current/citext.html#id-1.11.7.17.7">the performance considerations</a> prior to using it.</p> <p>To use <code>citext</code>, use the <a class="reference internal" href="operations#django.contrib.postgres.operations.CITextExtension" title="django.contrib.postgres.operations.CITextExtension"><code>CITextExtension</code></a> operation to <a class="reference internal" href="operations#create-postgresql-extensions"><span class="std std-ref">set up the citext extension</span></a> in PostgreSQL before the first <code>CreateModel</code> migration operation.</p> <p>If you’re using an <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a> of <code>CIText</code> fields, you must add <code>'django.contrib.postgres'</code> in your <a class="reference internal" href="../../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>, otherwise field values will appear as strings like <code>'{thoughts,django}'</code>.</p> <p>Several fields that use the mixin are provided:</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.postgres.fields.CICharField">
+<code>class CICharField(**options)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.contrib.postgres.fields.CIEmailField">
+<code>class CIEmailField(**options)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.contrib.postgres.fields.CITextField">
+<code>class CITextField(**options)</code> </dt> <dd>
+<p>These fields subclass <a class="reference internal" href="../../models/fields#django.db.models.CharField" title="django.db.models.CharField"><code>CharField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.EmailField" title="django.db.models.EmailField"><code>EmailField</code></a>, and <a class="reference internal" href="../../models/fields#django.db.models.TextField" title="django.db.models.TextField"><code>TextField</code></a>, respectively.</p> <p><code>max_length</code> won’t be enforced in the database since <code>citext</code> behaves similar to PostgreSQL’s <code>text</code> type.</p> </dd>
+</dl> <div class="admonition-case-insensitive-collations admonition"> <p class="first admonition-title">Case-insensitive collations</p> <p class="last">On PostgreSQL 12+, it’s preferable to use non-deterministic collations instead of the <code>citext</code> extension. You can create them using the <a class="reference internal" href="operations#django.contrib.postgres.operations.CreateCollation" title="django.contrib.postgres.operations.CreateCollation"><code>CreateCollation</code></a> migration operation. For more details, see <a class="reference internal" href="operations#manage-postgresql-collations"><span class="std std-ref">Managing collations using migrations</span></a> and the PostgreSQL documentation about <a class="reference external" href="https://www.postgresql.org/docs/current/collation.html#COLLATION-NONDETERMINISTIC">non-deterministic collations</a>.</p> </div>   <h2 id="hstorefield"><code>HStoreField</code></h2> <dl class="class" id="s-hstorefield"> <dt id="django.contrib.postgres.fields.HStoreField">
+<code>class HStoreField(**options)</code> </dt> <dd>
+<p>A field for storing key-value pairs. The Python data type used is a <code>dict</code>. Keys must be strings, and values may be either strings or nulls (<code>None</code> in Python).</p> <p>To use this field, you’ll need to:</p> <ol class="arabic simple"> <li>Add <code>'django.contrib.postgres'</code> in your <a class="reference internal" href="../../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>.</li> <li>
+<a class="reference internal" href="operations#create-postgresql-extensions"><span class="std std-ref">Set up the hstore extension</span></a> in PostgreSQL.</li> </ol> <p>You’ll see an error like <code>can't adapt type 'dict'</code> if you skip the first step, or <code>type "hstore" does not exist</code> if you skip the second.</p> </dd>
+</dl> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">On occasions it may be useful to require or restrict the keys which are valid for a given field. This can be done using the <a class="reference internal" href="validators#django.contrib.postgres.validators.KeysValidator" title="django.contrib.postgres.validators.KeysValidator"><code>KeysValidator</code></a>.</p> </div>  <h3 id="querying-hstorefield">Querying <code>HStoreField</code>
+</h3> <p id="s-querying-hstorefield">In addition to the ability to query by key, there are a number of custom lookups available for <code>HStoreField</code>.</p> <p>We will use the following example model:</p> <pre data-language="python">from django.contrib.postgres.fields import HStoreField
+from django.db import models
+
+class Dog(models.Model):
+    name = models.CharField(max_length=200)
+    data = HStoreField()
+
+    def __str__(self):
+        return self.name
+</pre>  <h4 id="std:fieldlookup-hstorefield.key">Key lookups</h4> <p id="s-key-lookups">To query based on a given key, you can use that key as the lookup name:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie'})
+
+&gt;&gt;&gt; Dog.objects.filter(data__breed='collie')
+&lt;QuerySet [&lt;Dog: Meg&gt;]&gt;
+</pre> <p>You can chain other lookups after key lookups:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.filter(data__breed__contains='l')
+&lt;QuerySet [&lt;Dog: Rufus&gt;, &lt;Dog: Meg&gt;]&gt;
+</pre> <p>If the key you wish to query by clashes with the name of another lookup, you need to use the <a class="reference internal" href="#std:fieldlookup-hstorefield.contains"><code>hstorefield.contains</code></a> lookup instead.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Key transforms can also be chained with: <a class="reference internal" href="../../models/querysets#std:fieldlookup-contains"><code>contains</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-icontains"><code>icontains</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-endswith"><code>endswith</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-iendswith"><code>iendswith</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-iexact"><code>iexact</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-regex"><code>regex</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-iregex"><code>iregex</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-startswith"><code>startswith</code></a>, and <a class="reference internal" href="../../models/querysets#std:fieldlookup-istartswith"><code>istartswith</code></a> lookups.</p> </div> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Since any string could be a key in a hstore value, any lookup other than those listed below will be interpreted as a key lookup. No errors are raised. Be extra careful for typing mistakes, and always check your queries work as you intend.</p> </div>   <h4 id="id1"><code>contains</code></h4> <p id="s-std:fieldlookup-hstorefield.contains">The <a class="reference internal" href="../../models/querysets#std:fieldlookup-contains"><code>contains</code></a> lookup is overridden on <a class="reference internal" href="#django.contrib.postgres.fields.HStoreField" title="django.contrib.postgres.fields.HStoreField"><code>HStoreField</code></a>. The returned objects are those where the given <code>dict</code> of key-value pairs are all contained in the field. It uses the SQL operator <code>@&gt;</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador', 'owner': 'Bob'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+&gt;&gt;&gt; Dog.objects.create(name='Fred', data={})
+
+&gt;&gt;&gt; Dog.objects.filter(data__contains={'owner': 'Bob'})
+&lt;QuerySet [&lt;Dog: Rufus&gt;, &lt;Dog: Meg&gt;]&gt;
+
+&gt;&gt;&gt; Dog.objects.filter(data__contains={'breed': 'collie'})
+&lt;QuerySet [&lt;Dog: Meg&gt;]&gt;
+</pre>   <h4 id="id2"><code>contained_by</code></h4> <p id="s-std:fieldlookup-hstorefield.contained_by">This is the inverse of the <a class="reference internal" href="#std:fieldlookup-hstorefield.contains"><code>contains</code></a> lookup - the objects returned will be those where the key-value pairs on the object are a subset of those in the value passed. It uses the SQL operator <code>&lt;@</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador', 'owner': 'Bob'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+&gt;&gt;&gt; Dog.objects.create(name='Fred', data={})
+
+&gt;&gt;&gt; Dog.objects.filter(data__contained_by={'breed': 'collie', 'owner': 'Bob'})
+&lt;QuerySet [&lt;Dog: Meg&gt;, &lt;Dog: Fred&gt;]&gt;
+
+&gt;&gt;&gt; Dog.objects.filter(data__contained_by={'breed': 'collie'})
+&lt;QuerySet [&lt;Dog: Fred&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-hstorefield.has_key"><code>has_key</code></h4> <p id="s-has-key">Returns objects where the given key is in the data. Uses the SQL operator <code>?</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+
+&gt;&gt;&gt; Dog.objects.filter(data__has_key='owner')
+&lt;QuerySet [&lt;Dog: Meg&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-hstorefield.has_any_keys"><code>has_any_keys</code></h4> <p id="s-has-any-keys">Returns objects where any of the given keys are in the data. Uses the SQL operator <code>?|</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'owner': 'Bob'})
+&gt;&gt;&gt; Dog.objects.create(name='Fred', data={})
+
+&gt;&gt;&gt; Dog.objects.filter(data__has_any_keys=['owner', 'breed'])
+&lt;QuerySet [&lt;Dog: Rufus&gt;, &lt;Dog: Meg&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-hstorefield.has_keys"><code>has_keys</code></h4> <p id="s-has-keys">Returns objects where all of the given keys are in the data. Uses the SQL operator <code>?&amp;</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+
+&gt;&gt;&gt; Dog.objects.filter(data__has_keys=['breed', 'owner'])
+&lt;QuerySet [&lt;Dog: Meg&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-hstorefield.keys"><code>keys</code></h4> <p id="s-keys">Returns objects where the array of keys is the given value. Note that the order is not guaranteed to be reliable, so this transform is mainly useful for using in conjunction with lookups on <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a>. Uses the SQL function <code>akeys()</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'toy': 'bone'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+
+&gt;&gt;&gt; Dog.objects.filter(data__keys__overlap=['breed', 'toy'])
+&lt;QuerySet [&lt;Dog: Rufus&gt;, &lt;Dog: Meg&gt;]&gt;
+</pre>   <h4 id="std:fieldlookup-hstorefield.values"><code>values</code></h4> <p id="s-values">Returns objects where the array of values is the given value. Note that the order is not guaranteed to be reliable, so this transform is mainly useful for using in conjunction with lookups on <a class="reference internal" href="#django.contrib.postgres.fields.ArrayField" title="django.contrib.postgres.fields.ArrayField"><code>ArrayField</code></a>. Uses the SQL function <code>avals()</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; Dog.objects.create(name='Rufus', data={'breed': 'labrador'})
+&gt;&gt;&gt; Dog.objects.create(name='Meg', data={'breed': 'collie', 'owner': 'Bob'})
+
+&gt;&gt;&gt; Dog.objects.filter(data__values__contains=['collie'])
+&lt;QuerySet [&lt;Dog: Meg&gt;]&gt;
+</pre>     <h2 id="id3">Range Fields</h2> <p id="s-range-fields">There are five range field types, corresponding to the built-in range types in PostgreSQL. These fields are used to store a range of values; for example the start and end timestamps of an event, or the range of ages an activity is suitable for.</p> <p>All of the range fields translate to <a class="reference external" href="https://www.psycopg.org/docs/extras.html#adapt-range" title="(in Psycopg v2.9)"><span class="xref std std-ref">psycopg2 Range objects</span></a> in Python, but also accept tuples as input if no bounds information is necessary. The default is lower bound included, upper bound excluded, that is <code>[)</code> (see the PostgreSQL documentation for details about <a class="reference external" href="https://www.postgresql.org/docs/current/rangetypes.html#RANGETYPES-IO">different bounds</a>).</p>  <h3 id="integerrangefield"><code>IntegerRangeField</code></h3> <dl class="class" id="s-integerrangefield"> <dt id="django.contrib.postgres.fields.IntegerRangeField">
+<code>class IntegerRangeField(**options)</code> </dt> <dd>
+<p>Stores a range of integers. Based on an <a class="reference internal" href="../../models/fields#django.db.models.IntegerField" title="django.db.models.IntegerField"><code>IntegerField</code></a>. Represented by an <code>int4range</code> in the database and a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.NumericRange" title="(in Psycopg v2.9)"><code>NumericRange</code></a> in Python.</p> <p>Regardless of the bounds specified when saving the data, PostgreSQL always returns a range in a canonical form that includes the lower bound and excludes the upper bound, that is <code>[)</code>.</p> </dd>
+</dl>   <h3 id="bigintegerrangefield"><code>BigIntegerRangeField</code></h3> <dl class="class" id="s-bigintegerrangefield"> <dt id="django.contrib.postgres.fields.BigIntegerRangeField">
+<code>class BigIntegerRangeField(**options)</code> </dt> <dd>
+<p>Stores a range of large integers. Based on a <a class="reference internal" href="../../models/fields#django.db.models.BigIntegerField" title="django.db.models.BigIntegerField"><code>BigIntegerField</code></a>. Represented by an <code>int8range</code> in the database and a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.NumericRange" title="(in Psycopg v2.9)"><code>NumericRange</code></a> in Python.</p> <p>Regardless of the bounds specified when saving the data, PostgreSQL always returns a range in a canonical form that includes the lower bound and excludes the upper bound, that is <code>[)</code>.</p> </dd>
+</dl>   <h3 id="decimalrangefield"><code>DecimalRangeField</code></h3> <dl class="class" id="s-decimalrangefield"> <dt id="django.contrib.postgres.fields.DecimalRangeField">
+<code>class DecimalRangeField(**options)</code> </dt> <dd>
+<p>Stores a range of floating point values. Based on a <a class="reference internal" href="../../models/fields#django.db.models.DecimalField" title="django.db.models.DecimalField"><code>DecimalField</code></a>. Represented by a <code>numrange</code> in the database and a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.NumericRange" title="(in Psycopg v2.9)"><code>NumericRange</code></a> in Python.</p> </dd>
+</dl>   <h3 id="datetimerangefield"><code>DateTimeRangeField</code></h3> <dl class="class" id="s-datetimerangefield"> <dt id="django.contrib.postgres.fields.DateTimeRangeField">
+<code>class DateTimeRangeField(**options)</code> </dt> <dd>
+<p>Stores a range of timestamps. Based on a <a class="reference internal" href="../../models/fields#django.db.models.DateTimeField" title="django.db.models.DateTimeField"><code>DateTimeField</code></a>. Represented by a <code>tstzrange</code> in the database and a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.DateTimeTZRange" title="(in Psycopg v2.9)"><code>DateTimeTZRange</code></a> in Python.</p> </dd>
+</dl>   <h3 id="daterangefield"><code>DateRangeField</code></h3> <dl class="class" id="s-daterangefield"> <dt id="django.contrib.postgres.fields.DateRangeField">
+<code>class DateRangeField(**options)</code> </dt> <dd>
+<p>Stores a range of dates. Based on a <a class="reference internal" href="../../models/fields#django.db.models.DateField" title="django.db.models.DateField"><code>DateField</code></a>. Represented by a <code>daterange</code> in the database and a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.DateRange" title="(in Psycopg v2.9)"><code>DateRange</code></a> in Python.</p> <p>Regardless of the bounds specified when saving the data, PostgreSQL always returns a range in a canonical form that includes the lower bound and excludes the upper bound, that is <code>[)</code>.</p> </dd>
+</dl>   <h3 id="querying-range-fields">Querying Range Fields</h3> <p id="s-querying-range-fields">There are a number of custom lookups and transforms for range fields. They are available on all the above fields, but we will use the following example model:</p> <pre data-language="python">from django.contrib.postgres.fields import IntegerRangeField
+from django.db import models
+
+class Event(models.Model):
+    name = models.CharField(max_length=200)
+    ages = IntegerRangeField()
+    start = models.DateTimeField()
+
+    def __str__(self):
+        return self.name
+</pre> <p>We will also use the following example objects:</p> <pre data-language="python">&gt;&gt;&gt; import datetime
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; now = timezone.now()
+&gt;&gt;&gt; Event.objects.create(name='Soft play', ages=(0, 10), start=now)
+&gt;&gt;&gt; Event.objects.create(name='Pub trip', ages=(21, None), start=now - datetime.timedelta(days=1))
+</pre> <p>and <code>NumericRange</code>:</p> <pre data-language="python">&gt;&gt;&gt; from psycopg2.extras import NumericRange
+</pre>  <h4 id="containment-functions">Containment functions</h4> <p id="s-containment-functions">As with other PostgreSQL fields, there are three standard containment operators: <code>contains</code>, <code>contained_by</code> and <code>overlap</code>, using the SQL operators <code>@&gt;</code>, <code>&lt;@</code>, and <code>&amp;&amp;</code> respectively.</p>  <h5 id="id4"><code>contains</code></h5> <pre data-language="python" id="s-std:fieldlookup-rangefield.contains">&gt;&gt;&gt; Event.objects.filter(ages__contains=NumericRange(4, 5))
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>   <h5 id="id5"><code>contained_by</code></h5> <pre data-language="python" id="s-std:fieldlookup-rangefield.contained_by">&gt;&gt;&gt; Event.objects.filter(ages__contained_by=NumericRange(0, 15))
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre> <p>The <code>contained_by</code> lookup is also available on the non-range field types: <a class="reference internal" href="../../models/fields#django.db.models.SmallAutoField" title="django.db.models.SmallAutoField"><code>SmallAutoField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.AutoField" title="django.db.models.AutoField"><code>AutoField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.BigAutoField" title="django.db.models.BigAutoField"><code>BigAutoField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.SmallIntegerField" title="django.db.models.SmallIntegerField"><code>SmallIntegerField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.IntegerField" title="django.db.models.IntegerField"><code>IntegerField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.BigIntegerField" title="django.db.models.BigIntegerField"><code>BigIntegerField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.DecimalField" title="django.db.models.DecimalField"><code>DecimalField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.FloatField" title="django.db.models.FloatField"><code>FloatField</code></a>, <a class="reference internal" href="../../models/fields#django.db.models.DateField" title="django.db.models.DateField"><code>DateField</code></a>, and <a class="reference internal" href="../../models/fields#django.db.models.DateTimeField" title="django.db.models.DateTimeField"><code>DateTimeField</code></a>. For example:</p> <pre data-language="python">&gt;&gt;&gt; from psycopg2.extras import DateTimeTZRange
+&gt;&gt;&gt; Event.objects.filter(
+...     start__contained_by=DateTimeTZRange(
+...         timezone.now() - datetime.timedelta(hours=1),
+...         timezone.now() + datetime.timedelta(hours=1),
+...     ),
+... )
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>   <h5 id="id6"><code>overlap</code></h5> <pre data-language="python" id="s-std:fieldlookup-rangefield.overlap">&gt;&gt;&gt; Event.objects.filter(ages__overlap=NumericRange(8, 12))
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>    <h4 id="comparison-functions">Comparison functions</h4> <p id="s-comparison-functions">Range fields support the standard lookups: <a class="reference internal" href="../../models/querysets#std:fieldlookup-lt"><code>lt</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-gt"><code>gt</code></a>, <a class="reference internal" href="../../models/querysets#std:fieldlookup-lte"><code>lte</code></a> and <a class="reference internal" href="../../models/querysets#std:fieldlookup-gte"><code>gte</code></a>. These are not particularly helpful - they compare the lower bounds first and then the upper bounds only if necessary. This is also the strategy used to order by a range field. It is better to use the specific range comparison operators.</p>  <h5 id="std:fieldlookup-rangefield.fully_lt"><code>fully_lt</code></h5> <p id="s-fully-lt">The returned ranges are strictly less than the passed range. In other words, all the points in the returned range are less than all those in the passed range.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__fully_lt=NumericRange(11, 15))
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.fully_gt"><code>fully_gt</code></h5> <p id="s-fully-gt">The returned ranges are strictly greater than the passed range. In other words, the all the points in the returned range are greater than all those in the passed range.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__fully_gt=NumericRange(11, 15))
+&lt;QuerySet [&lt;Event: Pub trip&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.not_lt"><code>not_lt</code></h5> <p id="s-not-lt">The returned ranges do not contain any points less than the passed range, that is the lower bound of the returned range is at least the lower bound of the passed range.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__not_lt=NumericRange(0, 15))
+&lt;QuerySet [&lt;Event: Soft play&gt;, &lt;Event: Pub trip&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.not_gt"><code>not_gt</code></h5> <p id="s-not-gt">The returned ranges do not contain any points greater than the passed range, that is the upper bound of the returned range is at most the upper bound of the passed range.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__not_gt=NumericRange(3, 10))
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.adjacent_to"><code>adjacent_to</code></h5> <p id="s-adjacent-to">The returned ranges share a bound with the passed range.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__adjacent_to=NumericRange(10, 21))
+&lt;QuerySet [&lt;Event: Soft play&gt;, &lt;Event: Pub trip&gt;]&gt;
+</pre>    <h4 id="querying-using-the-bounds">Querying using the bounds</h4> <p id="s-querying-using-the-bounds">Range fields support several extra lookups.</p>  <h5 id="std:fieldlookup-rangefield.startswith"><code>startswith</code></h5> <p id="s-startswith">Returned objects have the given lower bound. Can be chained to valid lookups for the base field.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__startswith=21)
+&lt;QuerySet [&lt;Event: Pub trip&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.endswith"><code>endswith</code></h5> <p id="s-endswith">Returned objects have the given upper bound. Can be chained to valid lookups for the base field.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__endswith=10)
+&lt;QuerySet [&lt;Event: Soft play&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.isempty"><code>isempty</code></h5> <p id="s-isempty">Returned objects are empty ranges. Can be chained to valid lookups for a <a class="reference internal" href="../../models/fields#django.db.models.BooleanField" title="django.db.models.BooleanField"><code>BooleanField</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__isempty=True)
+&lt;QuerySet []&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.lower_inc"><code>lower_inc</code></h5> <p id="s-lower-inc">Returns objects that have inclusive or exclusive lower bounds, depending on the boolean value passed. Can be chained to valid lookups for a <a class="reference internal" href="../../models/fields#django.db.models.BooleanField" title="django.db.models.BooleanField"><code>BooleanField</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__lower_inc=True)
+&lt;QuerySet [&lt;Event: Soft play&gt;, &lt;Event: Pub trip&gt;]&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.lower_inf"><code>lower_inf</code></h5> <p id="s-lower-inf">Returns objects that have unbounded (infinite) or bounded lower bound, depending on the boolean value passed. Can be chained to valid lookups for a <a class="reference internal" href="../../models/fields#django.db.models.BooleanField" title="django.db.models.BooleanField"><code>BooleanField</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__lower_inf=True)
+&lt;QuerySet []&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.upper_inc"><code>upper_inc</code></h5> <p id="s-upper-inc">Returns objects that have inclusive or exclusive upper bounds, depending on the boolean value passed. Can be chained to valid lookups for a <a class="reference internal" href="../../models/fields#django.db.models.BooleanField" title="django.db.models.BooleanField"><code>BooleanField</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__upper_inc=True)
+&lt;QuerySet []&gt;
+</pre>   <h5 id="std:fieldlookup-rangefield.upper_inf"><code>upper_inf</code></h5> <p id="s-upper-inf">Returns objects that have unbounded (infinite) or bounded upper bound, depending on the boolean value passed. Can be chained to valid lookups for a <a class="reference internal" href="../../models/fields#django.db.models.BooleanField" title="django.db.models.BooleanField"><code>BooleanField</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; Event.objects.filter(ages__upper_inf=True)
+&lt;QuerySet [&lt;Event: Pub trip&gt;]&gt;
+</pre>     <h3 id="defining-your-own-range-types">Defining your own range types</h3> <p id="s-defining-your-own-range-types">PostgreSQL allows the definition of custom range types. Django’s model and form field implementations use base classes below, and psycopg2 provides a <a class="reference external" href="https://www.psycopg.org/docs/extras.html#psycopg2.extras.register_range" title="(in Psycopg v2.9)"><code>register_range()</code></a> to allow use of custom range types.</p> <dl class="class"> <dt id="django.contrib.postgres.fields.RangeField">
+<code>class RangeField(**options)</code> </dt> <dd>
+<p>Base class for model range fields.</p> <dl class="attribute"> <dt id="django.contrib.postgres.fields.RangeField.base_field">
+<code>base_field</code> </dt> <dd>
+<p>The model field class to use.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.postgres.fields.RangeField.range_type">
+<code>range_type</code> </dt> <dd>
+<p>The psycopg2 range type to use.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.postgres.fields.RangeField.form_field">
+<code>form_field</code> </dt> <dd>
+<p>The form field class to use. Should be a subclass of <a class="reference internal" href="#django.contrib.postgres.fields.django.contrib.postgres.forms.BaseRangeField" title="django.contrib.postgres.fields.django.contrib.postgres.forms.BaseRangeField"><code>django.contrib.postgres.forms.BaseRangeField</code></a>.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.postgres.fields.django.contrib.postgres.forms.BaseRangeField">
+<code>class django.contrib.postgres.forms.BaseRangeField</code> </dt> <dd>
+<p>Base class for form range fields.</p> <dl class="attribute"> <dt id="django.contrib.postgres.fields.django.contrib.postgres.forms.BaseRangeField.base_field">
+<code>base_field</code> </dt> <dd>
+<p>The form field to use.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.postgres.fields.django.contrib.postgres.forms.BaseRangeField.range_type">
+<code>range_type</code> </dt> <dd>
+<p>The psycopg2 range type to use.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="range-operators">Range operators</h3> <dl class="class" id="s-range-operators"> <dt id="django.contrib.postgres.fields.RangeOperators">
+<code>class RangeOperators</code> </dt> 
+</dl> <p>PostgreSQL provides a set of SQL operators that can be used together with the range data types (see <a class="reference external" href="https://www.postgresql.org/docs/current/functions-range.html#RANGE-OPERATORS-TABLE">the PostgreSQL documentation for the full details of range operators</a>). This class is meant as a convenient method to avoid typos. The operator names overlap with the names of corresponding lookups.</p> <pre data-language="python">class RangeOperators:
+    EQUAL = '='
+    NOT_EQUAL = '&lt;&gt;'
+    CONTAINS = '@&gt;'
+    CONTAINED_BY = '&lt;@'
+    OVERLAPS = '&amp;&amp;'
+    FULLY_LT = '&lt;&lt;'
+    FULLY_GT = '&gt;&gt;'
+    NOT_LT = '&amp;&gt;'
+    NOT_GT = '&amp;&lt;'
+    ADJACENT_TO = '-|-'
+</pre>   <h3 id="rangeboundary-expressions">RangeBoundary() expressions</h3> <dl class="class" id="s-rangeboundary-expressions"> <dt id="django.contrib.postgres.fields.RangeBoundary">
+<code>class RangeBoundary(inclusive_lower=True, inclusive_upper=False)</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.postgres.fields.RangeBoundary.inclusive_lower">
+<code>inclusive_lower</code> </dt> <dd>
+<p>If <code>True</code> (default), the lower bound is inclusive <code>'['</code>, otherwise it’s exclusive <code>'('</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.postgres.fields.RangeBoundary.inclusive_upper">
+<code>inclusive_upper</code> </dt> <dd>
+<p>If <code>False</code> (default), the upper bound is exclusive <code>')'</code>, otherwise it’s inclusive <code>']'</code>.</p> </dd>
+</dl> </dd>
+</dl> <p>A <code>RangeBoundary()</code> expression represents the range boundaries. It can be used with a custom range functions that expected boundaries, for example to define <a class="reference internal" href="constraints#django.contrib.postgres.constraints.ExclusionConstraint" title="django.contrib.postgres.constraints.ExclusionConstraint"><code>ExclusionConstraint</code></a>. See <a class="reference external" href="https://www.postgresql.org/docs/current/rangetypes.html#RANGETYPES-INCLUSIVITY">the PostgreSQL documentation for the full details</a>.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/postgres/fields/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/postgres/fields/</a>
+  </p>
+</div>

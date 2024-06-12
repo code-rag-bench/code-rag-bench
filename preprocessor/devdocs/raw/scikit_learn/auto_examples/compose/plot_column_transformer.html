@@ -1,0 +1,130 @@
+<h1 id="sphx-glr-auto-examples-compose-plot-column-transformer-py">Column Transformer with Heterogeneous Data Sources</h1> <p>Datasets can often contain components that require different feature extraction and processing pipelines. This scenario might occur when:</p> <ol class="arabic simple"> <li>your dataset consists of heterogeneous data types (e.g. raster images and text captions),</li> <li>your dataset is stored in a <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.2.1)"><code>pandas.DataFrame</code></a> and different columns require different processing pipelines.</li> </ol> <p>This example demonstrates how to use <a class="reference internal" href="../../modules/generated/sklearn.compose.columntransformer#sklearn.compose.ColumnTransformer" title="sklearn.compose.ColumnTransformer"><code>ColumnTransformer</code></a> on a dataset containing different types of features. The choice of features is not particularly helpful, but serves to illustrate the technique.</p> <pre data-language="python"># Author: Matt Terry &lt;matt.terry@gmail.com&gt;
+#
+# License: BSD 3 clause
+
+import numpy as np
+
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.datasets import fetch_20newsgroups
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import classification_report
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.svm import LinearSVC
+</pre>  <h2 id="newsgroups-dataset">20 newsgroups dataset</h2> <p>We will use the <a class="reference internal" href="https://scikit-learn.org/0.24/datasets/real_world.html#newsgroups-dataset"><span class="std std-ref">20 newsgroups dataset</span></a>, which comprises posts from newsgroups on 20 topics. This dataset is split into train and test subsets based on messages posted before and after a specific date. We will only use posts from 2 categories to speed up running time.</p> <pre data-language="python">categories = ['sci.med', 'sci.space']
+X_train, y_train = fetch_20newsgroups(random_state=1,
+                                      subset='train',
+                                      categories=categories,
+                                      remove=('footers', 'quotes'),
+                                      return_X_y=True)
+X_test, y_test = fetch_20newsgroups(random_state=1,
+                                    subset='test',
+                                    categories=categories,
+                                    remove=('footers', 'quotes'),
+                                    return_X_y=True)
+</pre> <p>Each feature comprises meta information about that post, such as the subject, and the body of the news post.</p> <pre data-language="python">print(X_train[0])
+</pre> <p class="sphx-glr-script-out">Out:</p> <pre data-language="none">From: mccall@mksol.dseg.ti.com (fred j mccall 575-3539)
+Subject: Re: Metric vs English
+Article-I.D.: mksol.1993Apr6.131900.8407
+Organization: Texas Instruments Inc
+Lines: 31
+
+
+
+
+American, perhaps, but nothing military about it.  I learned (mostly)
+slugs when we talked English units in high school physics and while
+the teacher was an ex-Navy fighter jock the book certainly wasn't
+produced by the military.
+
+[Poundals were just too flinking small and made the math come out
+funny; sort of the same reason proponents of SI give for using that.]
+
+--
+"Insisting on perfect safety is for people who don't have the balls to live
+ in the real world."   -- Mary Shafer, NASA Ames Dryden
+</pre>   <h2 id="creating-transformers">Creating transformers</h2> <p>First, we would like a transformer that extracts the subject and body of each post. Since this is a stateless transformation (does not require state information from training data), we can define a function that performs the data transformation then use <a class="reference internal" href="../../modules/generated/sklearn.preprocessing.functiontransformer#sklearn.preprocessing.FunctionTransformer" title="sklearn.preprocessing.FunctionTransformer"><code>FunctionTransformer</code></a> to create a scikit-learn transformer.</p> <pre data-language="python">def subject_body_extractor(posts):
+    # construct object dtype array with two columns
+    # first column = 'subject' and second column = 'body'
+    features = np.empty(shape=(len(posts), 2), dtype=object)
+    for i, text in enumerate(posts):
+        # temporary variable `_` stores '\n\n'
+        headers, _, body = text.partition('\n\n')
+        # store body text in second column
+        features[i, 1] = body
+
+        prefix = 'Subject:'
+        sub = ''
+        # save text after 'Subject:' in first column
+        for line in headers.split('\n'):
+            if line.startswith(prefix):
+                sub = line[len(prefix):]
+                break
+        features[i, 0] = sub
+
+    return features
+
+
+subject_body_transformer = FunctionTransformer(subject_body_extractor)
+</pre> <p>We will also create a transformer that extracts the length of the text and the number of sentences.</p> <pre data-language="python">def text_stats(posts):
+    return [{'length': len(text),
+             'num_sentences': text.count('.')}
+            for text in posts]
+
+
+text_stats_transformer = FunctionTransformer(text_stats)
+</pre>   <h2 id="classification-pipeline">Classification pipeline</h2> <p>The pipeline below extracts the subject and body from each post using <code>SubjectBodyExtractor</code>, producing a (n_samples, 2) array. This array is then used to compute standard bag-of-words features for the subject and body as well as text length and number of sentences on the body, using <code>ColumnTransformer</code>. We combine them, with weights, then train a classifier on the combined set of features.</p> <pre data-language="python">pipeline = Pipeline([
+    # Extract subject &amp; body
+    ('subjectbody', subject_body_transformer),
+    # Use ColumnTransformer to combine the subject and body features
+    ('union', ColumnTransformer(
+        [
+            # bag-of-words for subject (col 0)
+            ('subject', TfidfVectorizer(min_df=50), 0),
+            # bag-of-words with decomposition for body (col 1)
+            ('body_bow', Pipeline([
+                ('tfidf', TfidfVectorizer()),
+                ('best', TruncatedSVD(n_components=50)),
+            ]), 1),
+            # Pipeline for pulling text stats from post's body
+            ('body_stats', Pipeline([
+                ('stats', text_stats_transformer),  # returns a list of dicts
+                ('vect', DictVectorizer()),  # list of dicts -&gt; feature matrix
+            ]), 1),
+        ],
+        # weight above ColumnTransformer features
+        transformer_weights={
+            'subject': 0.8,
+            'body_bow': 0.5,
+            'body_stats': 1.0,
+        }
+    )),
+    # Use a SVC classifier on the combined features
+    ('svc', LinearSVC(dual=False)),
+], verbose=True)
+</pre> <p>Finally, we fit our pipeline on the training data and use it to predict topics for <code>X_test</code>. Performance metrics of our pipeline are then printed.</p> <pre data-language="python">pipeline.fit(X_train, y_train)
+y_pred = pipeline.predict(X_test)
+print('Classification report:\n\n{}'.format(
+    classification_report(y_test, y_pred))
+)
+</pre> <p class="sphx-glr-script-out">Out:</p> <pre data-language="none">[Pipeline] ....... (step 1 of 3) Processing subjectbody, total=   0.0s
+[Pipeline] ............. (step 2 of 3) Processing union, total=   0.8s
+[Pipeline] ............... (step 3 of 3) Processing svc, total=   0.0s
+Classification report:
+
+              precision    recall  f1-score   support
+
+           0       0.84      0.87      0.86       396
+           1       0.87      0.83      0.85       394
+
+    accuracy                           0.85       790
+   macro avg       0.85      0.85      0.85       790
+weighted avg       0.85      0.85      0.85       790
+</pre> <p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes 3.813 seconds)</p> <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-compose-plot-column-transformer-py"> <div class="binder-badge docutils container"> <a class="reference external image-reference" href="https://mybinder.org/v2/gh/scikit-learn/scikit-learn/0.24.X?urlpath=lab/tree/notebooks/auto_examples/compose/plot_column_transformer.ipynb"><img alt="Launch binder" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC" style="width: 150px;"></a> </div> <div class="sphx-glr-download sphx-glr-download-python docutils container"> <p><a class="reference download internal" download="" href="https://scikit-learn.org/0.24/_downloads/3e8abcbcde21489054beb05cb87da525/plot_column_transformer.py"><code>Download Python source code: plot_column_transformer.py</code></a></p> </div> <div class="sphx-glr-download sphx-glr-download-jupyter docutils container"> <p><a class="reference download internal" download="" href="https://scikit-learn.org/0.24/_downloads/15dc6d7a809edf988a7328336a25faec/plot_column_transformer.ipynb"><code>Download Jupyter notebook: plot_column_transformer.ipynb</code></a></p> </div> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2020 The scikit-learn developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://scikit-learn.org/0.24/auto_examples/compose/plot_column_transformer.html" class="_attribution-link">https://scikit-learn.org/0.24/auto_examples/compose/plot_column_transformer.html</a>
+  </p>
+</div>

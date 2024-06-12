@@ -1,0 +1,424 @@
+<h1 class="devsite-page-title">tf.compat.v1.distributions.Distribution</h1>       <p>A generic probability distribution base class.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.compat.v1.distributions.Distribution(
+    dtype, reparameterization_type, validate_args, allow_nan_stats, parameters=None,
+    graph_parents=None, name=None
+)
+</pre>  <p><code translate="no" dir="ltr">Distribution</code> is a base class for constructing and organizing properties (e.g., mean, variance) of random variables (e.g, Bernoulli, Gaussian).</p> <h4 id="subclassing" data-text="Subclassing">Subclassing</h4> <p>Subclasses are expected to implement a leading-underscore version of the same-named function. The argument signature should be identical except for the omission of <code translate="no" dir="ltr">name="..."</code>. For example, to enable <code translate="no" dir="ltr">log_prob(value, name="log_prob")</code> a subclass should implement <code translate="no" dir="ltr">_log_prob(value)</code>.</p> <p>Subclasses can append to public-level docstrings by providing docstrings for their method specializations. For example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@util.AppendDocstring("Some other details.")
+def _log_prob(self, value):
+  ...
+</pre> <p>would add the string "Some other details." to the <code translate="no" dir="ltr">log_prob</code> function docstring. This is implemented as a simple decorator to avoid python linter complaining about missing Args/Returns/Raises sections in the partial docstrings.</p> <h4 id="broadcasting_batching_and_shapes" data-text="Broadcasting, batching, and shapes">Broadcasting, batching, and shapes</h4> <p>All distributions support batches of independent distributions of that type. The batch shape is determined by broadcasting together the parameters.</p> <p>The shape of arguments to <code translate="no" dir="ltr">__init__</code>, <code translate="no" dir="ltr">cdf</code>, <code translate="no" dir="ltr">log_cdf</code>, <code translate="no" dir="ltr">prob</code>, and <code translate="no" dir="ltr">log_prob</code> reflect this broadcasting, as does the return value of <code translate="no" dir="ltr">sample</code> and <code translate="no" dir="ltr">sample_n</code>.</p> <p><code translate="no" dir="ltr">sample_n_shape = [n] + batch_shape + event_shape</code>, where <code translate="no" dir="ltr">sample_n_shape</code> is the shape of the <code translate="no" dir="ltr">Tensor</code> returned from <code translate="no" dir="ltr">sample_n</code>, <code translate="no" dir="ltr">n</code> is the number of samples, <code translate="no" dir="ltr">batch_shape</code> defines how many independent distributions there are, and <code translate="no" dir="ltr">event_shape</code> defines the shape of samples from each of those independent distributions. Samples are independent along the <code translate="no" dir="ltr">batch_shape</code> dimensions, but not necessarily so along the <code translate="no" dir="ltr">event_shape</code> dimensions (depending on the particulars of the underlying distribution).</p> <p>Using the <code translate="no" dir="ltr">Uniform</code> distribution as an example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">minval = 3.0
+maxval = [[4.0, 6.0],
+          [10.0, 12.0]]
+
+# Broadcasting:
+# This instance represents 4 Uniform distributions. Each has a lower bound at
+# 3.0 as the `minval` parameter was broadcasted to match `maxval`'s shape.
+u = Uniform(minval, maxval)
+
+# `event_shape` is `TensorShape([])`.
+event_shape = u.event_shape
+# `event_shape_t` is a `Tensor` which will evaluate to [].
+event_shape_t = u.event_shape_tensor()
+
+# Sampling returns a sample per distribution. `samples` has shape
+# [5, 2, 2], which is [n] + batch_shape + event_shape, where n=5,
+# batch_shape=[2, 2], and event_shape=[].
+samples = u.sample_n(5)
+
+# The broadcasting holds across methods. Here we use `cdf` as an example. The
+# same holds for `log_cdf` and the likelihood functions.
+
+# `cum_prob` has shape [2, 2] as the `value` argument was broadcasted to the
+# shape of the `Uniform` instance.
+cum_prob_broadcast = u.cdf(4.0)
+
+# `cum_prob`'s shape is [2, 2], one per distribution. No broadcasting
+# occurred.
+cum_prob_per_dist = u.cdf([[4.0, 5.0],
+                           [6.0, 7.0]])
+
+# INVALID as the `value` argument is not broadcastable to the distribution's
+# shape.
+cum_prob_invalid = u.cdf([4.0, 5.0, 6.0])
+</pre> <h4 id="shapes" data-text="Shapes">Shapes</h4> <p>There are three important concepts associated with TensorFlow Distributions shapes:</p> <ul> <li>Event shape describes the shape of a single draw from the distribution; it may be dependent across dimensions. For scalar distributions, the event shape is <code translate="no" dir="ltr">[]</code>. For a 5-dimensional MultivariateNormal, the event shape is <code translate="no" dir="ltr">[5]</code>.</li> <li>Batch shape describes independent, not identically distributed draws, aka a "collection" or "bunch" of distributions.</li> <li>Sample shape describes independent, identically distributed draws of batches from the distribution family.</li> </ul> <p>The event shape and the batch shape are properties of a Distribution object, whereas the sample shape is associated with a specific call to <code translate="no" dir="ltr">sample</code> or <code translate="no" dir="ltr">log_prob</code>.</p> <p>For detailed usage examples of TensorFlow Distributions shapes, see <a href="https://github.com/tensorflow/probability/blob/master/tensorflow_probability/examples/jupyter_notebooks/Understanding_TensorFlow_Distributions_Shapes.ipynb">this tutorial</a></p> <h4 id="parameter_values_leading_to_undefined_statistics_or_distributions" data-text="Parameter values leading to undefined statistics or distributions.">Parameter values leading to undefined statistics or distributions.</h4> <p>Some distributions do not have well-defined statistics for all initialization parameter values. For example, the beta distribution is parameterized by positive real numbers <code translate="no" dir="ltr">concentration1</code> and <code translate="no" dir="ltr">concentration0</code>, and does not have well-defined mode if <code translate="no" dir="ltr">concentration1 &lt; 1</code> or <code translate="no" dir="ltr">concentration0 &lt; 1</code>.</p> <p>The user is given the option of raising an exception or returning <code translate="no" dir="ltr">NaN</code>.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">a = tf.exp(tf.matmul(logits, weights_a))
+b = tf.exp(tf.matmul(logits, weights_b))
+
+# Will raise exception if ANY batch member has a &lt; 1 or b &lt; 1.
+dist = distributions.beta(a, b, allow_nan_stats=False)
+mode = dist.mode().eval()
+
+# Will return NaN for batch members with either a &lt; 1 or b &lt; 1.
+dist = distributions.beta(a, b, allow_nan_stats=True)  # Default behavior
+mode = dist.mode().eval()
+</pre> <p>In all cases, an exception is raised if <em>invalid</em> parameters are passed, e.g.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python"># Will raise an exception if any Op is run.
+negative_a = -1.0 * a  # beta distribution by definition has a &gt; 0.
+dist = distributions.beta(negative_a, b, allow_nan_stats=True)
+dist.mean().eval()
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">dtype</code> </td> <td> The type of the event samples. <code translate="no" dir="ltr">None</code> implies no type-enforcement. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">reparameterization_type</code> </td> <td> Instance of <code translate="no" dir="ltr">ReparameterizationType</code>. If <a href="https://www.tensorflow.org/probability/oryx/api_docs/python/oryx/distributions#FULLY_REPARAMETERIZED"><code translate="no" dir="ltr">distributions.FULLY_REPARAMETERIZED</code></a>, this <code translate="no" dir="ltr">Distribution</code> can be reparameterized in terms of some standard distribution with a function whose Jacobian is constant for the support of the standard distribution. If <a href="https://www.tensorflow.org/probability/oryx/api_docs/python/oryx/distributions#NOT_REPARAMETERIZED"><code translate="no" dir="ltr">distributions.NOT_REPARAMETERIZED</code></a>, then no such reparameterization is available. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">validate_args</code> </td> <td> Python <code translate="no" dir="ltr">bool</code>, default <code translate="no" dir="ltr">False</code>. When <code translate="no" dir="ltr">True</code> distribution parameters are checked for validity despite possibly degrading runtime performance. When <code translate="no" dir="ltr">False</code> invalid inputs may silently render incorrect outputs. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">allow_nan_stats</code> </td> <td> Python <code translate="no" dir="ltr">bool</code>, default <code translate="no" dir="ltr">True</code>. When <code translate="no" dir="ltr">True</code>, statistics (e.g., mean, mode, variance) use the value "<code translate="no" dir="ltr">NaN</code>" to indicate the result is undefined. When <code translate="no" dir="ltr">False</code>, an exception is raised if one or more of the statistic's batch members are undefined. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">parameters</code> </td> <td> Python <code translate="no" dir="ltr">dict</code> of parameters used to instantiate this <code translate="no" dir="ltr">Distribution</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">graph_parents</code> </td> <td> Python <code translate="no" dir="ltr">list</code> of graph prerequisites of this <code translate="no" dir="ltr">Distribution</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> name prefixed to Ops created by this class. Default: subclass name. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if any member of graph_parents is <code translate="no" dir="ltr">None</code> or not a <code translate="no" dir="ltr">Tensor</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">allow_nan_stats</code> </td> <td> Python <code translate="no" dir="ltr">bool</code> describing behavior when a stat is undefined. <p>Stats return +/- infinity when it makes sense. E.g., the variance of a Cauchy distribution is infinity. However, sometimes the statistic is undefined, e.g., if a distribution's pdf does not achieve a maximum within the support of the distribution, the mode is undefined. If the mean is undefined, then by definition the variance is undefined. E.g. the mean for Student's T for df = 1 is undefined (no clear way to say it is either + or - infinity), so the variance = E[(X - mean)**2] is also undefined. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">batch_shape</code> </td> <td> Shape of a single sample from a single event index as a <code translate="no" dir="ltr">TensorShape</code>. <p>May be partially defined or unknown.</p> <p>The batch dimensions are indexes into independent, non-identical parameterizations of this distribution. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">dtype</code> </td> <td> The <code translate="no" dir="ltr">DType</code> of <code translate="no" dir="ltr">Tensor</code>s handled by this <code translate="no" dir="ltr">Distribution</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">event_shape</code> </td> <td> Shape of a single sample from a single batch as a <code translate="no" dir="ltr">TensorShape</code>. <p>May be partially defined or unknown. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Name prepended to all ops created by this <code translate="no" dir="ltr">Distribution</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">parameters</code> </td> <td> Dictionary of parameters used to instantiate this <code translate="no" dir="ltr">Distribution</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">reparameterization_type</code> </td> <td> Describes how samples from the distribution are reparameterized. <p>Currently this is one of the static instances <a href="https://www.tensorflow.org/probability/oryx/api_docs/python/oryx/distributions#FULLY_REPARAMETERIZED"><code translate="no" dir="ltr">distributions.FULLY_REPARAMETERIZED</code></a> or <a href="https://www.tensorflow.org/probability/oryx/api_docs/python/oryx/distributions#NOT_REPARAMETERIZED"><code translate="no" dir="ltr">distributions.NOT_REPARAMETERIZED</code></a>. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">validate_args</code> </td> <td> Python <code translate="no" dir="ltr">bool</code> indicating possibly expensive checks are enabled. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="batch_shape_tensor" data-text="batch_shape_tensor"><code translate="no" dir="ltr">batch_shape_tensor</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L637-L654">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+batch_shape_tensor(
+    name='batch_shape_tensor'
+)
+</pre> <p>Shape of a single sample from a single event index as a 1-D <code translate="no" dir="ltr">Tensor</code>.</p> <p>The batch dimensions are indexes into independent, non-identical parameterizations of this distribution.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> name to give to the op </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">batch_shape</code> </td> <td> <code translate="no" dir="ltr">Tensor</code>. </td> </tr> </table> <h3 id="cdf" data-text="cdf"><code translate="no" dir="ltr">cdf</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L881-L898">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+cdf(
+    value, name='cdf'
+)
+</pre> <p>Cumulative distribution function.</p> <p>Given random variable <code translate="no" dir="ltr">X</code>, the cumulative distribution function <code translate="no" dir="ltr">cdf</code> is:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">cdf(x) := P[X &lt;= x]
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">cdf</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> </table> <h3 id="copy" data-text="copy"><code translate="no" dir="ltr">copy</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L615-L631">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+copy(
+    **override_parameters_kwargs
+)
+</pre> <p>Creates a deep copy of the distribution.</p> <blockquote class="note">
+<strong>Note:</strong><span> the copy distribution may continue to depend on the original initialization arguments.</span>
+</blockquote>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">**override_parameters_kwargs</code> </td> <td> String/value dictionary of initialization arguments to override with new values. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">distribution</code> </td> <td> A new instance of <code translate="no" dir="ltr">type(self)</code> initialized from the union of self.parameters and override_parameters_kwargs, i.e., <code translate="no" dir="ltr">dict(self.parameters, **override_parameters_kwargs)</code>. </td> </tr> </table> <h3 id="covariance" data-text="covariance"><code translate="no" dir="ltr">covariance</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1094-L1131">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+covariance(
+    name='covariance'
+)
+</pre> <p>Covariance.</p> <p>Covariance is (possibly) defined only for non-scalar-event distributions.</p> <p>For example, for a length-<code translate="no" dir="ltr">k</code>, vector-valued distribution, it is calculated as,</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">Cov[i, j] = Covariance(X_i, X_j) = E[(X_i - E[X_i]) (X_j - E[X_j])]
+</pre> <p>where <code translate="no" dir="ltr">Cov</code> is a (batch of) <code translate="no" dir="ltr">k x k</code> matrix, <code translate="no" dir="ltr">0 &lt;= (i, j) &lt; k</code>, and <code translate="no" dir="ltr">E</code> denotes expectation.</p> <p>Alternatively, for non-vector, multivariate distributions (e.g., matrix-valued, Wishart), <code translate="no" dir="ltr">Covariance</code> shall return a (batch of) matrices under some vectorization of the events, i.e.,</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">Cov[i, j] = Covariance(Vec(X)_i, Vec(X)_j) = [as above]
+</pre> <p>where <code translate="no" dir="ltr">Cov</code> is a (batch of) <code translate="no" dir="ltr">k' x k'</code> matrices, <code translate="no" dir="ltr">0 &lt;= (i, j) &lt; k' = reduce_prod(event_shape)</code>, and <code translate="no" dir="ltr">Vec</code> is some function mapping indices of this distribution's event dimensions to indices of a length-<code translate="no" dir="ltr">k'</code> vector.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">covariance</code> </td> <td> Floating-point <code translate="no" dir="ltr">Tensor</code> with shape <code translate="no" dir="ltr">[B1, ..., Bn, k', k']</code> where the first <code translate="no" dir="ltr">n</code> dimensions are batch coordinates and <code translate="no" dir="ltr">k' = reduce_prod(self.event_shape)</code>. </td> </tr> </table> <h3 id="cross_entropy" data-text="cross_entropy"><code translate="no" dir="ltr">cross_entropy</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1146-L1169">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+cross_entropy(
+    other, name='cross_entropy'
+)
+</pre> <p>Computes the (Shannon) cross entropy.</p> <p>Denote this distribution (<code translate="no" dir="ltr">self</code>) by <code translate="no" dir="ltr">P</code> and the <code translate="no" dir="ltr">other</code> distribution by <code translate="no" dir="ltr">Q</code>. Assuming <code translate="no" dir="ltr">P, Q</code> are absolutely continuous with respect to one another and permit densities <code translate="no" dir="ltr">p(x) dr(x)</code> and <code translate="no" dir="ltr">q(x) dr(x)</code>, (Shanon) cross entropy is defined as:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">H[P, Q] = E_p[-log q(X)] = -int_F p(x) log q(x) dr(x)
+</pre> <p>where <code translate="no" dir="ltr">F</code> denotes the support of the random variable <code translate="no" dir="ltr">X ~ P</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">other</code> </td> <td> <a href="https://www.tensorflow.org/probability/api_docs/python/tfp/distributions/Distribution"><code translate="no" dir="ltr">tfp.distributions.Distribution</code></a> instance. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">cross_entropy</code> </td> <td> <code translate="no" dir="ltr">self.dtype</code> <code translate="no" dir="ltr">Tensor</code> with shape <code translate="no" dir="ltr">[B1, ..., Bn]</code> representing <code translate="no" dir="ltr">n</code> different calculations of (Shanon) cross entropy. </td> </tr> </table> <h3 id="entropy" data-text="entropy"><code translate="no" dir="ltr">entropy</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L982-L985">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+entropy(
+    name='entropy'
+)
+</pre> <p>Shannon entropy in nats.</p> <h3 id="event_shape_tensor" data-text="event_shape_tensor"><code translate="no" dir="ltr">event_shape_tensor</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L677-L691">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+event_shape_tensor(
+    name='event_shape_tensor'
+)
+</pre> <p>Shape of a single sample from a single batch as a 1-D int32 <code translate="no" dir="ltr">Tensor</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> name to give to the op </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">event_shape</code> </td> <td> <code translate="no" dir="ltr">Tensor</code>. </td> </tr> </table> <h3 id="is_scalar_batch" data-text="is_scalar_batch"><code translate="no" dir="ltr">is_scalar_batch</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L721-L733">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+is_scalar_batch(
+    name='is_scalar_batch'
+)
+</pre> <p>Indicates that <code translate="no" dir="ltr">batch_shape == []</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">is_scalar_batch</code> </td> <td> <code translate="no" dir="ltr">bool</code> scalar <code translate="no" dir="ltr">Tensor</code>. </td> </tr> </table> <h3 id="is_scalar_event" data-text="is_scalar_event"><code translate="no" dir="ltr">is_scalar_event</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L707-L719">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+is_scalar_event(
+    name='is_scalar_event'
+)
+</pre> <p>Indicates that <code translate="no" dir="ltr">event_shape == []</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">is_scalar_event</code> </td> <td> <code translate="no" dir="ltr">bool</code> scalar <code translate="no" dir="ltr">Tensor</code>. </td> </tr> </table> <h3 id="kl_divergence" data-text="kl_divergence"><code translate="no" dir="ltr">kl_divergence</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1175-L1201">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+kl_divergence(
+    other, name='kl_divergence'
+)
+</pre> <p>Computes the Kullback--Leibler divergence.</p> <p>Denote this distribution (<code translate="no" dir="ltr">self</code>) by <code translate="no" dir="ltr">p</code> and the <code translate="no" dir="ltr">other</code> distribution by <code translate="no" dir="ltr">q</code>. Assuming <code translate="no" dir="ltr">p, q</code> are absolutely continuous with respect to reference measure <code translate="no" dir="ltr">r</code>, the KL divergence is defined as:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">KL[p, q] = E_p[log(p(X)/q(X))]
+         = -int_F p(x) log q(x) dr(x) + int_F p(x) log p(x) dr(x)
+         = H[p, q] - H[p]
+</pre> <p>where <code translate="no" dir="ltr">F</code> denotes the support of the random variable <code translate="no" dir="ltr">X ~ p</code>, <code translate="no" dir="ltr">H[., .]</code> denotes (Shanon) cross entropy, and <code translate="no" dir="ltr">H[.]</code> denotes (Shanon) entropy.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">other</code> </td> <td> <a href="https://www.tensorflow.org/probability/api_docs/python/tfp/distributions/Distribution"><code translate="no" dir="ltr">tfp.distributions.Distribution</code></a> instance. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">kl_divergence</code> </td> <td> <code translate="no" dir="ltr">self.dtype</code> <code translate="no" dir="ltr">Tensor</code> with shape <code translate="no" dir="ltr">[B1, ..., Bn]</code> representing <code translate="no" dir="ltr">n</code> different calculations of the Kullback-Leibler divergence. </td> </tr> </table> <h3 id="log_cdf" data-text="log_cdf"><code translate="no" dir="ltr">log_cdf</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L842-L863">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+log_cdf(
+    value, name='log_cdf'
+)
+</pre> <p>Log cumulative distribution function.</p> <p>Given random variable <code translate="no" dir="ltr">X</code>, the cumulative distribution function <code translate="no" dir="ltr">cdf</code> is:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">log_cdf(x) := Log[ P[X &lt;= x] ]
+</pre> <p>Often, a numerical approximation can be used for <code translate="no" dir="ltr">log_cdf(x)</code> that yields a more accurate answer than simply taking the logarithm of the <code translate="no" dir="ltr">cdf</code> when <code translate="no" dir="ltr">x &lt;&lt; -1</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">logcdf</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> </table> <h3 id="log_prob" data-text="log_prob"><code translate="no" dir="ltr">log_prob</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L784-L795">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+log_prob(
+    value, name='log_prob'
+)
+</pre> <p>Log probability density/mass function.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">log_prob</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> </table> <h3 id="log_survival_function" data-text="log_survival_function"><code translate="no" dir="ltr">log_survival_function</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L917-L939">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+log_survival_function(
+    value, name='log_survival_function'
+)
+</pre> <p>Log survival function.</p> <p>Given random variable <code translate="no" dir="ltr">X</code>, the survival function is defined:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">log_survival_function(x) = Log[ P[X &gt; x] ]
+                         = Log[ 1 - P[X &lt;= x] ]
+                         = Log[ 1 - cdf(x) ]
+</pre> <p>Typically, different numerical approximations can be used for the log survival function, which are more accurate than <code translate="no" dir="ltr">1 - cdf(x)</code> when <code translate="no" dir="ltr">x &gt;&gt; 1</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> 
+</table> <h3 id="mean" data-text="mean"><code translate="no" dir="ltr">mean</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L991-L994">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+mean(
+    name='mean'
+)
+</pre> <p>Mean.</p> <h3 id="mode" data-text="mode"><code translate="no" dir="ltr">mode</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1137-L1140">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+mode(
+    name='mode'
+)
+</pre> <p>Mode.</p> <h3 id="param_shapes" data-text="param_shapes"><code translate="no" dir="ltr">param_shapes</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L497-L516">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+@classmethod
+param_shapes(
+    sample_shape, name='DistributionParamShapes'
+)
+</pre> <p>Shapes of parameters given the desired shape of a call to <code translate="no" dir="ltr">sample()</code>.</p> <p>This is a class method that describes what key/value arguments are required to instantiate the given <code translate="no" dir="ltr">Distribution</code> so that a particular shape is returned for that instance's call to <code translate="no" dir="ltr">sample()</code>.</p> <p>Subclasses should override class method <code translate="no" dir="ltr">_param_shapes</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">sample_shape</code> </td> <td> <code translate="no" dir="ltr">Tensor</code> or python list/tuple. Desired shape of a call to <code translate="no" dir="ltr">sample()</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> name to prepend ops with. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> <code translate="no" dir="ltr">dict</code> of parameter name to <code translate="no" dir="ltr">Tensor</code> shapes. </td> </tr> 
+</table> <h3 id="param_static_shapes" data-text="param_static_shapes"><code translate="no" dir="ltr">param_static_shapes</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L518-L555">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+@classmethod
+param_static_shapes(
+    sample_shape
+)
+</pre> <p>param_shapes with static (i.e. <code translate="no" dir="ltr">TensorShape</code>) shapes.</p> <p>This is a class method that describes what key/value arguments are required to instantiate the given <code translate="no" dir="ltr">Distribution</code> so that a particular shape is returned for that instance's call to <code translate="no" dir="ltr">sample()</code>. Assumes that the sample's shape is known statically.</p> <p>Subclasses should override class method <code translate="no" dir="ltr">_param_shapes</code> to return constant-valued tensors when constant values are fed.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">sample_shape</code> </td> <td> <code translate="no" dir="ltr">TensorShape</code> or python list/tuple. Desired shape of a call to <code translate="no" dir="ltr">sample()</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> <code translate="no" dir="ltr">dict</code> of parameter name to <code translate="no" dir="ltr">TensorShape</code>. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if <code translate="no" dir="ltr">sample_shape</code> is a <code translate="no" dir="ltr">TensorShape</code> and is not fully defined. </td> </tr> </table> <h3 id="prob" data-text="prob"><code translate="no" dir="ltr">prob</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L813-L824">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+prob(
+    value, name='prob'
+)
+</pre> <p>Probability density/mass function.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">prob</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> </table> <h3 id="quantile" data-text="quantile"><code translate="no" dir="ltr">quantile</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1006-L1023">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+quantile(
+    value, name='quantile'
+)
+</pre> <p>Quantile function. Aka "inverse cdf" or "percent point function".</p> <p>Given random variable <code translate="no" dir="ltr">X</code> and <code translate="no" dir="ltr">p in [0, 1]</code>, the <code translate="no" dir="ltr">quantile</code> is:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">quantile(p) := x such that P[X &lt;= x] == p
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">quantile</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> </table> <h3 id="sample" data-text="sample"><code translate="no" dir="ltr">sample</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L752-L766">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+sample(
+    sample_shape=(), seed=None, name='sample'
+)
+</pre> <p>Generate samples of the specified shape.</p> <p>Note that a call to <code translate="no" dir="ltr">sample()</code> without arguments will generate a single sample.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">sample_shape</code> </td> <td> 0D or 1D <code translate="no" dir="ltr">int32</code> <code translate="no" dir="ltr">Tensor</code>. Shape of the generated samples. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">seed</code> </td> <td> Python integer seed for RNG </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> name to give to the op. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">samples</code> </td> <td> a <code translate="no" dir="ltr">Tensor</code> with prepended dimensions <code translate="no" dir="ltr">sample_shape</code>. </td> </tr> </table> <h3 id="stddev" data-text="stddev"><code translate="no" dir="ltr">stddev</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1061-L1088">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+stddev(
+    name='stddev'
+)
+</pre> <p>Standard deviation.</p> <p>Standard deviation is defined as,</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">stddev = E[(X - E[X])**2]**0.5
+</pre> <p>where <code translate="no" dir="ltr">X</code> is the random variable associated with this distribution, <code translate="no" dir="ltr">E</code> denotes expectation, and <code translate="no" dir="ltr">stddev.shape = batch_shape + event_shape</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">stddev</code> </td> <td> Floating-point <code translate="no" dir="ltr">Tensor</code> with shape identical to <code translate="no" dir="ltr">batch_shape + event_shape</code>, i.e., the same shape as <code translate="no" dir="ltr">self.mean()</code>. </td> </tr> </table> <h3 id="survival_function" data-text="survival_function"><code translate="no" dir="ltr">survival_function</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L957-L976">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+survival_function(
+    value, name='survival_function'
+)
+</pre> <p>Survival function.</p> <p>Given random variable <code translate="no" dir="ltr">X</code>, the survival function is defined:</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">survival_function(x) = P[X &gt; x]
+                     = 1 - P[X &lt;= x]
+                     = 1 - cdf(x).
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">value</code> </td> <td> <code translate="no" dir="ltr">float</code> or <code translate="no" dir="ltr">double</code> <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> <code translate="no" dir="ltr">Tensor</code> of shape <code translate="no" dir="ltr">sample_shape(x) + self.batch_shape</code> with values of type <code translate="no" dir="ltr">self.dtype</code>. </td> </tr> 
+</table> <h3 id="variance" data-text="variance"><code translate="no" dir="ltr">variance</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/distributions/distribution.py#L1029-L1055">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+variance(
+    name='variance'
+)
+</pre> <p>Variance.</p> <p>Variance is defined as,</p> <pre class="devsite-click-to-copy" translate="no" dir="ltr" data-language="cpp">Var = E[(X - E[X])**2]
+</pre> <p>where <code translate="no" dir="ltr">X</code> is the random variable associated with this distribution, <code translate="no" dir="ltr">E</code> denotes expectation, and <code translate="no" dir="ltr">Var.shape = batch_shape + event_shape</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Python <code translate="no" dir="ltr">str</code> prepended to names of ops created by this function. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">variance</code> </td> <td> Floating-point <code translate="no" dir="ltr">Tensor</code> with shape identical to <code translate="no" dir="ltr">batch_shape + event_shape</code>, i.e., the same shape as <code translate="no" dir="ltr">self.mean()</code>. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/compat/v1/distributions/Distribution" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/compat/v1/distributions/Distribution</a>
+  </p>
+</div>

@@ -1,0 +1,53 @@
+<h1 id="torch-nn-utils-parametrize-register-parametrization">torch.nn.utils.parametrize.register_parametrization</h1> <dl class="py function"> <dt class="sig sig-object py" id="torch.nn.utils.parametrize.register_parametrization">
+<code>torch.nn.utils.parametrize.register_parametrization(module, tensor_name, parametrization, *, unsafe=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/nn/utils/parametrize.html#register_parametrization"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Adds a parametrization to a tensor in a module.</p> <p>Assume that <code>tensor_name="weight"</code> for simplicity. When accessing <code>module.weight</code>, the module will return the parametrized version <code>parametrization(module.weight)</code>. If the original tensor requires a gradient, the backward pass will differentiate through <code>parametrization</code>, and the optimizer will update the tensor accordingly.</p> <p>The first time that a module registers a parametrization, this function will add an attribute <code>parametrizations</code> to the module of type <a class="reference internal" href="torch.nn.utils.parametrize.parametrizationlist#torch.nn.utils.parametrize.ParametrizationList" title="torch.nn.utils.parametrize.ParametrizationList"><code>ParametrizationList</code></a>.</p> <p>The list of parametrizations on the tensor <code>weight</code> will be accessible under <code>module.parametrizations.weight</code>.</p> <p>The original tensor will be accessible under <code>module.parametrizations.weight.original</code>.</p> <p>Parametrizations may be concatenated by registering several parametrizations on the same attribute.</p> <p>The training mode of a registered parametrization is updated on registration to match the training mode of the host module</p> <p>Parametrized parameters and buffers have an inbuilt caching system that can be activated using the context manager <a class="reference internal" href="torch.nn.utils.parametrize.cached#torch.nn.utils.parametrize.cached" title="torch.nn.utils.parametrize.cached"><code>cached()</code></a>.</p> <p>A <code>parametrization</code> may optionally implement a method with signature</p> <pre data-language="python">def right_inverse(self, X: Tensor) -&gt; Union[Tensor, Sequence[Tensor]]
+</pre> <p>This method is called on the unparametrized tensor when the first parametrization is registered to compute the initial value of the original tensor. If this method is not implemented, the original tensor will be just the unparametrized tensor.</p> <p>If all the parametrizations registered on a tensor implement <code>right_inverse</code> it is possible to initialize a parametrized tensor by assigning to it, as shown in the example below.</p> <p>It is possible for the first parametrization to depend on several inputs. This may be implemented returning a tuple of tensors from <code>right_inverse</code> (see the example implementation of a <code>RankOne</code> parametrization below).</p> <p>In this case, the unconstrained tensors are also located under <code>module.parametrizations.weight</code> with names <code>original0</code>, <code>original1</code>,…</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>If unsafe=False (default) both the forward and right_inverse methods will be called once to perform a number of consistency checks. If unsafe=True, then right_inverse will be called if the tensor is not parametrized, and nothing will be called otherwise.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>In most situations, <code>right_inverse</code> will be a function such that <code>forward(right_inverse(X)) == X</code> (see <a class="reference external" href="https://en.wikipedia.org/wiki/Inverse_function#Right_inverses">right inverse</a>). Sometimes, when the parametrization is not surjective, it may be reasonable to relax this.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>If a parametrization depends on several inputs, <a class="reference internal" href="#torch.nn.utils.parametrize.register_parametrization" title="torch.nn.utils.parametrize.register_parametrization"><code>register_parametrization()</code></a> will register a number of new parameters. If such parametrization is registered after the optimizer is created, these new parameters will need to be added manually to the optimizer. See <code>torch.Optimizer.add_param_group()</code>.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module</strong> (<a class="reference internal" href="torch.nn.module#torch.nn.Module" title="torch.nn.Module">nn.Module</a>) – module on which to register the parametrization</li> <li>
+<strong>tensor_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – name of the parameter or buffer on which to register the parametrization</li> <li>
+<strong>parametrization</strong> (<a class="reference internal" href="torch.nn.module#torch.nn.Module" title="torch.nn.Module">nn.Module</a>) – the parametrization to register</li> </ul> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<p><strong>unsafe</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – a boolean flag that denotes whether the parametrization may change the dtype and shape of the tensor. Default: <code>False</code> Warning: the parametrization is not checked for consistency upon registration. Enable this flag at your own risk.</p> </dd> <dt class="field-odd">Raises</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.12)"><strong>ValueError</strong></a> – if the module does not have a parameter or a buffer named <code>tensor_name</code></p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a></p> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.nn as nn
+&gt;&gt;&gt; import torch.nn.utils.parametrize as P
+&gt;&gt;&gt;
+&gt;&gt;&gt; class Symmetric(nn.Module):
+&gt;&gt;&gt;     def forward(self, X):
+&gt;&gt;&gt;         return X.triu() + X.triu(1).T  # Return a symmetric matrix
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def right_inverse(self, A):
+&gt;&gt;&gt;         return A.triu()
+&gt;&gt;&gt;
+&gt;&gt;&gt; m = nn.Linear(5, 5)
+&gt;&gt;&gt; P.register_parametrization(m, "weight", Symmetric())
+&gt;&gt;&gt; print(torch.allclose(m.weight, m.weight.T))  # m.weight is now symmetric
+True
+&gt;&gt;&gt; A = torch.rand(5, 5)
+&gt;&gt;&gt; A = A + A.T   # A is now symmetric
+&gt;&gt;&gt; m.weight = A  # Initialize the weight to be the symmetric matrix A
+&gt;&gt;&gt; print(torch.allclose(m.weight, A))
+True
+</pre> <pre data-language="python">&gt;&gt;&gt; class RankOne(nn.Module):
+&gt;&gt;&gt;     def forward(self, x, y):
+&gt;&gt;&gt;         # Form a rank 1 matrix multiplying two vectors
+&gt;&gt;&gt;         return x.unsqueeze(-1) @ y.unsqueeze(-2)
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def right_inverse(self, Z):
+&gt;&gt;&gt;         # Project Z onto the rank 1 matrices
+&gt;&gt;&gt;         U, S, Vh = torch.linalg.svd(Z, full_matrices=False)
+&gt;&gt;&gt;         # Return rescaled singular vectors
+&gt;&gt;&gt;         s0_sqrt = S[0].sqrt().unsqueeze(-1)
+&gt;&gt;&gt;         return U[..., :, 0] * s0_sqrt, Vh[..., 0, :] * s0_sqrt
+&gt;&gt;&gt;
+&gt;&gt;&gt; linear_rank_one = P.register_parametrization(nn.Linear(4, 4), "weight", RankOne())
+&gt;&gt;&gt; print(torch.linalg.matrix_rank(linear_rank_one.weight).item())
+1
+</pre> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/generated/torch.nn.utils.parametrize.register_parametrization.html" class="_attribution-link">https://pytorch.org/docs/2.1/generated/torch.nn.utils.parametrize.register_parametrization.html</a>
+  </p>
+</div>

@@ -1,0 +1,554 @@
+<h1 id="id1">torch.export</h1> <div class="admonition warning" id="torch-export"> <p class="admonition-title">Warning</p> <p>This feature is a prototype under active development and there WILL BE BREAKING CHANGES in the future.</p> </div>  <h2 id="overview">Overview</h2> <p><a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>torch.export.export()</code></a> takes an arbitrary Python callable (a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a>, a function or a method) and produces a traced graph representing only the Tensor computation of the function in an Ahead-of-Time (AOT) fashion, which can subsequently be executed with different outputs or serialized.</p> <pre data-language="python">import torch
+from torch.export import export
+
+def f(x: torch.Tensor, y: torch.Tensor) -&gt; torch.Tensor:
+    a = torch.sin(x)
+    b = torch.cos(y)
+    return a + b
+
+example_args = (torch.randn(10, 10), torch.randn(10, 10))
+
+exported_program: torch.export.ExportedProgram = export(
+    f, args=example_args
+)
+print(exported_program)
+</pre> <pre data-language="python">ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, arg0_1: f32[10, 10], arg1_1: f32[10, 10]):
+            # code: a = torch.sin(x)
+            sin: f32[10, 10] = torch.ops.aten.sin.default(arg0_1);
+
+            # code: b = torch.cos(y)
+            cos: f32[10, 10] = torch.ops.aten.cos.default(arg1_1);
+
+            # code: return a + b
+            add: f32[10, 10] = torch.ops.aten.add.Tensor(sin, cos);
+            return (add,)
+
+    Graph signature: ExportGraphSignature(
+        parameters=[],
+        buffers=[],
+        user_inputs=['arg0_1', 'arg1_1'],
+        user_outputs=['add'],
+        inputs_to_parameters={},
+        inputs_to_buffers={},
+        buffers_to_mutate={},
+        backward_signature=None,
+        assertion_dep_token=None,
+    )
+    Range constraints: {}
+    Equality constraints: []
+</pre> <p><code>torch.export</code> produces a clean intermediate representation (IR) with the following invariants. More specifications about the IR can be found here (coming soon!).</p> <ul class="simple"> <li>
+<strong>Soundness</strong>: It is guaranteed to be a sound representation of the original program, and maintains the same calling conventions of the original program.</li> <li>
+<strong>Normalized</strong>: There are no Python semantics within the graph. Submodules from the original programs are inlined to form one fully flattened computational graph.</li> <li>
+<strong>Defined Operator Set</strong>: The graph produced contains only a small defined <a class="reference internal" href="torch.compiler_ir#torch-compiler-ir"><span class="std std-ref">Core ATen IR</span></a> opset and registered custom operators.</li> <li>
+<strong>Graph properties</strong>: The graph is purely functional, meaning it does not contain operations with side effects such as mutations or aliasing. It does not mutate any intermediate values, parameters, or buffers.</li> <li>
+<strong>Metadata</strong>: The graph contains metadata captured during tracing, such as a stacktrace from user’s code.</li> </ul> <p>Under the hood, <code>torch.export</code> leverages the following latest technologies:</p> <ul class="simple"> <li>
+<strong>TorchDynamo (torch._dynamo)</strong> is an internal API that uses a CPython feature called the Frame Evaluation API to safely trace PyTorch graphs. This provides a massively improved graph capturing experience, with much fewer rewrites needed in order to fully trace the PyTorch code.</li> <li>
+<strong>AOT Autograd</strong> provides a functionalized PyTorch graph and ensures the graph is decomposed/lowered to the small defined Core ATen operator set.</li> <li>
+<strong>Torch FX (torch.fx)</strong> is the underlying representation of the graph, allowing flexible Python-based transformations.</li> </ul>  <h3 id="existing-frameworks">Existing frameworks</h3> <p><a class="reference internal" href="generated/torch.compile#torch.compile" title="torch.compile"><code>torch.compile()</code></a> also utilizes the same PT2 stack as <code>torch.export</code>, but is slightly different:</p> <ul class="simple"> <li>
+<strong>JIT vs. AOT</strong>: <a class="reference internal" href="generated/torch.compile#torch.compile" title="torch.compile"><code>torch.compile()</code></a> is a JIT compiler whereas which is not intended to be used to produce compiled artifacts outside of deployment.</li> <li>
+<strong>Partial vs. Full Graph Capture</strong>: When <a class="reference internal" href="generated/torch.compile#torch.compile" title="torch.compile"><code>torch.compile()</code></a> runs into an untraceable part of a model, it will “graph break” and fall back to running the program in the eager Python runtime. In comparison, <code>torch.export</code> aims to get a full graph representation of a PyTorch model, so it will error out when something untraceable is reached. Since <code>torch.export</code> produces a full graph disjoint from any Python features or runtime, this graph can then be saved, loaded, and run in different environments and languages.</li> <li>
+<strong>Usability tradeoff</strong>: Since <a class="reference internal" href="generated/torch.compile#torch.compile" title="torch.compile"><code>torch.compile()</code></a> is able to fallback to the Python runtime whenever it reaches something untraceable, it is a lot more flexible. <code>torch.export</code> will instead require users to provide more information or rewrite their code to make it traceable.</li> </ul> <p>Compared to <a class="reference internal" href="fx#torch.fx.symbolic_trace" title="torch.fx.symbolic_trace"><code>torch.fx.symbolic_trace()</code></a>, <code>torch.export</code> traces using TorchDynamo which operates at the Python bytecode level, giving it the ability to trace arbitrary Python constructs not limited by what Python operator overloading supports. Additionally, <code>torch.export</code> keeps fine-grained track of tensor metadata, so that conditionals on things like tensor shapes do not fail tracing. In general, <code>torch.export</code> is expected to work on more user programs, and produce lower-level graphs (at the <code>torch.ops.aten</code> operator level). Note that users can still use <a class="reference internal" href="fx#torch.fx.symbolic_trace" title="torch.fx.symbolic_trace"><code>torch.fx.symbolic_trace()</code></a> as a preprocessing step before <code>torch.export</code>.</p> <p>Compared to <a class="reference internal" href="generated/torch.jit.script#torch.jit.script" title="torch.jit.script"><code>torch.jit.script()</code></a>, <code>torch.export</code> does not capture Python control flow or data structures, but it supports more Python language features than TorchScript (as it is easier to have comprehensive coverage over Python bytecodes). The resulting graphs are simpler and only have straight line control flow (except for explicit control flow operators).</p> <p>Compared to <a class="reference internal" href="generated/torch.jit.trace#torch.jit.trace" title="torch.jit.trace"><code>torch.jit.trace()</code></a>, <code>torch.export</code> is sound: it is able to trace code that performs integer computation on sizes and records all of the side-conditions necessary to show that a particular trace is valid for other inputs.</p>    <h2 id="exporting-a-pytorch-model">Exporting a PyTorch Model</h2>  <h3 id="an-example">An Example</h3> <p>The main entrypoint is through <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>torch.export.export()</code></a>, which takes a callable (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a>, function, or method) and sample inputs, and captures the computation graph into an <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>torch.export.ExportedProgram</code></a>. An example:</p> <pre data-language="python">import torch
+from torch.export import export
+
+# Simple module for demonstration
+class M(torch.nn.Module):
+    def __init__(self) -&gt; None:
+        super().__init__()
+        self.conv = torch.nn.Conv2d(
+            in_channels=3, out_channels=16, kernel_size=3, padding=1
+        )
+        self.relu = torch.nn.ReLU()
+        self.maxpool = torch.nn.MaxPool2d(kernel_size=3)
+
+    def forward(self, x: torch.Tensor, *, constant=None) -&gt; torch.Tensor:
+        a = self.conv(x)
+        a.add_(constant)
+        return self.maxpool(self.relu(a))
+
+example_args = (torch.randn(1, 3, 256, 256),)
+example_kwargs = {"constant": torch.ones(1, 16, 256, 256)}
+
+exported_program: torch.export.ExportedProgram = export(
+    M(), args=example_args, kwargs=example_kwargs
+)
+print(exported_program)
+</pre> <pre data-language="python">ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, arg0_1: f32[16, 3, 3, 3], arg1_1: f32[16], arg2_1: f32[1, 3, 256, 256], arg3_1: f32[1, 16, 256, 256]):
+
+            # code: a = self.conv(x)
+            convolution: f32[1, 16, 256, 256] = torch.ops.aten.convolution.default(
+                arg2_1, arg0_1, arg1_1, [1, 1], [1, 1], [1, 1], False, [0, 0], 1
+            );
+
+            # code: a.add_(constant)
+            add: f32[1, 16, 256, 256] = torch.ops.aten.add.Tensor(convolution, arg3_1);
+
+            # code: return self.maxpool(self.relu(a))
+            relu: f32[1, 16, 256, 256] = torch.ops.aten.relu.default(add);
+            max_pool2d_with_indices = torch.ops.aten.max_pool2d_with_indices.default(
+                relu, [3, 3], [3, 3]
+            );
+            getitem: f32[1, 16, 85, 85] = max_pool2d_with_indices[0];
+            return (getitem,)
+
+    Graph signature: ExportGraphSignature(
+        parameters=['L__self___conv.weight', 'L__self___conv.bias'],
+        buffers=[],
+        user_inputs=['arg2_1', 'arg3_1'],
+        user_outputs=['getitem'],
+        inputs_to_parameters={
+            'arg0_1': 'L__self___conv.weight',
+            'arg1_1': 'L__self___conv.bias',
+        },
+        inputs_to_buffers={},
+        buffers_to_mutate={},
+        backward_signature=None,
+        assertion_dep_token=None,
+    )
+    Range constraints: {}
+    Equality constraints: []
+</pre> <p>Inspecting the <code>ExportedProgram</code>, we can note the following:</p> <ul class="simple"> <li>The <a class="reference internal" href="fx#torch.fx.Graph" title="torch.fx.Graph"><code>torch.fx.Graph</code></a> contains the computation graph of the original program, along with records of the original code for easy debugging.</li> <li>The graph contains only <code>torch.ops.aten</code> operators found in the <a class="reference internal" href="torch.compiler_ir#torch-compiler-ir"><span class="std std-ref">Core ATen IR</span></a> opset and custom operators, and is fully functional, without any inplace operators such as <code>torch.add_</code>.</li> <li>The parameters (weight and bias to conv) are lifted as inputs to the graph, resulting in no <code>get_attr</code> nodes in the graph, which previously existed in the result of <a class="reference internal" href="fx#torch.fx.symbolic_trace" title="torch.fx.symbolic_trace"><code>torch.fx.symbolic_trace()</code></a>.</li> <li>The <a class="reference internal" href="#torch.export.ExportGraphSignature" title="torch.export.ExportGraphSignature"><code>torch.export.ExportGraphSignature</code></a> models the input and output signature, along with specifying which inputs are parameters.</li> <li>The resulting shape and dtype of tensors produced by each node in the graph is noted. For example, the <code>convolution</code> node will result in a tensor of dtype <code>torch.float32</code> and shape (1, 16, 256, 256).</li> </ul>   <h3 id="expressing-dynamism">Expressing Dynamism</h3> <p>By default <code>torch.export</code> will trace the program assuming all input shapes are <strong>static</strong>, and specializing the exported program to those dimensions. However, some dimensions, such as a batch dimension, can be dynamic and vary from run to run. Such dimensions must be marked dynamic using the <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>torch.export.dynamic_dim()</code></a> API, and passed into <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>torch.export.export()</code></a> through the <code>constraints</code> argument. An example:</p> <pre data-language="python">import torch
+from torch.export import export, dynamic_dim
+
+class M(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.branch1 = torch.nn.Sequential(
+            torch.nn.Linear(64, 32), torch.nn.ReLU()
+        )
+        self.branch2 = torch.nn.Sequential(
+            torch.nn.Linear(128, 64), torch.nn.ReLU()
+        )
+        self.buffer = torch.ones(32)
+
+    def forward(self, x1, x2):
+        out1 = self.branch1(x1)
+        out2 = self.branch2(x2)
+        return (out1 + self.buffer, out2)
+
+example_args = (torch.randn(32, 64), torch.randn(32, 128))
+constraints = [
+    # First dimension of each input is a dynamic batch size
+    dynamic_dim(example_args[0], 0),
+    dynamic_dim(example_args[1], 0),
+    # The dynamic batch size between the inputs are equal
+    dynamic_dim(example_args[0], 0) == dynamic_dim(example_args[1], 0),
+]
+
+exported_program: torch.export.ExportedProgram = export(
+  M(), args=example_args, constraints=constraints
+)
+print(exported_program)
+</pre> <pre data-language="python">ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, arg0_1: f32[32, 64], arg1_1: f32[32], arg2_1: f32[64, 128], arg3_1: f32[64], arg4_1: f32[32], arg5_1: f32[s0, 64], arg6_1: f32[s0, 128]):
+
+            # code: out1 = self.branch1(x1)
+            permute: f32[64, 32] = torch.ops.aten.permute.default(arg0_1, [1, 0]);
+            addmm: f32[s0, 32] = torch.ops.aten.addmm.default(arg1_1, arg5_1, permute);
+            relu: f32[s0, 32] = torch.ops.aten.relu.default(addmm);
+
+            # code: out2 = self.branch2(x2)
+            permute_1: f32[128, 64] = torch.ops.aten.permute.default(arg2_1, [1, 0]);
+            addmm_1: f32[s0, 64] = torch.ops.aten.addmm.default(arg3_1, arg6_1, permute_1);
+            relu_1: f32[s0, 64] = torch.ops.aten.relu.default(addmm_1);  addmm_1 = None
+
+            # code: return (out1 + self.buffer, out2)
+            add: f32[s0, 32] = torch.ops.aten.add.Tensor(relu, arg4_1);
+            return (add, relu_1)
+
+    Graph signature: ExportGraphSignature(
+        parameters=[
+            'branch1.0.weight',
+            'branch1.0.bias',
+            'branch2.0.weight',
+            'branch2.0.bias',
+        ],
+        buffers=['L__self___buffer'],
+        user_inputs=['arg5_1', 'arg6_1'],
+        user_outputs=['add', 'relu_1'],
+        inputs_to_parameters={
+            'arg0_1': 'branch1.0.weight',
+            'arg1_1': 'branch1.0.bias',
+            'arg2_1': 'branch2.0.weight',
+            'arg3_1': 'branch2.0.bias',
+        },
+        inputs_to_buffers={'arg4_1': 'L__self___buffer'},
+        buffers_to_mutate={},
+        backward_signature=None,
+        assertion_dep_token=None,
+    )
+    Range constraints: {s0: RangeConstraint(min_val=2, max_val=9223372036854775806)}
+    Equality constraints: [(InputDim(input_name='arg5_1', dim=0), InputDim(input_name='arg6_1', dim=0))]
+</pre> <p>Some additional things to note:</p> <ul class="simple"> <li>Through the <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>torch.export.dynamic_dim()</code></a> API, we specified the first dimension of each input to be dynamic. Looking at the inputs <code>arg5_1</code> and <code>arg6_1</code>, they have a symbolic shape of (s0, 64) and (s0, 128), instead of the (32, 64) and (32, 128) shaped tensors that we passed in as example inputs. <code>s0</code> is a symbol representing that this dimension can be a range of values.</li> <li>
+<code>exported_program.range_constraints</code> describes the ranges of each symbol appearing in the graph. In this case, we see that <code>s0</code> has the range [2, inf]. For technical reasons that are difficult to explain here, they are assumed to be not 0 or 1. This is not a bug, and does not necessarily mean that the exported program will not work for dimensions 0 or 1. See <a class="reference external" href="https://docs.google.com/document/d/16VPOa3d-Liikf48teAOmxLc92rgvJdfosIy-yoT38Io/edit?fbclid=IwAR3HNwmmexcitV0pbZm_x1a4ykdXZ9th_eJWK-3hBtVgKnrkmemz6Pm5jRQ#heading=h.ez923tomjvyk">The 0/1 Specialization Problem</a> for an in-depth discussion of this topic.</li> <li>
+<code>exported_program.equality_constraints</code> describes which dimensions are required to be equal. Since we specified in the constraints that the first dimension of each argument is equivalent, (<code>dynamic_dim(example_args[0], 0) == dynamic_dim(example_args[1], 0)</code>), we see in the equality constraints the tuple specifying that <code>arg5_1</code> dimension 0 and <code>arg6_1</code> dimension 0 are equal.</li> </ul>   <h3 id="serialization">Serialization</h3> <p>To save the <code>ExportedProgram</code>, users can use the <a class="reference internal" href="#torch.export.save" title="torch.export.save"><code>torch.export.save()</code></a> and <a class="reference internal" href="#torch.export.load" title="torch.export.load"><code>torch.export.load()</code></a> APIs. A convention is to save the <code>ExportedProgram</code> using a <code>.pt2</code> file extension.</p> <p>An example:</p> <pre data-language="python">import torch
+import io
+
+class MyModule(torch.nn.Module):
+    def forward(self, x):
+        return x + 10
+
+exported_program = torch.export.export(MyModule(), torch.randn(5))
+
+torch.export.save(exported_program, 'exported_program.pt2')
+saved_exported_program = torch.export.load('exported_program.pt2')
+</pre>   <h3 id="specialization">Specialization</h3>  <h4 id="input-shapes">Input shapes</h4> <p>As mentioned before, by default, <code>torch.export</code> will trace the program specializing on the input tensors’ shapes, unless a dimension is specified as dynamic via the <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>torch.export.dynamic_dim()</code></a> API. This means that if there exists shape-dependent control flow, <code>torch.export</code> will specialize on the branch that is being taken with the given sample inputs. For example:</p> <pre data-language="python">import torch
+from torch.export import export
+
+def fn(x):
+    if x.shape[0] &gt; 5:
+        return x + 1
+    else:
+        return x - 1
+
+example_inputs = (torch.rand(10, 2),)
+exported_program = export(fn, example_inputs)
+print(exported_program)
+</pre> <pre data-language="python">ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, arg0_1: f32[10, 2]):
+            add: f32[10, 2] = torch.ops.aten.add.Tensor(arg0_1, 1);
+            return (add,)
+</pre> <p>The conditional of (<code>x.shape[0] &gt; 5</code>) does not appear in the <code>ExportedProgram</code> because the example inputs have the static shape of (10, 2). Since <code>torch.export</code> specializes on the inputs’ static shapes, the else branch (<code>x - 1</code>) will never be reached. To preserve the dynamic branching behavior based on the shape of a tensor in the traced graph, <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>torch.export.dynamic_dim()</code></a> will need to be used to specify the dimension of the input tensor (<code>x.shape[0]</code>) to be dynamic, and the source code will need to be <a class="reference internal" href="#data-shape-dependent-control-flow"><span class="std std-ref">rewritten</span></a>.</p>   <h4 id="non-tensor-inputs">Non-tensor inputs</h4> <p><code>torch.export</code> also specializes the traced graph based on the values of inputs that are not <code>torch.Tensor</code>, such as <code>int</code>, <code>float</code>, <code>bool</code>, and <code>str</code>. However, we will likely change this in the near future to not specialize on inputs of primitive types.</p> <p>For example:</p> <pre data-language="python">import torch
+from torch.export import export
+
+def fn(x: torch.Tensor, const: int, times: int):
+    for i in range(times):
+        x = x + const
+    return x
+
+example_inputs = (torch.rand(2, 2), 1, 3)
+exported_program = export(fn, example_inputs)
+print(exported_program)
+</pre> <pre data-language="python">ExportedProgram:
+    class GraphModule(torch.nn.Module):
+        def forward(self, arg0_1: f32[2, 2], arg1_1, arg2_1):
+            add: f32[2, 2] = torch.ops.aten.add.Tensor(arg0_1, 1);
+            add_1: f32[2, 2] = torch.ops.aten.add.Tensor(add, 1);
+            add_2: f32[2, 2] = torch.ops.aten.add.Tensor(add_1, 1);
+            return (add_2,)
+</pre> <p>Because integers are specialized, the <code>torch.ops.aten.add.Tensor</code> operations are all computed with the inlined constant <code>1</code>, rather than <code>arg1_1</code>. Additionally, the <code>times</code> iterator used in the <code>for</code> loop is also “inlined” in the graph through the 3 repeated <code>torch.ops.aten.add.Tensor</code> calls, and the input <code>arg2_1</code> is never used.</p>     <h2 id="limitations-of-torch-export">Limitations of torch.export</h2>  <h3 id="graph-breaks">Graph Breaks</h3> <p>As <code>torch.export</code> is a one-shot process for capturing a computation graph from a PyTorch program, it might ultimately run into untraceable parts of programs as it is nearly impossible to support tracing all PyTorch and Python features. In the case of <code>torch.compile</code>, an unsupported operation will cause a “graph break” and the unsupported operation will be run with default Python evaluation. In contrast, <code>torch.export</code> will require users to provide additional information or rewrite parts of their code to make it traceable. As the tracing is based on TorchDynamo, which evaluates at the Python bytecode level, there will be significantly fewer rewrites required compared to previous tracing frameworks.</p> <p>When a graph break is encountered, <a class="reference internal" href="generated/exportdb/index#torch-export-db"><span class="std std-ref">ExportDB</span></a> is a great resource for learning about the kinds of programs that are supported and unsupported, along with ways to rewrite programs to make them traceable.</p>   <h3 id="id2">Data/Shape-Dependent Control Flow</h3> <p id="data-shape-dependent-control-flow">Graph breaks can also be encountered on data-dependent control flow (<code>if
+x.shape[0] &gt; 2</code>) when shapes are not being specialized, as a tracing compiler cannot possibly deal with without generating code for a combinatorially exploding number of paths. In such cases, users will need to rewrite their code using special control flow operators (coming soon!).</p>   <h3 id="data-dependent-accesses">Data-Dependent Accesses</h3> <p>Data dependent behavior such as using the value inside of a tensor to construct another tensor, or using the value of a tensor to slice into another tensor, is also something the tracer cannot fully determine. Users will need to rewrite their code using the inline constraint APIs <a class="reference internal" href="#torch.export.constrain_as_size" title="torch.export.constrain_as_size"><code>torch.export.constrain_as_size()</code></a> and <a class="reference internal" href="#torch.export.constrain_as_value" title="torch.export.constrain_as_value"><code>torch.export.constrain_as_value()</code></a>.</p>   <h3 id="missing-meta-kernels-for-operators">Missing Meta Kernels for Operators</h3> <p>When tracing, a META implementation (or “meta kernel”) is required for all operators. This is used to reason about the input/output shapes for this operator.</p> <p>Note that the official API for registering custom meta kernels for custom ops is currently undergoing development. While the final API is being refined, you can refer to the documentation <a class="reference external" href="https://docs.google.com/document/d/1GgvOe7C8_NVOMLOCwDaYV1mXXyHMXY7ExoewHqooxrs/edit#heading=h.64r4npvq0w0">here</a>.</p> <p>In the unfortunate case where your model uses an ATen operator that is does not have a meta kernel implementation yet, please file an issue.</p>    <h2 id="read-more">Read More</h2>  <p class="caption" role="heading"><span class="caption-text">Additional Links for Export Users</span></p> <ul> <li class="toctree-l1"><a class="reference internal" href="torch.compiler_transformations">Writing Graph Transformations on ATen IR</a></li> <li class="toctree-l1"><a class="reference internal" href="torch.compiler_ir">IRs</a></li> <li class="toctree-l1"><a class="reference internal" href="generated/exportdb/index">ExportDB</a></li> </ul>   <p class="caption" role="heading"><span class="caption-text">Deep Dive for PyTorch Developers</span></p> <ul> <li class="toctree-l1"><a class="reference internal" href="torch.compiler_deepdive">TorchDynamo Deep Dive</a></li> <li class="toctree-l1"><a class="reference internal" href="torch.compiler_dynamic_shapes">Dynamic shapes</a></li> <li class="toctree-l1"><a class="reference internal" href="torch.compiler_fake_tensor">Fake tensor</a></li> </ul>    <h2 id="api-reference">API Reference</h2> <dl class="py function" id="module-torch.export"> <dt class="sig sig-object py" id="torch.export.export">
+<code>torch.export.export(f, args, kwargs=None, *, constraints=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#export"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> takes an arbitrary Python callable (an nn.Module, a function or a method) and produces a traced graph representing only the Tensor computation of the function in an Ahead-of-Time (AOT) fashion, which can subsequently be executed with different outputs or serialized. The traced graph (1) produces a normalized operator set consisting only of functional <a class="reference external" href="https://pytorch.org/docs/stable/ir.html">Core ATen Operator Set</a> and user specified custom operators, (2) has eliminated all Python control flow and data structures (except for certain conditions), and (3) has the set of shape constraints needed to show that this normalization and control flow elimination is sound for a future input.</p> <p><strong>Soundness Guarantee</strong></p> <p>While tracing, <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> takes note of shape-related assumptions made by the user program and the underlying PyTorch operator kernels. The output <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>ExportedProgram</code></a> is considered valid only when these assumptions hold true.</p> <p>There are 2 types of assumptions made during tracing</p> <ul class="simple"> <li>Shapes (not values) of input tensors.</li> <li>Ranges (lower and upper bound) of values extracted from intermediate tensors via <code>.item()</code> or direct indexing.</li> </ul> <p>All assumptions must be validated at graph capture time for <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> to succeed. Specifically:</p> <ul class="simple"> <li>Assumptions on static shapes of input tensors are automatically validated without additional effort.</li> <li>Assumptions on dynamic shape of input tensors require explicit <code>Input Constraint</code> constructed with <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> APIs</li> <li>Assumptions on range of intermediate values require explicit <code>Inline Constraint</code>, constructed use <a class="reference internal" href="#torch.export.constrain_as_size" title="torch.export.constrain_as_size"><code>constrain_as_size()</code></a> and <code>constraint_as_value()</code> APIs.</li> </ul> <p>If any assumption can not be validated, a fatal error will be raised. When that happens, the error message will include suggested code needed to construct necessary constraints to validate the assumptions, for example <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> would suggest following code for input constraints:</p> <pre data-language="python">def specify_constraints(x):
+    return [
+        # x:
+        dynamic_dim(x, 0) &lt;= 5,
+    ]
+</pre> <p>This example means the program requires the dim 0 of input <code>x</code> to be less than or equal to 5 to be valid. You can inspect the constraints needed and then copy this exact function into your code to generated needed constraints to be passed into <code>constraints</code> argument.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>f</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>) – The callable to trace.</li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a><em>, </em><em>...</em><em>]</em>) – Example positional inputs.</li> <li>
+<strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a><em>]</em><em>]</em>) – Optional example keyword inputs.</li> <li>
+<strong>constraints</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint">Constraint</a><em>]</em><em>]</em>) – An optional list of constraints on the dynamic arguments that specify their possible range of shapes. By default, shapes of input torch.Tensors are assumed to be static. If an input torch.Tensor is expected to have dynamic shapes, please use <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> to define <a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint"><code>Constraint</code></a> objects that specify the dynamics and the possible range of shapes. See <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> docstring for examples on how to use it.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>An <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>ExportedProgram</code></a> containing the traced callable.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram">ExportedProgram</a></p> </dd> </dl> <p><strong>Acceptable input/output types</strong></p> <p>Acceptable types of inputs (for <code>args</code> and <code>kwargs</code>) and outputs include:</p> <ul class="simple"> <li>Primitive types, i.e. <code>torch.Tensor</code>, <code>int</code>, <code>float</code>, <code>bool</code> and <code>str</code>.</li> <li>(Nested) Data structures comprising of <code>dict</code>, <code>list</code>, <code>tuple</code>, <code>namedtuple</code> and <code>OrderedDict</code> containing all above types.</li> </ul> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.export.dynamic_dim">
+<code>torch.export.dynamic_dim(t, index)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#dynamic_dim"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> constructs a <a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint"><code>Constraint</code></a> object that describes the dynamism of a dimension <code>index</code> of tensor <code>t</code>. <a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint"><code>Constraint</code></a> objects should be passed to <code>constraints</code> argument of <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>t</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">torch.Tensor</a>) – Example input tensor that have dynamic dimension size(s)</li> <li>
+<strong>index</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – Index of dynamic dimension</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint"><code>Constraint</code></a> object that describes shape dynamism. It can be passed to <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> so that <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> does not assume static size of specified tensor, i.e. keeping it dynamic as a symbolic size rather than specializing according to size of example tracing input.</p> </dd> </dl> <p>Specifically <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> can be used to express following types of dynamism.</p> <ul> <li>
+<p>Size of a dimension is dynamic and unbounded:</p> <pre data-language="python">t0 = torch.rand(2, 3)
+t1 = torch.rand(3, 4)
+
+# First dimension of t0 can be dynamic size rather than always being static size 2
+constraints = [dynamic_dim(t0, 0)]
+ep = export(fn, (t0, t1), constraints=constraints)
+</pre> </li> <li>
+<p>Size of a dimension is dynamic with a lower bound:</p> <pre data-language="python">t0 = torch.rand(10, 3)
+t1 = torch.rand(3, 4)
+
+# First dimension of t0 can be dynamic size with a lower bound of 5 (inclusive)
+# Second dimension of t1 can be dynamic size with a lower bound of 2 (exclusive)
+constraints = [
+    dynamic_dim(t0, 0) &gt;= 5,
+    dynamic_dim(t1, 1) &gt; 2,
+]
+ep = export(fn, (t0, t1), constraints=constraints)
+</pre> </li> <li>
+<p>Size of a dimension is dynamic with an upper bound:</p> <pre data-language="python">t0 = torch.rand(10, 3)
+t1 = torch.rand(3, 4)
+
+# First dimension of t0 can be dynamic size with a upper bound of 16 (inclusive)
+# Second dimension of t1 can be dynamic size with a upper bound of 8 (exclusive)
+constraints = [
+    dynamic_dim(t0, 0) &lt;= 16,
+    dynamic_dim(t1, 1) &lt; 8,
+]
+ep = export(fn, (t0, t1), constraints=constraints)
+</pre> </li> <li>
+<p>Size of a dimension is dynamic and it is always equal to size of another dynamic dimension:</p> <pre data-language="python">t0 = torch.rand(10, 3)
+t1 = torch.rand(3, 4)
+
+# Sizes of second dimension of t0 and first dimension are always equal
+constraints = [
+    dynamic_dim(t0, 1) == dynamic_dim(t1, 0),
+]
+ep = export(fn, (t0, t1), constraints=constraints)
+</pre> </li> <li>Mix and match all types above as long as they do not express conflicting requirements</li> </ul> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.export.constrain_as_size">
+<code>torch.export.constrain_as_size(symbol, min=None, max=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#constrain_as_size"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Hint <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> about the constraint of an intermediate scalar value that represents shape of a tensor so that subsequent tensor constructors can be traced correctly because many operators need to make assumption about range of sizes.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>symbol</strong> – Intermediate scalar value (int-only now) to apply range constraint on.</li> <li>
+<strong>min</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – Minimum possible value of given symbol (inclusive)</li> <li>
+<strong>max</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – Maximum possible value of given symbol (inclusive)</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None</p> </dd> </dl> <p>For example, following program can not be traced soundly wihout using <a class="reference internal" href="#torch.export.constrain_as_size" title="torch.export.constrain_as_size"><code>constrain_as_size()</code></a> to give <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> a hint about shape ranges:</p> <pre data-language="python">def fn(x):
+    d = x.max().item()
+    return torch.ones(v)
+</pre> <p><a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> would give following error:</p> <pre data-language="python">torch._dynamo.exc.Unsupported: guard on data-dependent symbolic int/float
+</pre> <p>Assuming the actual range of <code>d</code> can be between [3, 10], you can add a call to <a class="reference internal" href="#torch.export.constrain_as_size" title="torch.export.constrain_as_size"><code>constrain_as_size()</code></a> in the source code like this:</p> <pre data-language="python">def fn(x):
+    d = x.max().item()
+    torch.export.constrain_as_size(d, min=3, max=10)
+    return torch.ones(d)
+</pre> <p>With the additional hint, <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> would be able to trace the program correctly by taking the <code>else</code> branch, resulting in following graph:</p> <pre data-language="python">graph():
+    %arg0_1 := placeholder[target=arg0_1]
+
+    # d = x.max().item()
+    %max_1 := call_function[target=torch.ops.aten.max.default](args = (%arg0_1,))
+    %_local_scalar_dense := call_function[target=torch.ops.aten._local_scalar_dense.default](args = (%max_1,))
+
+    # Asserting 3 &lt;= d &lt;= 10
+    %ge := call_function[target=operator.ge](args = (%_local_scalar_dense, 3))
+    %scalar_tensor := call_function[target=torch.ops.aten.scalar_tensor.default](args = (%ge,))
+    %_assert_async := call_function[target=torch.ops.aten._assert_async.msg](
+        args = (%scalar_tensor, _local_scalar_dense is outside of inline constraint [3, 10].))
+    %le := call_function[target=operator.le](args = (%_local_scalar_dense, 10))
+    %scalar_tensor_1 := call_function[target=torch.ops.aten.scalar_tensor.default](args = (%le,))
+    %_assert_async_1 := call_function[target=torch.ops.aten._assert_async.msg](
+        args = (%scalar_tensor_1, _local_scalar_dense is outside of inline constraint [3, 10].))
+    %sym_constrain_range_for_size := call_function[target=torch.ops.aten.sym_constrain_range_for_size.default](
+        args = (%_local_scalar_dense,), kwargs = {min: 3, max: 10})
+
+    # Constructing new tensor with d
+    %full := call_function[target=torch.ops.aten.full.default](
+        args = ([%_local_scalar_dense], 1),
+        kwargs = {dtype: torch.float32, layout: torch.strided, device: cpu, pin_memory: False})
+
+    ......
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>if your size is intended to be dynamic, do NOT test if sizes are equal to 0 or 1, these will SILENTLY report false and be bypassed</p> </div> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.export.constrain_as_value">
+<code>torch.export.constrain_as_value(symbol, min=None, max=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#constrain_as_value"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Hint <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> about the constraint of an intermediate scalar value so that subsequent branching behaviors that check on the range of aforementioned scalar value can be soundly traced.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>(Note that if the intermediate scalar value will be used like a size, including being passed as size arg to a tensor factory or view, call <a class="reference internal" href="#torch.export.constrain_as_size" title="torch.export.constrain_as_size"><code>constrain_as_size()</code></a> instead.)</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>symbol</strong> – Intermediate scalar value (int-only now) to apply range constraint on.</li> <li>
+<strong>min</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – Minimum possible value of given symbol (inclusive)</li> <li>
+<strong>max</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – Maximum possible value of given symbol (inclusive)</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None</p> </dd> </dl> <p>For example, following program can not be traced soundly:</p> <pre data-language="python">def fn(x):
+    v = x.max().item()
+    if v &gt; 1024:
+        return x
+    else:
+        return x * 2
+</pre> <p><code>v</code> is a data-dependent value, which is assumed to have a range of (-inf, inf). <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> a hint about which branch to take would not be able to determine if the traced branching decision is correct or not. Thus <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> would give following error:</p> <pre data-language="python">torch._dynamo.exc.UserError: Consider annotating your code using
+torch.export.constrain_as_size() or torch.export().constrain_as_value() APIs.
+It appears that you're trying to get a value out of symbolic int/float whose value
+is data-dependent (and thus we do not know the true value.)  The expression we were
+trying to evaluate is f0 &gt; 1024 (unhinted: f0 &gt; 1024).
+</pre> <p>Assuming the actual range of <code>v</code> can be between [10, 200], you can add a call to <a class="reference internal" href="#torch.export.constrain_as_value" title="torch.export.constrain_as_value"><code>constrain_as_value()</code></a> in the source code like this:</p> <pre data-language="python">def fn(x):
+    v = x.max().item()
+
+    # Give export() a hint
+    torch.export.constrain_as_value(v, min=10, max=200)
+
+    if v &gt; 1024:
+        return x
+    else:
+        return x * 2
+</pre> <p>With the additional hint, <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> would be able to trace the program correctly by taking the <code>else</code> branch, resulting in following graph:</p> <pre data-language="python">graph():
+    %arg0_1 := placeholder[target=arg0_1]
+
+    # v = x.max().item()
+    %max_1 := call_function[target=torch.ops.aten.max.default](args = (%arg0_1,))
+    %_local_scalar_dense := call_function[target=torch.ops.aten._local_scalar_dense.default](args = (%max_1,))
+
+    # Asserting 10 &lt;= v &lt;= 200
+    %ge := call_function[target=operator.ge](args = (%_local_scalar_dense, 10))
+    %scalar_tensor := call_function[target=torch.ops.aten.scalar_tensor.default](args = (%ge,))
+    %_assert_async := call_function[target=torch.ops.aten._assert_async.msg](
+        args = (%scalar_tensor, _local_scalar_dense is outside of inline constraint [10, 200].))
+    %le := call_function[target=operator.le](args = (%_local_scalar_dense, 200))
+    %scalar_tensor_1 := call_function[target=torch.ops.aten.scalar_tensor.default](args = (%le,))
+    %_assert_async_1 := call_function[target=torch.ops.aten._assert_async.msg](
+        args = (%scalar_tensor_1, _local_scalar_dense is outside of inline constraint [10, 200].))
+    %sym_constrain_range := call_function[target=torch.ops.aten.sym_constrain_range.default](
+        args = (%_local_scalar_dense,), kwargs = {min: 10, max: 200})
+
+    # Always taking `else` branch to multiply elements `x` by 2 due to hints above
+    %mul := call_function[target=torch.ops.aten.mul.Tensor](args = (%arg0_1, 2), kwargs = {})
+    return (mul,)
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.export.save">
+<code>torch.export.save(ep, f, *, extra_files=None, opset_version=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#save"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Under active development, saved files may not be usable in newer versions of PyTorch.</p> </div> <p>Saves an <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>ExportedProgram</code></a> to a file-like object. It can then be loaded using the Python API <a class="reference internal" href="#torch.export.load" title="torch.export.load"><code>torch.export.load</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>ep</strong> (<a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram">ExportedProgram</a>) – The exported program to save.</li> <li>
+<strong>f</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.12)">pathlib.Path</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/io.html#io.BytesIO" title="(in Python v3.12)">io.BytesIO</a>) – A file-like object (has to implement write and flush) or a string containing a file name.</li> <li>
+<strong>extra_files</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – Map from filename to contents which will be stored as part of f.</li> <li>
+<strong>opset_version</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em><em>]</em>) – A map of opset names to the version of this opset</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">import torch
+import io
+
+class MyModule(torch.nn.Module):
+    def forward(self, x):
+        return x + 10
+
+ep = torch.export.export(MyModule(), torch.randn(5))
+
+# Save to file
+torch.export.save(ep, 'exported_program.pt2')
+
+# Save to io.BytesIO buffer
+buffer = io.BytesIO()
+torch.export.save(ep, buffer)
+
+# Save with extra files
+extra_files = {'foo.txt': b'bar'}
+torch.export.save(ep, 'exported_program.pt2', extra_files=extra_files)
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.export.load">
+<code>torch.export.load(f, *, extra_files=None, expected_opset_version=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#load"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Under active development, saved files may not be usable in newer versions of PyTorch.</p> </div> <p>Loads an <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>ExportedProgram</code></a> previously saved with <a class="reference internal" href="#torch.export.save" title="torch.export.save"><code>torch.export.save</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>ep</strong> (<a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram">ExportedProgram</a>) – The exported program to save.</li> <li>
+<strong>f</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.12)">pathlib.Path</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/io.html#io.BytesIO" title="(in Python v3.12)">io.BytesIO</a>) – A file-like object (has to implement write and flush) or a string containing a file name.</li> <li>
+<strong>extra_files</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – The extra filenames given in this map would be loaded and their content would be stored in the provided map.</li> <li>
+<strong>expected_opset_version</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em><em>]</em>) – A map of opset names to expected opset versions</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>An <a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram"><code>ExportedProgram</code></a> object</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.export.ExportedProgram" title="torch.export.ExportedProgram">ExportedProgram</a></p> </dd> </dl> <p>Example:</p> <pre data-language="python">import torch
+import io
+
+# Load ExportedProgram from file
+ep = torch.export.load('exported_program.pt2')
+
+# Load ExportedProgram from io.BytesIO object
+with open('exported_program.pt2', 'rb') as f:
+    buffer = io.BytesIO(f.read())
+buffer.seek(0)
+ep = torch.export.load(buffer)
+
+# Load with extra files.
+extra_files = {'foo.txt': ''}  # values will be replaced with data
+ep = torch.export.load('exported_program.pt2', extra_files=extra_files)
+print(extra_files['foo.txt'])
+</pre> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.Constraint">
+<code>class torch.export.Constraint(*args, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#Constraint"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Do not construct <a class="reference internal" href="#torch.export.Constraint" title="torch.export.Constraint"><code>Constraint</code></a> directly, use <a class="reference internal" href="#torch.export.dynamic_dim" title="torch.export.dynamic_dim"><code>dynamic_dim()</code></a> instead.</p> </div> <p>This represents constraints on input tensor dimensions, e.g., requiring them to be fully polymorphic or within some range.</p> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ExportedProgram">
+<code>class torch.export.ExportedProgram(root, graph, graph_signature, call_spec, state_dict, range_constraints, equality_constraints, module_call_graph, example_inputs=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ExportedProgram"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Package of a program from <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a>. It contains an <a class="reference internal" href="fx#torch.fx.Graph" title="torch.fx.Graph"><code>torch.fx.Graph</code></a> that represents Tensor computation, a state_dict containing tensor values of all lifted parameters and buffers, and various metadata.</p> <p>You can call an ExportedProgram like the original callable traced by <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> with the same calling convention.</p> <p>To perform transformations on the graph, use <code>.module</code> property to access an <a class="reference internal" href="fx#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>torch.fx.GraphModule</code></a>. You can then use <a class="reference external" href="https://pytorch.org/docs/stable/fx.html#writing-transformations">FX transformation</a> to rewrite the graph. Afterwards, you can simply use <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> again to construct a correct ExportedProgram.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.export.ExportedProgram.module">
+<code>module()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ExportedProgram.module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a self contained GraphModule with all the parameters/buffers inlined.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+
+
+<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ExportBackwardSignature">
+<code>class torch.export.ExportBackwardSignature(gradients_to_parameters: Dict[str, str], gradients_to_user_inputs: Dict[str, str], loss_output: str)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ExportBackwardSignature"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ExportGraphSignature">
+<code>class torch.export.ExportGraphSignature(parameters, buffers, user_inputs, user_outputs, inputs_to_parameters, inputs_to_buffers, buffers_to_mutate, backward_signature, assertion_dep_token=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ExportGraphSignature"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><a class="reference internal" href="#torch.export.ExportGraphSignature" title="torch.export.ExportGraphSignature"><code>ExportGraphSignature</code></a> models the input/output signature of Export Graph, which is a fx.Graph with stronger invariants gurantees.</p> <p>Export Graph is functional and does not access “states” like parameters or buffers within the graph via <code>getattr</code> nodes. Instead, <a class="reference internal" href="#torch.export.export" title="torch.export.export"><code>export()</code></a> gurantees that parameters and buffers are lifted out of the graph as inputs. Similarly, any mutations to buffers are not included in the graph either, instead the updated values of mutated buffers are modeled as additional outputs of Export Graph.</p> <p>The ordering of all inputs and outputs are:</p> <pre data-language="python">Inputs = [*parameters_buffers, *flattened_user_inputs]
+Outputs = [*mutated_inputs, *flattened_user_outputs]
+</pre> <p>e.g. If following module is exported:</p> <pre data-language="python">class CustomModule(nn.Module):
+    def __init__(self):
+        super(CustomModule, self).__init__()
+
+        # Define a parameter
+        self.my_parameter = nn.Parameter(torch.tensor(2.0))
+
+        # Define two buffers
+        self.register_buffer('my_buffer1', torch.tensor(3.0))
+        self.register_buffer('my_buffer2', torch.tensor(4.0))
+
+    def forward(self, x1, x2):
+        # Use the parameter, buffers, and both inputs in the forward method
+        output = (x1 + self.my_parameter) * self.my_buffer1 + x2 * self.my_buffer2
+
+        # Mutate one of the buffers (e.g., increment it by 1)
+        self.my_buffer2.add_(1.0) # In-place addition
+
+        return output
+</pre> <p>Resulting Graph would be:</p> <pre data-language="python">graph():
+    %arg0_1 := placeholder[target=arg0_1]
+    %arg1_1 := placeholder[target=arg1_1]
+    %arg2_1 := placeholder[target=arg2_1]
+    %arg3_1 := placeholder[target=arg3_1]
+    %arg4_1 := placeholder[target=arg4_1]
+    %add_tensor := call_function[target=torch.ops.aten.add.Tensor](args = (%arg3_1, %arg0_1), kwargs = {})
+    %mul_tensor := call_function[target=torch.ops.aten.mul.Tensor](args = (%add_tensor, %arg1_1), kwargs = {})
+    %mul_tensor_1 := call_function[target=torch.ops.aten.mul.Tensor](args = (%arg4_1, %arg2_1), kwargs = {})
+    %add_tensor_1 := call_function[target=torch.ops.aten.add.Tensor](args = (%mul_tensor, %mul_tensor_1), kwargs = {})
+    %add_tensor_2 := call_function[target=torch.ops.aten.add.Tensor](args = (%arg2_1, 1.0), kwargs = {})
+    return (add_tensor_2, add_tensor_1)
+</pre> <p>Resulting ExportGraphSignature would be:</p> <pre data-language="python">ExportGraphSignature(
+    # Indicates that there is one parameter named `my_parameter`
+    parameters=['L__self___my_parameter'],
+
+    # Indicates that there are two buffers, `my_buffer1` and `my_buffer2`
+    buffers=['L__self___my_buffer1', 'L__self___my_buffer2'],
+
+    # Indicates that the nodes `arg3_1` and `arg4_1` in produced graph map to
+    # original user inputs, ie. x1 and x2
+    user_inputs=['arg3_1', 'arg4_1'],
+
+    # Indicates that the node `add_tensor_1` maps to output of original program
+    user_outputs=['add_tensor_1'],
+
+    # Indicates that there is one parameter (self.my_parameter) captured,
+    # its name is now mangled to be `L__self___my_parameter`, which is now
+    # represented by node `arg0_1` in the graph.
+    inputs_to_parameters={'arg0_1': 'L__self___my_parameter'},
+
+    # Indicates that there are two buffers (self.my_buffer1, self.my_buffer2) captured,
+    # their name are now mangled to be `L__self___my_my_buffer1` and `L__self___my_buffer2`.
+    # They are now represented by nodes `arg1_1` and `arg2_1` in the graph.
+    inputs_to_buffers={'arg1_1': 'L__self___my_buffer1', 'arg2_1': 'L__self___my_buffer2'},
+
+    # Indicates that one buffer named `L__self___my_buffer2` is mutated during execution,
+    # its new value is output from the graph represented by the node named `add_tensor_2`
+    buffers_to_mutate={'add_tensor_2': 'L__self___my_buffer2'},
+
+    # Backward graph not captured
+    backward_signature=None,
+
+    # Work in progress feature, please ignore now.
+    assertion_dep_token=None
+)
+</pre>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ArgumentKind">
+<code>class torch.export.ArgumentKind(value)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ArgumentKind"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>An enumeration.</p> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ArgumentSpec">
+<code>class torch.export.ArgumentSpec(kind: torch.export.ArgumentKind, value: Any)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ArgumentSpec"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ModuleCallSignature">
+<code>class torch.export.ModuleCallSignature(inputs: List[torch.export.ArgumentSpec], outputs: List[torch.export.ArgumentSpec], in_spec: torch.utils._pytree.TreeSpec, out_spec: torch.utils._pytree.TreeSpec)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ModuleCallSignature"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.export.ModuleCallEntry">
+<code>class torch.export.ModuleCallEntry(fqn: str, signature: Union[torch.export.ModuleCallSignature, NoneType] = None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/export.html#ModuleCallEntry"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/export.html" class="_attribution-link">https://pytorch.org/docs/2.1/export.html</a>
+  </p>
+</div>

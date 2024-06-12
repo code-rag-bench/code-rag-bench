@@ -1,0 +1,158 @@
+# Using via cmake
+
+In terms of complexity, `cmake` falls between `make` and `meson`. The learning
+curve is steeper since CMake syntax is not pythonic and is closer to `make`
+with environment variables.
+
+However, the trade-off is enhanced flexibility and support for most
+architectures and compilers. An introduction to the syntax is out of scope for
+this document, but this extensive CMake collection of resources is great.
+
+Note
+
+`cmake` is very popular for mixed-language systems, however support for `f2py`
+is not particularly native or pleasant; and a more natural approach is to
+consider Using via scikit-build
+
+## Fibonacci Walkthrough (F77)
+
+Returning to the `fib` example from Three ways to wrap - getting started
+section.
+
+    
+    C FILE: FIB1.F
+          SUBROUTINE FIB(A,N)
+    C
+    C     CALCULATE FIRST N FIBONACCI NUMBERS
+    C
+          INTEGER N
+          REAL*8 A(N)
+          DO I=1,N
+             IF (I.EQ.1) THEN
+                A(I) = 0.0D0
+             ELSEIF (I.EQ.2) THEN
+                A(I) = 1.0D0
+             ELSE 
+                A(I) = A(I-1) + A(I-2)
+             ENDIF
+          ENDDO
+          END
+    C END FILE FIB1.F
+    
+We do not need to explicitly generate the `python -m numpy.f2py fib1.f`
+output, which is `fib1module.c`, which is beneficial. With this; we can now
+initialize a `CMakeLists.txt` file as follows:
+
+    
+    ### setup project ###
+    cmake_minimum_required(VERSION 3.17.3) # 3.17 > for Python3_SOABI
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    
+    project(fibby
+      VERSION 1.0
+      DESCRIPTION "FIB module"
+      LANGUAGES C Fortran
+      )
+    
+    # Safety net
+    if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
+      message(
+        FATAL_ERROR
+          "In-source builds not allowed. Please make a new directory (called a build directory) and run CMake from there.\n"
+      )
+    endif()
+    
+    # Grab Python
+    find_package(Python3 3.9 REQUIRED
+      COMPONENTS Interpreter Development NumPy)
+    
+    # Grab the variables from a local Python installation
+    # F2PY headers
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+      -c "import numpy.f2py; print(numpy.f2py.get_include())"
+      OUTPUT_VARIABLE F2PY_INCLUDE_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    
+    # Project scope; consider using target_include_directories instead
+    include_directories(
+      BEFORE
+      ${Python3_INCLUDE_DIRS}
+      ${Python3_NumPy_INCLUDE_DIRS}
+      ${F2PY_INCLUDE_DIR}
+      )
+    
+    message(STATUS ${Python3_INCLUDE_DIRS})
+    message(STATUS ${F2PY_INCLUDE_DIR})
+    message(STATUS ${Python3_NumPy_INCLUDE_DIRS})
+    
+    # Vars
+    set(f2py_module_name "fibby")
+    set(fortran_src_file "${CMAKE_SOURCE_DIR}/fib1.f")
+    set(f2py_module_c "${f2py_module_name}module.c")
+    set(generated_module_file "${f2py_module_name}${Python3_SOABI}")
+    
+    # Generate sources
+    add_custom_target(
+      genpyf
+      DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${f2py_module_c}"
+      )
+    add_custom_command(
+      OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${f2py_module_c}"
+      COMMAND ${Python3_EXECUTABLE}  -m "numpy.f2py"
+                       "${fortran_src_file}"
+                       -m "fibby"
+                       --lower # Important
+      DEPENDS fib1.f # Fortran source
+      )
+    
+    # Set up target
+    add_library(${CMAKE_PROJECT_NAME} SHARED
+      "${CMAKE_CURRENT_BINARY_DIR}/${f2py_module_c}" # Generated
+      "${F2PY_INCLUDE_DIR}/fortranobject.c" # From NumPy
+      "${fortran_src_file}" # Fortran source(s)
+      )
+    
+    # Depend on sources
+    add_dependencies(${CMAKE_PROJECT_NAME} genpyf)
+    
+    set_target_properties(
+         ${CMAKE_PROJECT_NAME}
+        PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "${CMAKE_PROJECT_NAME}"
+            LINKER_LANGUAGE C
+        )
+    
+A key element of the `CMakeLists.txt` file defined above is that the
+`add_custom_command` is used to generate the wrapper `C` files and then added
+as a dependency of the actual shared library target via a `add_custom_target`
+directive which prevents the command from running every time. Additionally,
+the method used for obtaining the `fortranobject.c` file can also be used to
+grab the `numpy` headers on older `cmake` versions.
+
+This then works in the same manner as the other modules, although the naming
+conventions are different and the output library is not automatically prefixed
+with the `cython` information.
+
+    
+    ls .
+    # CMakeLists.txt fib1.f
+    mkdir build && cd build
+    cmake ..
+    make
+    python -c "import numpy as np; import fibby; a = np.zeros(9); fibby.fib(a); print (a)"
+    # [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+    
+This is particularly useful where an existing toolchain already exists and
+`scikit-build` or other additional `python` dependencies are discouraged.
+
+© 2005–2021 NumPy Developers  
+Licensed under the 3-clause BSD License.  
+https://numpy.org/doc/1.22/f2py/buildtools/cmake.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

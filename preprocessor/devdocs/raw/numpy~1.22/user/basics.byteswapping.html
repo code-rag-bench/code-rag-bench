@@ -1,0 +1,44 @@
+<h1>Byte-swapping</h1> <section id="introduction-to-byte-ordering-and-ndarrays"> <h2>Introduction to byte ordering and ndarrays</h2> <p>The <code>ndarray</code> is an object that provide a python array interface to data in memory.</p> <p>It often happens that the memory that you want to view with an array is not of the same byte ordering as the computer on which you are running Python.</p> <p>For example, I might be working on a computer with a little-endian CPU - such as an Intel Pentium, but I have loaded some data from a file written by a computer that is big-endian. Let’s say I have loaded 4 bytes from a file written by a Sun (big-endian) computer. I know that these 4 bytes represent two 16-bit integers. On a big-endian machine, a two-byte integer is stored with the Most Significant Byte (MSB) first, and then the Least Significant Byte (LSB). Thus the bytes are, in memory order:</p> <ol class="arabic simple"> <li>MSB integer 1</li> <li>LSB integer 1</li> <li>MSB integer 2</li> <li>LSB integer 2</li> </ol> <p>Let’s say the two integers were in fact 1 and 770. Because 770 = 256 * 3 + 2, the 4 bytes in memory would contain respectively: 0, 1, 3, 2. The bytes I have loaded from the file would have these contents:</p> <pre data-language="python">&gt;&gt;&gt; big_end_buffer = bytearray([0,1,3,2])
+&gt;&gt;&gt; big_end_buffer
+bytearray(b'\\x00\\x01\\x03\\x02')
+</pre> <p>We might want to use an <code>ndarray</code> to access these integers. In that case, we can create an array around this memory, and tell numpy that there are two integers, and that they are 16 bit and big-endian:</p> <pre data-language="python">&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; big_end_arr = np.ndarray(shape=(2,),dtype='&gt;i2', buffer=big_end_buffer)
+&gt;&gt;&gt; big_end_arr[0]
+1
+&gt;&gt;&gt; big_end_arr[1]
+770
+</pre> <p>Note the array <code>dtype</code> above of <code>&gt;i2</code>. The <code>&gt;</code> means ‘big-endian’ (<code>&lt;</code> is little-endian) and <code>i2</code> means ‘signed 2-byte integer’. For example, if our data represented a single unsigned 4-byte little-endian integer, the dtype string would be <code>&lt;u4</code>.</p> <p>In fact, why don’t we try that?</p> <pre data-language="python">&gt;&gt;&gt; little_end_u4 = np.ndarray(shape=(1,),dtype='&lt;u4', buffer=big_end_buffer)
+&gt;&gt;&gt; little_end_u4[0] == 1 * 256**1 + 3 * 256**2 + 2 * 256**3
+True
+</pre> <p>Returning to our <code>big_end_arr</code> - in this case our underlying data is big-endian (data endianness) and we’ve set the dtype to match (the dtype is also big-endian). However, sometimes you need to flip these around.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Scalars currently do not include byte order information, so extracting a scalar from an array will return an integer in native byte order. Hence:</p> <pre data-language="python">&gt;&gt;&gt; big_end_arr[0].dtype.byteorder == little_end_u4[0].dtype.byteorder
+True
+</pre> </div> </section> <section id="changing-byte-ordering"> <h2>Changing byte ordering</h2> <p>As you can imagine from the introduction, there are two ways you can affect the relationship between the byte ordering of the array and the underlying memory it is looking at:</p> <ul class="simple"> <li>Change the byte-ordering information in the array dtype so that it interprets the underlying data as being in a different byte order. This is the role of <code>arr.newbyteorder()</code>
+</li> <li>Change the byte-ordering of the underlying data, leaving the dtype interpretation as it was. This is what <code>arr.byteswap()</code> does.</li> </ul> <p>The common situations in which you need to change byte ordering are:</p> <ol class="arabic simple"> <li>Your data and dtype endianness don’t match, and you want to change the dtype so that it matches the data.</li> <li>Your data and dtype endianness don’t match, and you want to swap the data so that they match the dtype</li> <li>Your data and dtype endianness match, but you want the data swapped and the dtype to reflect this</li> </ol> <section id="data-and-dtype-endianness-don-t-match-change-dtype-to-match-data"> <h3>Data and dtype endianness don’t match, change dtype to match data</h3> <p>We make something where they don’t match:</p> <pre data-language="python">&gt;&gt;&gt; wrong_end_dtype_arr = np.ndarray(shape=(2,),dtype='&lt;i2', buffer=big_end_buffer)
+&gt;&gt;&gt; wrong_end_dtype_arr[0]
+256
+</pre> <p>The obvious fix for this situation is to change the dtype so it gives the correct endianness:</p> <pre data-language="python">&gt;&gt;&gt; fixed_end_dtype_arr = wrong_end_dtype_arr.newbyteorder()
+&gt;&gt;&gt; fixed_end_dtype_arr[0]
+1
+</pre> <p>Note the array has not changed in memory:</p> <pre data-language="python">&gt;&gt;&gt; fixed_end_dtype_arr.tobytes() == big_end_buffer
+True
+</pre> </section> <section id="data-and-type-endianness-don-t-match-change-data-to-match-dtype"> <h3>Data and type endianness don’t match, change data to match dtype</h3> <p>You might want to do this if you need the data in memory to be a certain ordering. For example you might be writing the memory out to a file that needs a certain byte ordering.</p> <pre data-language="python">&gt;&gt;&gt; fixed_end_mem_arr = wrong_end_dtype_arr.byteswap()
+&gt;&gt;&gt; fixed_end_mem_arr[0]
+1
+</pre> <p>Now the array <em>has</em> changed in memory:</p> <pre data-language="python">&gt;&gt;&gt; fixed_end_mem_arr.tobytes() == big_end_buffer
+False
+</pre> </section> <section id="data-and-dtype-endianness-match-swap-data-and-dtype"> <h3>Data and dtype endianness match, swap data and dtype</h3> <p>You may have a correctly specified array dtype, but you need the array to have the opposite byte order in memory, and you want the dtype to match so the array values make sense. In this case you just do both of the previous operations:</p> <pre data-language="python">&gt;&gt;&gt; swapped_end_arr = big_end_arr.byteswap().newbyteorder()
+&gt;&gt;&gt; swapped_end_arr[0]
+1
+&gt;&gt;&gt; swapped_end_arr.tobytes() == big_end_buffer
+False
+</pre> <p>An easier way of casting the data to a specific dtype and byte ordering can be achieved with the ndarray astype method:</p> <pre data-language="python">&gt;&gt;&gt; swapped_end_arr = big_end_arr.astype('&lt;i2')
+&gt;&gt;&gt; swapped_end_arr[0]
+1
+&gt;&gt;&gt; swapped_end_arr.tobytes() == big_end_buffer
+False
+</pre> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/user/basics.byteswapping.html" class="_attribution-link">https://numpy.org/doc/1.22/user/basics.byteswapping.html</a>
+  </p>
+</div>

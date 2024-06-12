@@ -1,0 +1,185 @@
+<h1 id="the-django-template-language">The Django template language</h1> <p id="s-the-django-template-language">This document explains the language syntax of the Django template system. If you’re looking for a more technical perspective on how it works and how to extend it, see <a class="reference internal" href="api"><span class="doc">The Django template language: for Python programmers</span></a>.</p> <p>Django’s template language is designed to strike a balance between power and ease. It’s designed to feel comfortable to those used to working with HTML. If you have any exposure to other text-based template languages, such as <a class="reference external" href="https://www.smarty.net/">Smarty</a> or <a class="reference external" href="https://palletsprojects.com/p/jinja/">Jinja2</a>, you should feel right at home with Django’s templates.</p> <div class="admonition-philosophy admonition"> <p class="first admonition-title">Philosophy</p> <p>If you have a background in programming, or if you’re used to languages which mix programming code directly into HTML, you’ll want to bear in mind that the Django template system is not simply Python embedded into HTML. This is by design: the template system is meant to express presentation, not program logic.</p> <p class="last">The Django template system provides tags which function similarly to some programming constructs – an <a class="reference internal" href="builtins#std:templatetag-if"><code>if</code></a> tag for boolean tests, a <a class="reference internal" href="builtins#std:templatetag-for"><code>for</code></a> tag for looping, etc. – but these are not simply executed as the corresponding Python code, and the template system will not execute arbitrary Python expressions. Only the tags, filters and syntax listed below are supported by default (although you can add <a class="reference internal" href="../../howto/custom-template-tags"><span class="doc">your own extensions</span></a> to the template language as needed).</p> </div>  <h2 id="templates">Templates</h2> <p id="s-templates">A template is a text file. It can generate any text-based format (HTML, XML, CSV, etc.).</p> <p>A template contains <strong>variables</strong>, which get replaced with values when the template is evaluated, and <strong>tags</strong>, which control the logic of the template.</p> <p>Below is a minimal template that illustrates a few basics. Each element will be explained later in this document.</p> <pre data-language="markup">{% extends "base_generic.html" %}
+
+{% block title %}{{ section.title }}{% endblock %}
+
+{% block content %}
+&lt;h1&gt;{{ section.title }}&lt;/h1&gt;
+
+{% for story in story_list %}
+&lt;h2&gt;
+  &lt;a href="{{ story.get_absolute_url }}"&gt;
+    {{ story.headline|upper }}
+  &lt;/a&gt;
+&lt;/h2&gt;
+&lt;p&gt;{{ story.tease|truncatewords:"100" }}&lt;/p&gt;
+{% endfor %}
+{% endblock %}
+</pre> <div class="admonition-philosophy admonition"> <p class="first admonition-title">Philosophy</p> <p class="last">Why use a text-based template instead of an XML-based one (like Zope’s TAL)? We wanted Django’s template language to be usable for more than just XML/HTML templates. You can use the template language for any text-based format such as emails, JavaScript and CSV.</p> </div>   <h2 id="template-variables">Variables</h2> <p id="s-variables">Variables look like this: <code>{{ variable }}</code>. When the template engine encounters a variable, it evaluates that variable and replaces it with the result. Variable names consist of any combination of alphanumeric characters and the underscore (<code>"_"</code>) but may not start with an underscore, and may not be a number. The dot (<code>"."</code>) also appears in variable sections, although that has a special meaning, as indicated below. Importantly, <em>you cannot have spaces or punctuation characters in variable names.</em></p> <p>Use a dot (<code>.</code>) to access attributes of a variable.</p> <div class="admonition-behind-the-scenes admonition"> <p class="first admonition-title">Behind the scenes</p> <p>Technically, when the template system encounters a dot, it tries the following lookups, in this order:</p> <ul class="simple"> <li>Dictionary lookup</li> <li>Attribute or method lookup</li> <li>Numeric index lookup</li> </ul> <p>If the resulting value is callable, it is called with no arguments. The result of the call becomes the template value.</p> <p>This lookup order can cause some unexpected behavior with objects that override dictionary lookup. For example, consider the following code snippet that attempts to loop over a <code>collections.defaultdict</code>:</p> <pre data-language="markup">{% for k, v in defaultdict.items %}
+    Do something with k and v here...
+{% endfor %}
+</pre> <p class="last">Because dictionary lookup happens first, that behavior kicks in and provides a default value instead of using the intended <code>.items()</code> method. In this case, consider converting to a dictionary first.</p> </div> <p>In the above example, <code>{{ section.title }}</code> will be replaced with the <code>title</code> attribute of the <code>section</code> object.</p> <p>If you use a variable that doesn’t exist, the template system will insert the value of the <code>string_if_invalid</code> option, which is set to <code>''</code> (the empty string) by default.</p> <p>Note that “bar” in a template expression like <code>{{ foo.bar }}</code> will be interpreted as a literal string and not using the value of the variable “bar”, if one exists in the template context.</p> <p>Variable attributes that begin with an underscore may not be accessed as they’re generally considered private.</p>   <h2 id="filters">Filters</h2> <p id="s-filters">You can modify variables for display by using <strong>filters</strong>.</p> <p>Filters look like this: <code>{{ name|lower }}</code>. This displays the value of the <code>{{ name }}</code> variable after being filtered through the <a class="reference internal" href="builtins#std:templatefilter-lower"><code>lower</code></a> filter, which converts text to lowercase. Use a pipe (<code>|</code>) to apply a filter.</p> <p>Filters can be “chained.” The output of one filter is applied to the next. <code>{{ text|escape|linebreaks }}</code> is a common idiom for escaping text contents, then converting line breaks to <code>&lt;p&gt;</code> tags.</p> <p>Some filters take arguments. A filter argument looks like this: <code>{{
+bio|truncatewords:30 }}</code>. This will display the first 30 words of the <code>bio</code> variable.</p> <p>Filter arguments that contain spaces must be quoted; for example, to join a list with commas and spaces you’d use <code>{{ list|join:", " }}</code>.</p> <p>Django provides about sixty built-in template filters. You can read all about them in the <a class="reference internal" href="builtins#ref-templates-builtins-filters"><span class="std std-ref">built-in filter reference</span></a>. To give you a taste of what’s available, here are some of the more commonly used template filters:</p> <dl class="docutils"> <dt>
+ <a class="reference internal" href="builtins#std:templatefilter-default"><code>default</code></a>
+</dt> <dd>
+<p class="first">If a variable is false or empty, use given default. Otherwise, use the value of the variable. For example:</p> <pre data-language="markup">{{ value|default:"nothing" }}
+</pre> <p class="last">If <code>value</code> isn’t provided or is empty, the above will display “<code>nothing</code>”.</p> </dd> <dt>
+ <a class="reference internal" href="builtins#std:templatefilter-length"><code>length</code></a>
+</dt> <dd>
+<p class="first">Returns the length of the value. This works for both strings and lists. For example:</p> <pre data-language="markup">{{ value|length }}
+</pre> <p class="last">If <code>value</code> is <code>['a', 'b', 'c', 'd']</code>, the output will be <code>4</code>.</p> </dd> <dt>
+ <a class="reference internal" href="builtins#std:templatefilter-filesizeformat"><code>filesizeformat</code></a>
+</dt> <dd>
+<p class="first">Formats the value like a “human-readable” file size (i.e. <code>'13 KB'</code>, <code>'4.1 MB'</code>, <code>'102 bytes'</code>, etc.). For example:</p> <pre data-language="markup">{{ value|filesizeformat }}
+</pre> <p class="last">If <code>value</code> is 123456789, the output would be <code>117.7 MB</code>.</p> </dd> </dl> <p>Again, these are just a few examples; see the <a class="reference internal" href="builtins#ref-templates-builtins-filters"><span class="std std-ref">built-in filter reference</span></a> for the complete list.</p> <p>You can also create your own custom template filters; see <a class="reference internal" href="../../howto/custom-template-tags"><span class="doc">How to create custom template tags and filters</span></a>.</p> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p class="last">Django’s admin interface can include a complete reference of all template tags and filters available for a given site. See <a class="reference internal" href="../contrib/admin/admindocs"><span class="doc">The Django admin documentation generator</span></a>.</p> </div>   <h2 id="tags">Tags</h2> <p id="s-tags">Tags look like this: <code>{% tag %}</code>. Tags are more complex than variables: Some create text in the output, some control flow by performing loops or logic, and some load external information into the template to be used by later variables.</p> <p>Some tags require beginning and ending tags (i.e. <code>{% tag %} ... tag contents
+... {% endtag %}</code>).</p> <p>Django ships with about two dozen built-in template tags. You can read all about them in the <a class="reference internal" href="builtins#ref-templates-builtins-tags"><span class="std std-ref">built-in tag reference</span></a>. To give you a taste of what’s available, here are some of the more commonly used tags:</p> <dl class="docutils"> <dt>
+ <a class="reference internal" href="builtins#std:templatetag-for"><code>for</code></a>
+</dt> <dd>
+<p class="first">Loop over each item in an array. For example, to display a list of athletes provided in <code>athlete_list</code>:</p> <pre data-language="markup">&lt;ul&gt;
+{% for athlete in athlete_list %}
+    &lt;li&gt;{{ athlete.name }}&lt;/li&gt;
+{% endfor %}
+&lt;/ul&gt;
+</pre> </dd> <dt>
+<code>if, elif, and else</code> </dt> <dd>
+<p class="first">Evaluates a variable, and if that variable is “true” the contents of the block are displayed:</p> <pre data-language="markup">{% if athlete_list %}
+    Number of athletes: {{ athlete_list|length }}
+{% elif athlete_in_locker_room_list %}
+    Athletes should be out of the locker room soon!
+{% else %}
+    No athletes.
+{% endif %}
+</pre> <p>In the above, if <code>athlete_list</code> is not empty, the number of athletes will be displayed by the <code>{{ athlete_list|length }}</code> variable. Otherwise, if <code>athlete_in_locker_room_list</code> is not empty, the message “Athletes should be out…” will be displayed. If both lists are empty, “No athletes.” will be displayed.</p> <p>You can also use filters and various operators in the <a class="reference internal" href="builtins#std:templatetag-if"><code>if</code></a> tag:</p> <pre data-language="markup">{% if athlete_list|length &gt; 1 %}
+   Team: {% for athlete in athlete_list %} ... {% endfor %}
+{% else %}
+   Athlete: {{ athlete_list.0.name }}
+{% endif %}
+</pre> <p class="last">While the above example works, be aware that most template filters return strings, so mathematical comparisons using filters will generally not work as you expect. <a class="reference internal" href="builtins#std:templatefilter-length"><code>length</code></a> is an exception.</p> </dd> <dt>
+<code>block and</code> <a class="reference internal" href="builtins#std:templatetag-extends"><code>extends</code></a>
+</dt> <dd>Set up <a class="reference internal" href="#id1">template inheritance</a> (see below), a powerful way of cutting down on “boilerplate” in templates.</dd> </dl> <p>Again, the above is only a selection of the whole list; see the <a class="reference internal" href="builtins#ref-templates-builtins-tags"><span class="std std-ref">built-in tag reference</span></a> for the complete list.</p> <p>You can also create your own custom template tags; see <a class="reference internal" href="../../howto/custom-template-tags"><span class="doc">How to create custom template tags and filters</span></a>.</p> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p class="last">Django’s admin interface can include a complete reference of all template tags and filters available for a given site. See <a class="reference internal" href="../contrib/admin/admindocs"><span class="doc">The Django admin documentation generator</span></a>.</p> </div>   <h2 id="template-comments">Comments</h2> <p id="s-comments">To comment-out part of a line in a template, use the comment syntax: <code>{# #}</code>.</p> <p>For example, this template would render as <code>'hello'</code>:</p> <pre data-language="markup">{# greeting #}hello
+</pre> <p>A comment can contain any template code, invalid or not. For example:</p> <pre data-language="markup">{# {% if foo %}bar{% else %} #}
+</pre> <p>This syntax can only be used for single-line comments (no newlines are permitted between the <code>{#</code> and <code>#}</code> delimiters). If you need to comment out a multiline portion of the template, see the <a class="reference internal" href="builtins#std:templatetag-comment"><code>comment</code></a> tag.</p>   <h2 id="id1">Template inheritance</h2> <p id="s-template-inheritance">The most powerful – and thus the most complex – part of Django’s template engine is template inheritance. Template inheritance allows you to build a base “skeleton” template that contains all the common elements of your site and defines <strong>blocks</strong> that child templates can override.</p> <p>Let’s look at template inheritance by starting with an example:</p> <pre data-language="markup">&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+    &lt;link rel="stylesheet" href="style.css"&gt;
+    &lt;title&gt;{% block title %}My amazing site{% endblock %}&lt;/title&gt;
+&lt;/head&gt;
+
+&lt;body&gt;
+    &lt;div id="sidebar"&gt;
+        {% block sidebar %}
+        &lt;ul&gt;
+            &lt;li&gt;&lt;a href="/"&gt;Home&lt;/a&gt;&lt;/li&gt;
+            &lt;li&gt;&lt;a href="/blog/"&gt;Blog&lt;/a&gt;&lt;/li&gt;
+        &lt;/ul&gt;
+        {% endblock %}
+    &lt;/div&gt;
+
+    &lt;div id="content"&gt;
+        {% block content %}{% endblock %}
+    &lt;/div&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre> <p>This template, which we’ll call <code>base.html</code>, defines an HTML skeleton document that you might use for a two-column page. It’s the job of “child” templates to fill the empty blocks with content.</p> <p>In this example, the <a class="reference internal" href="builtins#std:templatetag-block"><code>block</code></a> tag defines three blocks that child templates can fill in. All the <a class="reference internal" href="builtins#std:templatetag-block"><code>block</code></a> tag does is to tell the template engine that a child template may override those portions of the template.</p> <p>A child template might look like this:</p> <pre data-language="markup">{% extends "base.html" %}
+
+{% block title %}My amazing blog{% endblock %}
+
+{% block content %}
+{% for entry in blog_entries %}
+    &lt;h2&gt;{{ entry.title }}&lt;/h2&gt;
+    &lt;p&gt;{{ entry.body }}&lt;/p&gt;
+{% endfor %}
+{% endblock %}
+</pre> <p>The <a class="reference internal" href="builtins#std:templatetag-extends"><code>extends</code></a> tag is the key here. It tells the template engine that this template “extends” another template. When the template system evaluates this template, first it locates the parent – in this case, “base.html”.</p> <p>At that point, the template engine will notice the three <a class="reference internal" href="builtins#std:templatetag-block"><code>block</code></a> tags in <code>base.html</code> and replace those blocks with the contents of the child template. Depending on the value of <code>blog_entries</code>, the output might look like:</p> <pre data-language="markup">&lt;!DOCTYPE html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+    &lt;link rel="stylesheet" href="style.css"&gt;
+    &lt;title&gt;My amazing blog&lt;/title&gt;
+&lt;/head&gt;
+
+&lt;body&gt;
+    &lt;div id="sidebar"&gt;
+        &lt;ul&gt;
+            &lt;li&gt;&lt;a href="/"&gt;Home&lt;/a&gt;&lt;/li&gt;
+            &lt;li&gt;&lt;a href="/blog/"&gt;Blog&lt;/a&gt;&lt;/li&gt;
+        &lt;/ul&gt;
+    &lt;/div&gt;
+
+    &lt;div id="content"&gt;
+        &lt;h2&gt;Entry one&lt;/h2&gt;
+        &lt;p&gt;This is my first entry.&lt;/p&gt;
+
+        &lt;h2&gt;Entry two&lt;/h2&gt;
+        &lt;p&gt;This is my second entry.&lt;/p&gt;
+    &lt;/div&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre> <p>Note that since the child template didn’t define the <code>sidebar</code> block, the value from the parent template is used instead. Content within a <code>{% block %}</code> tag in a parent template is always used as a fallback.</p> <p>You can use as many levels of inheritance as needed. One common way of using inheritance is the following three-level approach:</p> <ul class="simple"> <li>Create a <code>base.html</code> template that holds the main look-and-feel of your site.</li> <li>Create a <code>base_SECTIONNAME.html</code> template for each “section” of your site. For example, <code>base_news.html</code>, <code>base_sports.html</code>. These templates all extend <code>base.html</code> and include section-specific styles/design.</li> <li>Create individual templates for each type of page, such as a news article or blog entry. These templates extend the appropriate section template.</li> </ul> <p>This approach maximizes code reuse and helps to add items to shared content areas, such as section-wide navigation.</p> <p>Here are some tips for working with inheritance:</p> <ul> <li>If you use <a class="reference internal" href="builtins#std:templatetag-extends"><code>{% extends %}</code></a> in a template, it must be the first template tag in that template. Template inheritance won’t work, otherwise. </li> <li>More <a class="reference internal" href="builtins#std:templatetag-block"><code>{% block %}</code></a> tags in your base templates are better. Remember, child templates don’t have to define all parent blocks, so you can fill in reasonable defaults in a number of blocks, then only define the ones you need later. It’s better to have more hooks than fewer hooks. </li> <li>If you find yourself duplicating content in a number of templates, it probably means you should move that content to a <code>{% block %}</code> in a parent template. </li> <li>If you need to get the content of the block from the parent template, the <code>{{ block.super }}</code> variable will do the trick. This is useful if you want to add to the contents of a parent block instead of completely overriding it. Data inserted using <code>{{ block.super }}</code> will not be automatically escaped (see the <a class="reference external" href="#automatic-html-escaping">next section</a>), since it was already escaped, if necessary, in the parent template. </li> <li>By using the same template name as you are inheriting from, <a class="reference internal" href="builtins#std:templatetag-extends"><code>{% extends %}</code></a> can be used to inherit a template at the same time as overriding it. Combined with <code>{{ block.super }}</code>, this can be a powerful way to make small customizations. See <a class="reference internal" href="../../howto/overriding-templates#extending-an-overridden-template"><span class="std std-ref">Extending an overridden template</span></a> in the <em>Overriding templates</em> How-to for a full example. </li> <li>
+<p class="first">Variables created outside of a <a class="reference internal" href="builtins#std:templatetag-block"><code>{% block %}</code></a> using the template tag <code>as</code> syntax can’t be used inside the block. For example, this template doesn’t render anything:</p> <pre data-language="markup">{% translate "Title" as title %}
+{% block content %}{{ title }}{% endblock %}
+</pre> </li> <li>
+<p class="first">For extra readability, you can optionally give a <em>name</em> to your <code>{% endblock %}</code> tag. For example:</p> <pre data-language="markup">{% block content %}
+...
+{% endblock content %}
+</pre> <p>In larger templates, this technique helps you see which <code>{% block %}</code> tags are being closed.</p> </li> </ul> <p>Finally, note that you can’t define multiple <a class="reference internal" href="builtins#std:templatetag-block"><code>block</code></a> tags with the same name in the same template. This limitation exists because a block tag works in “both” directions. That is, a block tag doesn’t just provide a hole to fill – it also defines the content that fills the hole in the <em>parent</em>. If there were two similarly-named <a class="reference internal" href="builtins#std:templatetag-block"><code>block</code></a> tags in a template, that template’s parent wouldn’t know which one of the blocks’ content to use.</p>   <h2 id="id2">Automatic HTML escaping</h2> <p id="s-automatic-html-escaping">When generating HTML from templates, there’s always a risk that a variable will include characters that affect the resulting HTML. For example, consider this template fragment:</p> <pre data-language="markup">Hello, {{ name }}
+</pre> <p>At first, this seems like a harmless way to display a user’s name, but consider what would happen if the user entered their name as this:</p> <pre data-language="markup">&lt;script&gt;alert('hello')&lt;/script&gt;
+</pre> <p>With this name value, the template would be rendered as:</p> <pre data-language="markup">Hello, &lt;script&gt;alert('hello')&lt;/script&gt;
+</pre> <p>…which means the browser would pop-up a JavaScript alert box!</p> <p>Similarly, what if the name contained a <code>'&lt;'</code> symbol, like this?</p> <pre data-language="html">&lt;b&gt;username
+</pre> <p>That would result in a rendered template like this:</p> <pre data-language="markup">Hello, &lt;b&gt;username
+</pre> <p>…which, in turn, would result in the remainder of the web page being bolded!</p> <p>Clearly, user-submitted data shouldn’t be trusted blindly and inserted directly into your web pages, because a malicious user could use this kind of hole to do potentially bad things. This type of security exploit is called a <a class="reference external" href="https://en.wikipedia.org/wiki/Cross-site_scripting">Cross Site Scripting</a> (XSS) attack.</p> <p>To avoid this problem, you have two options:</p> <ul class="simple"> <li>One, you can make sure to run each untrusted variable through the <a class="reference internal" href="builtins#std:templatefilter-escape"><code>escape</code></a> filter (documented below), which converts potentially harmful HTML characters to unharmful ones. This was the default solution in Django for its first few years, but the problem is that it puts the onus on <em>you</em>, the developer / template author, to ensure you’re escaping everything. It’s easy to forget to escape data.</li> <li>Two, you can take advantage of Django’s automatic HTML escaping. The remainder of this section describes how auto-escaping works.</li> </ul> <p>By default in Django, every template automatically escapes the output of every variable tag. Specifically, these five characters are escaped:</p> <ul class="simple"> <li>
+<code>&lt;</code> is converted to <code>&amp;lt;</code>
+</li> <li>
+<code>&gt;</code> is converted to <code>&amp;gt;</code>
+</li> <li>
+<code>'</code> (single quote) is converted to <code>&amp;#x27;</code>
+</li> <li>
+<code>"</code> (double quote) is converted to <code>&amp;quot;</code>
+</li> <li>
+<code>&amp;</code> is converted to <code>&amp;amp;</code>
+</li> </ul> <p>Again, we stress that this behavior is on by default. If you’re using Django’s template system, you’re protected.</p>  <h3 id="how-to-turn-it-off">How to turn it off</h3> <p id="s-how-to-turn-it-off">If you don’t want data to be auto-escaped, on a per-site, per-template level or per-variable level, you can turn it off in several ways.</p> <p>Why would you want to turn it off? Because sometimes, template variables contain data that you <em>intend</em> to be rendered as raw HTML, in which case you don’t want their contents to be escaped. For example, you might store a blob of HTML in your database and want to embed that directly into your template. Or, you might be using Django’s template system to produce text that is <em>not</em> HTML – like an email message, for instance.</p>  <h4 id="for-individual-variables">For individual variables</h4> <p id="s-for-individual-variables">To disable auto-escaping for an individual variable, use the <a class="reference internal" href="builtins#std:templatefilter-safe"><code>safe</code></a> filter:</p> <pre data-language="markup">This will be escaped: {{ data }}
+This will not be escaped: {{ data|safe }}
+</pre> <p>Think of <em>safe</em> as shorthand for <em>safe from further escaping</em> or <em>can be safely interpreted as HTML</em>. In this example, if <code>data</code> contains <code>'&lt;b&gt;'</code>, the output will be:</p> <pre data-language="markup">This will be escaped: &amp;lt;b&amp;gt;
+This will not be escaped: &lt;b&gt;
+</pre>   <h4 id="for-template-blocks">For template blocks</h4> <p id="s-for-template-blocks">To control auto-escaping for a template, wrap the template (or a particular section of the template) in the <a class="reference internal" href="builtins#std:templatetag-autoescape"><code>autoescape</code></a> tag, like so:</p> <pre data-language="markup">{% autoescape off %}
+    Hello {{ name }}
+{% endautoescape %}
+</pre> <p>The <a class="reference internal" href="builtins#std:templatetag-autoescape"><code>autoescape</code></a> tag takes either <code>on</code> or <code>off</code> as its argument. At times, you might want to force auto-escaping when it would otherwise be disabled. Here is an example template:</p> <pre data-language="markup">Auto-escaping is on by default. Hello {{ name }}
+
+{% autoescape off %}
+    This will not be auto-escaped: {{ data }}.
+
+    Nor this: {{ other_data }}
+    {% autoescape on %}
+        Auto-escaping applies again: {{ name }}
+    {% endautoescape %}
+{% endautoescape %}
+</pre> <p>The auto-escaping tag passes its effect onto templates that extend the current one as well as templates included via the <a class="reference internal" href="builtins#std:templatetag-include"><code>include</code></a> tag, just like all block tags. For example:</p> <div class="literal-block-wrapper docutils container" id="id4"> <div class="code-block-caption"><span class="caption-text">base.html</span></div> <pre data-language="markup">{% autoescape off %}
+&lt;h1&gt;{% block title %}{% endblock %}&lt;/h1&gt;
+{% block content %}
+{% endblock %}
+{% endautoescape %}
+</pre> </div> <div class="literal-block-wrapper docutils container" id="id5"> <div class="code-block-caption"><span class="caption-text">child.html</span></div> <pre data-language="markup">{% extends "base.html" %}
+{% block title %}This &amp;amp; that{% endblock %}
+{% block content %}{{ greeting }}{% endblock %}
+</pre> </div> <p>Because auto-escaping is turned off in the base template, it will also be turned off in the child template, resulting in the following rendered HTML when the <code>greeting</code> variable contains the string <code>&lt;b&gt;Hello!&lt;/b&gt;</code>:</p> <pre data-language="markup">&lt;h1&gt;This &amp;amp; that&lt;/h1&gt;
+&lt;b&gt;Hello!&lt;/b&gt;
+</pre>    <h3 id="notes">Notes</h3> <p id="s-notes">Generally, template authors don’t need to worry about auto-escaping very much. Developers on the Python side (people writing views and custom filters) need to think about the cases in which data shouldn’t be escaped, and mark data appropriately, so things Just Work in the template.</p> <p>If you’re creating a template that might be used in situations where you’re not sure whether auto-escaping is enabled, then add an <a class="reference internal" href="builtins#std:templatefilter-escape"><code>escape</code></a> filter to any variable that needs escaping. When auto-escaping is on, there’s no danger of the <a class="reference internal" href="builtins#std:templatefilter-escape"><code>escape</code></a> filter <em>double-escaping</em> data – the <a class="reference internal" href="builtins#std:templatefilter-escape"><code>escape</code></a> filter does not affect auto-escaped variables.</p>   <h3 id="id3">String literals and automatic escaping</h3> <p id="s-string-literals-and-automatic-escaping">As we mentioned earlier, filter arguments can be strings:</p> <pre data-language="markup">{{ data|default:"This is a string literal." }}
+</pre> <p>All string literals are inserted <strong>without</strong> any automatic escaping into the template – they act as if they were all passed through the <a class="reference internal" href="builtins#std:templatefilter-safe"><code>safe</code></a> filter. The reasoning behind this is that the template author is in control of what goes into the string literal, so they can make sure the text is correctly escaped when the template is written.</p> <p>This means you would write</p> <pre data-language="markup">{{ data|default:"3 &amp;lt; 2" }}
+</pre> <p>…rather than:</p> <pre data-language="markup">{{ data|default:"3 &lt; 2" }}  {# Bad! Don't do this. #}
+</pre> <p>This doesn’t affect what happens to data coming from the variable itself. The variable’s contents are still automatically escaped, if necessary, because they’re beyond the control of the template author.</p>    <h2 id="template-accessing-methods">Accessing method calls</h2> <p id="s-accessing-method-calls">Most method calls attached to objects are also available from within templates. This means that templates have access to much more than just class attributes (like field names) and variables passed in from views. For example, the Django ORM provides the <a class="reference internal" href="../../topics/db/queries#topics-db-queries-related"><span class="std std-ref">“entry_set”</span></a> syntax for finding a collection of objects related on a foreign key. Therefore, given a model called “comment” with a foreign key relationship to a model called “task” you can loop through all comments attached to a given task like this:</p> <pre data-language="markup">{% for comment in task.comment_set.all %}
+    {{ comment }}
+{% endfor %}
+</pre> <p>Similarly, <a class="reference internal" href="../models/querysets"><span class="doc">QuerySets</span></a> provide a <code>count()</code> method to count the number of objects they contain. Therefore, you can obtain a count of all comments related to the current task with:</p> <pre data-language="markup">{{ task.comment_set.all.count }}
+</pre> <p>You can also access methods you’ve explicitly defined on your own models:</p> <div class="literal-block-wrapper docutils container" id="id6"> <div class="code-block-caption"><span class="caption-text">models.py</span></div> <pre data-language="python">class Task(models.Model):
+    def foo(self):
+        return "bar"
+</pre> </div> <div class="literal-block-wrapper docutils container" id="id7"> <div class="code-block-caption"><span class="caption-text">template.html</span></div> <pre data-language="markup">{{ task.foo }}
+</pre> </div> <p>Because Django intentionally limits the amount of logic processing available in the template language, it is not possible to pass arguments to method calls accessed from within templates. Data should be calculated in views, then passed to templates for display.</p>   <h2 id="loading-custom-template-libraries">Custom tag and filter libraries</h2> <p id="s-custom-tag-and-filter-libraries">Certain applications provide custom tag and filter libraries. To access them in a template, ensure the application is in <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> (we’d add <code>'django.contrib.humanize'</code> for this example), and then use the <a class="reference internal" href="builtins#std:templatetag-load"><code>load</code></a> tag in a template:</p> <pre data-language="markup">{% load humanize %}
+
+{{ 45000|intcomma }}
+</pre> <p>In the above, the <a class="reference internal" href="builtins#std:templatetag-load"><code>load</code></a> tag loads the <code>humanize</code> tag library, which then makes the <code>intcomma</code> filter available for use. If you’ve enabled <a class="reference internal" href="../contrib/admin/admindocs#module-django.contrib.admindocs" title="django.contrib.admindocs: Django's admin documentation generator."><code>django.contrib.admindocs</code></a>, you can consult the documentation area in your admin to find the list of custom libraries in your installation.</p> <p>The <a class="reference internal" href="builtins#std:templatetag-load"><code>load</code></a> tag can take multiple library names, separated by spaces. Example:</p> <pre data-language="markup">{% load humanize i18n %}
+</pre> <p>See <a class="reference internal" href="../../howto/custom-template-tags"><span class="doc">How to create custom template tags and filters</span></a> for information on writing your own custom template libraries.</p>  <h3 id="custom-libraries-and-template-inheritance">Custom libraries and template inheritance</h3> <p id="s-custom-libraries-and-template-inheritance">When you load a custom tag or filter library, the tags/filters are only made available to the current template – not any parent or child templates along the template-inheritance path.</p> <p>For example, if a template <code>foo.html</code> has <code>{% load humanize %}</code>, a child template (e.g., one that has <code>{% extends "foo.html" %}</code>) will <em>not</em> have access to the humanize template tags and filters. The child template is responsible for its own <code>{% load humanize %}</code>.</p> <p>This is a feature for the sake of maintainability and sanity.</p> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <dl class="last docutils"> <dt><a class="reference internal" href="index"><span class="doc">The Templates Reference</span></a></dt> <dd>Covers built-in tags, built-in filters, using an alternative template language, and more.</dd> </dl> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/templates/language/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/templates/language/</a>
+  </p>
+</div>

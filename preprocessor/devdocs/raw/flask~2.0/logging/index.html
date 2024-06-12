@@ -1,0 +1,87 @@
+<h1>Logging</h1> <p>Flask uses standard Python <a class="reference external" href="https://docs.python.org/3/library/logging.html#module-logging" title="(in Python v3.9)"><code>logging</code></a>. Messages about your Flask application are logged with <a class="reference internal" href="../api/index#flask.Flask.logger" title="flask.Flask.logger"><code>app.logger</code></a>, which takes the same name as <a class="reference internal" href="../api/index#flask.Flask.name" title="flask.Flask.name"><code>app.name</code></a>. This logger can also be used to log your own messages.</p> <pre data-language="python">@app.route('/login', methods=['POST'])
+def login():
+    user = get_user(request.form['username'])
+
+    if user.check_password(request.form['password']):
+        login_user(user)
+        app.logger.info('%s logged in successfully', user.username)
+        return redirect(url_for('index'))
+    else:
+        app.logger.info('%s failed to log in', user.username)
+        abort(401)
+</pre> <p>If you don’t configure logging, Python’s default log level is usually ‘warning’. Nothing below the configured level will be visible.</p>  <h2 id="basic-configuration">Basic Configuration</h2> <p>When you want to configure logging for your project, you should do it as soon as possible when the program starts. If <a class="reference internal" href="../api/index#flask.Flask.logger" title="flask.Flask.logger"><code>app.logger</code></a> is accessed before logging is configured, it will add a default handler. If possible, configure logging before creating the application object.</p> <p>This example uses <a class="reference external" href="https://docs.python.org/3/library/logging.config.html#logging.config.dictConfig" title="(in Python v3.9)"><code>dictConfig()</code></a> to create a logging configuration similar to Flask’s default, except for all logs:</p> <pre data-language="python">from logging.config import dictConfig
+
+dictConfig({
+    'version': 1,
+    'formatters': {'default': {
+        'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+    }},
+    'handlers': {'wsgi': {
+        'class': 'logging.StreamHandler',
+        'stream': 'ext://flask.logging.wsgi_errors_stream',
+        'formatter': 'default'
+    }},
+    'root': {
+        'level': 'INFO',
+        'handlers': ['wsgi']
+    }
+})
+
+app = Flask(__name__)
+</pre>  <h3 id="default-configuration">Default Configuration</h3> <p>If you do not configure logging yourself, Flask will add a <a class="reference external" href="https://docs.python.org/3/library/logging.handlers.html#logging.StreamHandler" title="(in Python v3.9)"><code>StreamHandler</code></a> to <a class="reference internal" href="../api/index#flask.Flask.logger" title="flask.Flask.logger"><code>app.logger</code></a> automatically. During requests, it will write to the stream specified by the WSGI server in <code>environ['wsgi.errors']</code> (which is usually <a class="reference external" href="https://docs.python.org/3/library/sys.html#sys.stderr" title="(in Python v3.9)"><code>sys.stderr</code></a>). Outside a request, it will log to <a class="reference external" href="https://docs.python.org/3/library/sys.html#sys.stderr" title="(in Python v3.9)"><code>sys.stderr</code></a>.</p>   <h3 id="removing-the-default-handler">Removing the Default Handler</h3> <p>If you configured logging after accessing <a class="reference internal" href="../api/index#flask.Flask.logger" title="flask.Flask.logger"><code>app.logger</code></a>, and need to remove the default handler, you can import and remove it:</p> <pre data-language="python">from flask.logging import default_handler
+
+app.logger.removeHandler(default_handler)
+</pre>    <h2 id="email-errors-to-admins">Email Errors to Admins</h2> <p>When running the application on a remote server for production, you probably won’t be looking at the log messages very often. The WSGI server will probably send log messages to a file, and you’ll only check that file if a user tells you something went wrong.</p> <p>To be proactive about discovering and fixing bugs, you can configure a <a class="reference external" href="https://docs.python.org/3/library/logging.handlers.html#logging.handlers.SMTPHandler" title="(in Python v3.9)"><code>logging.handlers.SMTPHandler</code></a> to send an email when errors and higher are logged.</p> <pre data-language="python">import logging
+from logging.handlers import SMTPHandler
+
+mail_handler = SMTPHandler(
+    mailhost='127.0.0.1',
+    fromaddr='server-error@example.com',
+    toaddrs=['admin@example.com'],
+    subject='Application Error'
+)
+mail_handler.setLevel(logging.ERROR)
+mail_handler.setFormatter(logging.Formatter(
+    '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+))
+
+if not app.debug:
+    app.logger.addHandler(mail_handler)
+</pre> <p>This requires that you have an SMTP server set up on the same server. See the Python docs for more information about configuring the handler.</p>   <h2 id="injecting-request-information">Injecting Request Information</h2> <p>Seeing more information about the request, such as the IP address, may help debugging some errors. You can subclass <a class="reference external" href="https://docs.python.org/3/library/logging.html#logging.Formatter" title="(in Python v3.9)"><code>logging.Formatter</code></a> to inject your own fields that can be used in messages. You can change the formatter for Flask’s default handler, the mail handler defined above, or any other handler.</p> <pre data-language="python">from flask import has_request_context, request
+from flask.logging import default_handler
+
+class RequestFormatter(logging.Formatter):
+    def format(self, record):
+        if has_request_context():
+            record.url = request.url
+            record.remote_addr = request.remote_addr
+        else:
+            record.url = None
+            record.remote_addr = None
+
+        return super().format(record)
+
+formatter = RequestFormatter(
+    '[%(asctime)s] %(remote_addr)s requested %(url)s\n'
+    '%(levelname)s in %(module)s: %(message)s'
+)
+default_handler.setFormatter(formatter)
+mail_handler.setFormatter(formatter)
+</pre>   <h2 id="other-libraries">Other Libraries</h2> <p>Other libraries may use logging extensively, and you want to see relevant messages from those logs too. The simplest way to do this is to add handlers to the root logger instead of only the app logger.</p> <pre data-language="python">from flask.logging import default_handler
+
+root = logging.getLogger()
+root.addHandler(default_handler)
+root.addHandler(mail_handler)
+</pre> <p>Depending on your project, it may be more useful to configure each logger you care about separately, instead of configuring only the root logger.</p> <pre data-language="python">for logger in (
+    app.logger,
+    logging.getLogger('sqlalchemy'),
+    logging.getLogger('other_package'),
+):
+    logger.addHandler(default_handler)
+    logger.addHandler(mail_handler)
+</pre>  <h3 id="werkzeug">Werkzeug</h3> <p>Werkzeug logs basic request/response information to the <code>'werkzeug'</code> logger. If the root logger has no handlers configured, Werkzeug adds a <a class="reference external" href="https://docs.python.org/3/library/logging.handlers.html#logging.StreamHandler" title="(in Python v3.9)"><code>StreamHandler</code></a> to its logger.</p>   <h3 id="flask-extensions">Flask Extensions</h3> <p>Depending on the situation, an extension may choose to log to <a class="reference internal" href="../api/index#flask.Flask.logger" title="flask.Flask.logger"><code>app.logger</code></a> or its own named logger. Consult each extension’s documentation for details.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/logging/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/logging/</a>
+  </p>
+</div>

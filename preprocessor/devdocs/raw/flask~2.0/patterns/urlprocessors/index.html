@@ -1,0 +1,69 @@
+<h1>Using URL Processors</h1> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.7.</span></p> </div> </details><p>Flask 0.7 introduces the concept of URL processors. The idea is that you might have a bunch of resources with common parts in the URL that you don’t always explicitly want to provide. For instance you might have a bunch of URLs that have the language code in it but you don’t want to have to handle it in every single function yourself.</p> <p>URL processors are especially helpful when combined with blueprints. We will handle both application specific URL processors here as well as blueprint specifics.</p>  <h2 id="internationalized-application-urls">Internationalized Application URLs</h2> <p>Consider an application like this:</p> <pre data-language="python">from flask import Flask, g
+
+app = Flask(__name__)
+
+@app.route('/&lt;lang_code&gt;/')
+def index(lang_code):
+    g.lang_code = lang_code
+    ...
+
+@app.route('/&lt;lang_code&gt;/about')
+def about(lang_code):
+    g.lang_code = lang_code
+    ...
+</pre> <p>This is an awful lot of repetition as you have to handle the language code setting on the <a class="reference internal" href="../../api/index#flask.g" title="flask.g"><code>g</code></a> object yourself in every single function. Sure, a decorator could be used to simplify this, but if you want to generate URLs from one function to another you would have to still provide the language code explicitly which can be annoying.</p> <p>For the latter, this is where <a class="reference internal" href="../../api/index#flask.Flask.url_defaults" title="flask.Flask.url_defaults"><code>url_defaults()</code></a> functions come in. They can automatically inject values into a call to <a class="reference internal" href="../../api/index#flask.url_for" title="flask.url_for"><code>url_for()</code></a>. The code below checks if the language code is not yet in the dictionary of URL values and if the endpoint wants a value named <code>'lang_code'</code>:</p> <pre data-language="python">@app.url_defaults
+def add_language_code(endpoint, values):
+    if 'lang_code' in values or not g.lang_code:
+        return
+    if app.url_map.is_endpoint_expecting(endpoint, 'lang_code'):
+        values['lang_code'] = g.lang_code
+</pre> <p>The method <a class="reference external" href="https://werkzeug.palletsprojects.com/en/2.0.x/routing/#werkzeug.routing.Map.is_endpoint_expecting" title="(in Werkzeug v2.0.x)"><code>is_endpoint_expecting()</code></a> of the URL map can be used to figure out if it would make sense to provide a language code for the given endpoint.</p> <p>The reverse of that function are <a class="reference internal" href="../../api/index#flask.Flask.url_value_preprocessor" title="flask.Flask.url_value_preprocessor"><code>url_value_preprocessor()</code></a>s. They are executed right after the request was matched and can execute code based on the URL values. The idea is that they pull information out of the values dictionary and put it somewhere else:</p> <pre data-language="python">@app.url_value_preprocessor
+def pull_lang_code(endpoint, values):
+    g.lang_code = values.pop('lang_code', None)
+</pre> <p>That way you no longer have to do the <code>lang_code</code> assignment to <a class="reference internal" href="../../api/index#flask.g" title="flask.g"><code>g</code></a> in every function. You can further improve that by writing your own decorator that prefixes URLs with the language code, but the more beautiful solution is using a blueprint. Once the <code>'lang_code'</code> is popped from the values dictionary and it will no longer be forwarded to the view function reducing the code to this:</p> <pre data-language="python">from flask import Flask, g
+
+app = Flask(__name__)
+
+@app.url_defaults
+def add_language_code(endpoint, values):
+    if 'lang_code' in values or not g.lang_code:
+        return
+    if app.url_map.is_endpoint_expecting(endpoint, 'lang_code'):
+        values['lang_code'] = g.lang_code
+
+@app.url_value_preprocessor
+def pull_lang_code(endpoint, values):
+    g.lang_code = values.pop('lang_code', None)
+
+@app.route('/&lt;lang_code&gt;/')
+def index():
+    ...
+
+@app.route('/&lt;lang_code&gt;/about')
+def about():
+    ...
+</pre>   <h2 id="internationalized-blueprint-urls">Internationalized Blueprint URLs</h2> <p>Because blueprints can automatically prefix all URLs with a common string it’s easy to automatically do that for every function. Furthermore blueprints can have per-blueprint URL processors which removes a whole lot of logic from the <a class="reference internal" href="../../api/index#flask.Flask.url_defaults" title="flask.Flask.url_defaults"><code>url_defaults()</code></a> function because it no longer has to check if the URL is really interested in a <code>'lang_code'</code> parameter:</p> <pre data-language="python">from flask import Blueprint, g
+
+bp = Blueprint('frontend', __name__, url_prefix='/&lt;lang_code&gt;')
+
+@bp.url_defaults
+def add_language_code(endpoint, values):
+    values.setdefault('lang_code', g.lang_code)
+
+@bp.url_value_preprocessor
+def pull_lang_code(endpoint, values):
+    g.lang_code = values.pop('lang_code')
+
+@bp.route('/')
+def index():
+    ...
+
+@bp.route('/about')
+def about():
+    ...
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/urlprocessors/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/urlprocessors/</a>
+  </p>
+</div>

@@ -1,0 +1,78 @@
+<h1 class="devsite-page-title">tf.custom_gradient</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/custom_gradient.py#L49-L219">  View source on GitHub </a> </td> </table> <p>Decorator to define a function with a custom gradient.</p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/custom_gradient"><code translate="no" dir="ltr">tf.compat.v1.custom_gradient</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.custom_gradient(
+    f=None
+)
+</pre>  <p>This decorator allows fine grained control over the gradients of a sequence for operations. This may be useful for multiple reasons, including providing a more efficient or numerically stable gradient for a sequence of operations.</p> <p>For example, consider the following function that commonly occurs in the computation of cross entropy and log likelihoods:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">def log1pexp(x):
+  return tf.math.log(1 + tf.exp(x))
+</pre> <p>Due to numerical instability, the gradient of this function evaluated at x=100 is NaN. For example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">x = tf.constant(100.)
+y = log1pexp(x)
+dy = tf.gradients(y, x) # Will be NaN when evaluated.
+</pre> <p>The gradient expression can be analytically simplified to provide numerical stability:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@tf.custom_gradient
+def log1pexp(x):
+  e = tf.exp(x)
+  def grad(dy):
+    return dy * (1 - 1 / (1 + e))
+  return tf.math.log(1 + e), grad
+</pre> <p>With this definition, the gradient at x=100 will be correctly evaluated as 1.0.</p> <p>The variable <code translate="no" dir="ltr">dy</code> is defined as the upstream gradient. i.e. the gradient from all the layers or functions originating from this layer.</p> <p>By chain rule we know that <code translate="no" dir="ltr">dy/dx = dy/x_0 * dx_0/dx_1 * ... * dx_i/dx_i+1 * ... * dx_n/dx</code></p> <p>In this case the gradient of our current function defined as <code translate="no" dir="ltr">dx_i/dx_i+1 = (1 - 1 / (1 + e))</code>. The upstream gradient <code translate="no" dir="ltr">dy</code> would be <code translate="no" dir="ltr">dx_i+1/dx_i+2 * dx_i+2/dx_i+3 * ... * dx_n/dx</code>. The upstream gradient multiplied by the current gradient is then passed downstream.</p> <p>In case the function takes multiple variables as input, the <code translate="no" dir="ltr">grad</code> function must also return the same number of variables. We take the function <code translate="no" dir="ltr">z = x * y</code> as an example.</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.custom_gradient
+def bar(x, y):
+  def grad(upstream):
+    dz_dx = y
+    dz_dy = x
+    return upstream * dz_dx, upstream * dz_dy
+  z = x * y
+  return z, grad
+x = tf.constant(2.0, dtype=tf.float32)
+y = tf.constant(3.0, dtype=tf.float32)
+with tf.GradientTape(persistent=True) as tape:
+  tape.watch(x)
+  tape.watch(y)
+  z = bar(x, y)
+z
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=6.0&gt;
+tape.gradient(z, x)
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=3.0&gt;
+tape.gradient(z, y)
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=2.0&gt;
+</pre> <p>Nesting custom gradients can lead to unintuitive results. The default behavior does not correspond to n-th order derivatives. For example</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@tf.custom_gradient
+def op(x):
+  y = op1(x)
+  @tf.custom_gradient
+  def grad_fn(dy):
+    gdy = op2(x, y, dy)
+    def grad_grad_fn(ddy):  # Not the 2nd order gradient of op w.r.t. x.
+      return op3(x, y, dy, ddy)
+    return gdy, grad_grad_fn
+  return y, grad_fn
+</pre> <p>The function <code translate="no" dir="ltr">grad_grad_fn</code> will be calculating the first order gradient of <code translate="no" dir="ltr">grad_fn</code> with respect to <code translate="no" dir="ltr">dy</code>, which is used to generate forward-mode gradient graphs from backward-mode gradient graphs, but is not the same as the second order gradient of <code translate="no" dir="ltr">op</code> with respect to <code translate="no" dir="ltr">x</code>.</p> <p>Instead, wrap nested <code translate="no" dir="ltr">@tf.custom_gradients</code> in another function:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@tf.custom_gradient
+def op_with_fused_backprop(x):
+  y, x_grad = fused_op(x)
+  def first_order_gradient(dy):
+    @tf.custom_gradient
+    def first_order_custom(unused_x):
+      def second_order_and_transpose(ddy):
+        return second_order_for_x(...), gradient_wrt_dy(...)
+      return x_grad, second_order_and_transpose
+    return dy * first_order_custom(x)
+  return y, first_order_gradient
+</pre> <p>Additional arguments to the inner <code translate="no" dir="ltr">@tf.custom_gradient</code>-decorated function control the expected return values of the innermost function.</p> <p>See also <a href="registergradient"><code translate="no" dir="ltr">tf.RegisterGradient</code></a> which registers a gradient function for a primitive TensorFlow operation. <a href="custom_gradient"><code translate="no" dir="ltr">tf.custom_gradient</code></a> on the other hand allows for fine grained control over the gradient computation of a sequence of operations.</p> <p>Note that if the decorated function uses <code translate="no" dir="ltr">Variable</code>s, the enclosing variable scope must be using <code translate="no" dir="ltr">ResourceVariable</code>s.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">f</code> </td> <td> function <code translate="no" dir="ltr">f(*x)</code> that returns a tuple <code translate="no" dir="ltr">(y, grad_fn)</code> where: <ul> <li>
+<code translate="no" dir="ltr">x</code> is a sequence of (nested structures of) <code translate="no" dir="ltr">Tensor</code> inputs to the function.</li> <li>
+<code translate="no" dir="ltr">y</code> is a (nested structure of) <code translate="no" dir="ltr">Tensor</code> outputs of applying TensorFlow operations in <code translate="no" dir="ltr">f</code> to <code translate="no" dir="ltr">x</code>.</li> <li>
+<code translate="no" dir="ltr">grad_fn</code> is a function with the signature <code translate="no" dir="ltr">g(*grad_ys)</code> which returns a list of <code translate="no" dir="ltr">Tensor</code>s the same size as (flattened) <code translate="no" dir="ltr">x</code> - the derivatives of <code translate="no" dir="ltr">Tensor</code>s in <code translate="no" dir="ltr">y</code> with respect to the <code translate="no" dir="ltr">Tensor</code>s in <code translate="no" dir="ltr">x</code>. <code translate="no" dir="ltr">grad_ys</code> is a sequence of <code translate="no" dir="ltr">Tensor</code>s the same size as (flattened) <code translate="no" dir="ltr">y</code> holding the initial value gradients for each <code translate="no" dir="ltr">Tensor</code> in <code translate="no" dir="ltr">y</code>.</li> </ul> <p>In a pure mathematical sense, a vector-argument vector-valued function <code translate="no" dir="ltr">f</code>'s derivatives should be its Jacobian matrix <code translate="no" dir="ltr">J</code>. Here we are expressing the Jacobian <code translate="no" dir="ltr">J</code> as a function <code translate="no" dir="ltr">grad_fn</code> which defines how <code translate="no" dir="ltr">J</code> will transform a vector <code translate="no" dir="ltr">grad_ys</code> when left-multiplied with it (<code translate="no" dir="ltr">grad_ys * J</code>, the vector-Jacobian product, or VJP). This functional representation of a matrix is convenient to use for chain-rule calculation (in e.g. the back-propagation algorithm).</p> <p>If <code translate="no" dir="ltr">f</code> uses <code translate="no" dir="ltr">Variable</code>s (that are not part of the inputs), i.e. through <code translate="no" dir="ltr">get_variable</code>, then <code translate="no" dir="ltr">grad_fn</code> should have signature <code translate="no" dir="ltr">g(*grad_ys, variables=None)</code>, where <code translate="no" dir="ltr">variables</code> is a list of the <code translate="no" dir="ltr">Variable</code>s, and return a 2-tuple <code translate="no" dir="ltr">(grad_xs, grad_vars)</code>, where <code translate="no" dir="ltr">grad_xs</code> is the same as above, and <code translate="no" dir="ltr">grad_vars</code> is a <code translate="no" dir="ltr">list&lt;Tensor&gt;</code> with the derivatives of <code translate="no" dir="ltr">Tensor</code>s in <code translate="no" dir="ltr">y</code> with respect to the variables (that is, grad_vars has one Tensor per variable in variables). </p>
+</td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A function <code translate="no" dir="ltr">h(x)</code> which returns the same value as <code translate="no" dir="ltr">f(x)[0]</code> and whose gradient (as calculated by <a href="gradients"><code translate="no" dir="ltr">tf.gradients</code></a>) is determined by <code translate="no" dir="ltr">f(x)[1]</code>. </td> </tr> 
+</table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/custom_gradient" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/custom_gradient</a>
+  </p>
+</div>

@@ -1,0 +1,206 @@
+# PostgreSQL specific database constraints
+
+PostgreSQL supports additional data integrity constraints available from the
+`django.contrib.postgres.constraints` module. They are added in the model
+`Meta.constraints` option.
+
+## `ExclusionConstraint`
+
+`class ExclusionConstraint(*, name, expressions, index_type=None,
+condition=None, deferrable=None, include=None, opclasses=())`
+
+    
+Creates an exclusion constraint in the database. Internally, PostgreSQL
+implements exclusion constraints using indexes. The default index type is
+GiST. To use them, you need to activate the btree_gist extension on
+PostgreSQL. You can install it using the `BtreeGistExtension` migration
+operation.
+
+If you attempt to insert a new row that conflicts with an existing row, an
+`IntegrityError` is raised. Similarly, when update conflicts with an existing
+row.
+
+### `name`
+
+`ExclusionConstraint.name`
+
+The name of the constraint.
+
+### `expressions`
+
+`ExclusionConstraint.expressions`
+
+An iterable of 2-tuples. The first element is an expression or string. The
+second element is an SQL operator represented as a string. To avoid typos, you
+may use `RangeOperators` which maps the operators with strings. For example:
+
+    
+    expressions=[
+        ('timespan', RangeOperators.ADJACENT_TO),
+        (F('room'), RangeOperators.EQUAL),
+    ]
+    
+Restrictions on operators.
+
+Only commutative operators can be used in exclusion constraints.
+
+### `index_type`
+
+`ExclusionConstraint.index_type`
+
+The index type of the constraint. Accepted values are `GIST` or `SPGIST`.
+Matching is case insensitive. If not provided, the default index type is
+`GIST`.
+
+### `condition`
+
+`ExclusionConstraint.condition`
+
+A `Q` object that specifies the condition to restrict a constraint to a subset
+of rows. For example, `condition=Q(cancelled=False)`.
+
+These conditions have the same database restrictions as
+`django.db.models.Index.condition`.
+
+### `deferrable`
+
+`ExclusionConstraint.deferrable`
+
+Set this parameter to create a deferrable exclusion constraint. Accepted
+values are `Deferrable.DEFERRED` or `Deferrable.IMMEDIATE`. For example:
+
+    
+    from django.contrib.postgres.constraints import ExclusionConstraint
+    from django.contrib.postgres.fields import RangeOperators
+    from django.db.models import Deferrable
+    
+    
+    ExclusionConstraint(
+        name='exclude_overlapping_deferred',
+        expressions=[
+            ('timespan', RangeOperators.OVERLAPS),
+        ],
+        deferrable=Deferrable.DEFERRED,
+    )
+    
+By default constraints are not deferred. A deferred constraint will not be
+enforced until the end of the transaction. An immediate constraint will be
+enforced immediately after every command.
+
+Warning
+
+Deferred exclusion constraints may lead to a performance penalty.
+
+### `include`
+
+`ExclusionConstraint.include`
+
+New in Django 3.2.
+
+A list or tuple of the names of the fields to be included in the covering
+exclusion constraint as non-key columns. This allows index-only scans to be
+used for queries that select only included fields (`include`) and filter only
+by indexed fields (`expressions`).
+
+`include` is supported only for GiST indexes on PostgreSQL 12+.
+
+### `opclasses`
+
+`ExclusionConstraint.opclasses`
+
+New in Django 3.2.
+
+The names of the PostgreSQL operator classes to use for this constraint. If
+you require a custom operator class, you must provide one for each expression
+in the constraint.
+
+For example:
+
+    
+    ExclusionConstraint(
+        name='exclude_overlapping_opclasses',
+        expressions=[('circle', RangeOperators.OVERLAPS)],
+        opclasses=['circle_ops'],
+    )
+    
+creates an exclusion constraint on `circle` using `circle_ops`.
+
+### Examples
+
+The following example restricts overlapping reservations in the same room, not
+taking canceled reservations into account:
+
+    
+    from django.contrib.postgres.constraints import ExclusionConstraint
+    from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
+    from django.db import models
+    from django.db.models import Q
+    
+    class Room(models.Model):
+        number = models.IntegerField()
+    
+    
+    class Reservation(models.Model):
+        room = models.ForeignKey('Room', on_delete=models.CASCADE)
+        timespan = DateTimeRangeField()
+        cancelled = models.BooleanField(default=False)
+    
+        class Meta:
+            constraints = [
+                ExclusionConstraint(
+                    name='exclude_overlapping_reservations',
+                    expressions=[
+                        ('timespan', RangeOperators.OVERLAPS),
+                        ('room', RangeOperators.EQUAL),
+                    ],
+                    condition=Q(cancelled=False),
+                ),
+            ]
+    
+In case your model defines a range using two fields, instead of the native
+PostgreSQL range types, you should write an expression that uses the
+equivalent function (e.g. `TsTzRange()`), and use the delimiters for the
+field. Most often, the delimiters will be `'[)'`, meaning that the lower bound
+is inclusive and the upper bound is exclusive. You may use the `RangeBoundary`
+that provides an expression mapping for the range boundaries. For example:
+
+    
+    from django.contrib.postgres.constraints import ExclusionConstraint
+    from django.contrib.postgres.fields import (
+        DateTimeRangeField,
+        RangeBoundary,
+        RangeOperators,
+    )
+    from django.db import models
+    from django.db.models import Func, Q
+    
+    
+    class TsTzRange(Func):
+        function = 'TSTZRANGE'
+        output_field = DateTimeRangeField()
+    
+    
+    class Reservation(models.Model):
+        room = models.ForeignKey('Room', on_delete=models.CASCADE)
+        start = models.DateTimeField()
+        end = models.DateTimeField()
+        cancelled = models.BooleanField(default=False)
+    
+        class Meta:
+            constraints = [
+                ExclusionConstraint(
+                    name='exclude_overlapping_reservations',
+                    expressions=(
+                        (TsTzRange('start', 'end', RangeBoundary()), RangeOperators.OVERLAPS),
+                        ('room', RangeOperators.EQUAL),
+                    ),
+                    condition=Q(cancelled=False),
+                ),
+            ]
+    
+© Django Software Foundation and individual contributors  
+Licensed under the BSD License.  
+https://docs.djangoproject.com/en/4.0/ref/contrib/postgres/constraints/
+
+  *[ISP]: Internet Service Provider
+

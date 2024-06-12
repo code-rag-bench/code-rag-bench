@@ -1,0 +1,182 @@
+<h1 id="basics-dispatch">Writing custom array containers</h1> <p>Numpy’s dispatch mechanism, introduced in numpy version v1.16 is the recommended approach for writing custom N-dimensional array containers that are compatible with the numpy API and provide custom implementations of numpy functionality. Applications include <a class="reference external" href="http://dask.pydata.org">dask</a> arrays, an N-dimensional array distributed across multiple nodes, and <a class="reference external" href="https://docs-cupy.chainer.org/en/stable/">cupy</a> arrays, an N-dimensional array on a GPU.</p> <p>To get a feel for writing custom array containers, we’ll begin with a simple example that has rather narrow utility but illustrates the concepts involved.</p> <pre data-language="python">&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; class DiagonalArray:
+...     def __init__(self, N, value):
+...         self._N = N
+...         self._i = value
+...     def __repr__(self):
+...         return f"{self.__class__.__name__}(N={self._N}, value={self._i})"
+...     def __array__(self, dtype=None):
+...         return self._i * np.eye(self._N, dtype=dtype)
+</pre> <p>Our custom array can be instantiated like:</p> <pre data-language="python">&gt;&gt;&gt; arr = DiagonalArray(5, 1)
+&gt;&gt;&gt; arr
+DiagonalArray(N=5, value=1)
+</pre> <p>We can convert to a numpy array using <a class="reference internal" href="../reference/generated/numpy.array#numpy.array" title="numpy.array"><code>numpy.array</code></a> or <a class="reference internal" href="../reference/generated/numpy.asarray#numpy.asarray" title="numpy.asarray"><code>numpy.asarray</code></a>, which will call its <code>__array__</code> method to obtain a standard <code>numpy.ndarray</code>.</p> <pre data-language="python">&gt;&gt;&gt; np.asarray(arr)
+array([[1., 0., 0., 0., 0.],
+       [0., 1., 0., 0., 0.],
+       [0., 0., 1., 0., 0.],
+       [0., 0., 0., 1., 0.],
+       [0., 0., 0., 0., 1.]])
+</pre> <p>If we operate on <code>arr</code> with a numpy function, numpy will again use the <code>__array__</code> interface to convert it to an array and then apply the function in the usual way.</p> <pre data-language="python">&gt;&gt;&gt; np.multiply(arr, 2)
+array([[2., 0., 0., 0., 0.],
+       [0., 2., 0., 0., 0.],
+       [0., 0., 2., 0., 0.],
+       [0., 0., 0., 2., 0.],
+       [0., 0., 0., 0., 2.]])
+</pre> <p>Notice that the return type is a standard <code>numpy.ndarray</code>.</p> <pre data-language="python">&gt;&gt;&gt; type(np.multiply(arr, 2))
+numpy.ndarray
+</pre> <p>How can we pass our custom array type through this function? Numpy allows a class to indicate that it would like to handle computations in a custom-defined way through the interfaces <code>__array_ufunc__</code> and <code>__array_function__</code>. Let’s take one at a time, starting with <code>_array_ufunc__</code>. This method covers <a class="reference internal" href="../reference/ufuncs#ufuncs"><span class="std std-ref">Universal functions (ufunc)</span></a>, a class of functions that includes, for example, <a class="reference internal" href="../reference/generated/numpy.multiply#numpy.multiply" title="numpy.multiply"><code>numpy.multiply</code></a> and <a class="reference internal" href="../reference/generated/numpy.sin#numpy.sin" title="numpy.sin"><code>numpy.sin</code></a>.</p> <p>The <code>__array_ufunc__</code> receives:</p> <ul class="simple"> <li>
+<code>ufunc</code>, a function like <code>numpy.multiply</code>
+</li> <li>
+<code>method</code>, a string, differentiating between <code>numpy.multiply(...)</code> and variants like <code>numpy.multiply.outer</code>, <code>numpy.multiply.accumulate</code>, and so on. For the common case, <code>numpy.multiply(...)</code>, <code>method == '__call__'</code>.</li> <li>
+<code>inputs</code>, which could be a mixture of different types</li> <li>
+<code>kwargs</code>, keyword arguments passed to the function</li> </ul> <p>For this example we will only handle the method <code>__call__</code></p> <pre data-language="python">&gt;&gt;&gt; from numbers import Number
+&gt;&gt;&gt; class DiagonalArray:
+...     def __init__(self, N, value):
+...         self._N = N
+...         self._i = value
+...     def __repr__(self):
+...         return f"{self.__class__.__name__}(N={self._N}, value={self._i})"
+...     def __array__(self, dtype=None):
+...         return self._i * np.eye(self._N, dtype=dtype)
+...     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+...         if method == '__call__':
+...             N = None
+...             scalars = []
+...             for input in inputs:
+...                 if isinstance(input, Number):
+...                     scalars.append(input)
+...                 elif isinstance(input, self.__class__):
+...                     scalars.append(input._i)
+...                     if N is not None:
+...                         if N != self._N:
+...                             raise TypeError("inconsistent sizes")
+...                     else:
+...                         N = self._N
+...                 else:
+...                     return NotImplemented
+...             return self.__class__(N, ufunc(*scalars, **kwargs))
+...         else:
+...             return NotImplemented
+</pre> <p>Now our custom array type passes through numpy functions.</p> <pre data-language="python">&gt;&gt;&gt; arr = DiagonalArray(5, 1)
+&gt;&gt;&gt; np.multiply(arr, 3)
+DiagonalArray(N=5, value=3)
+&gt;&gt;&gt; np.add(arr, 3)
+DiagonalArray(N=5, value=4)
+&gt;&gt;&gt; np.sin(arr)
+DiagonalArray(N=5, value=0.8414709848078965)
+</pre> <p>At this point <code>arr + 3</code> does not work.</p> <pre data-language="python">&gt;&gt;&gt; arr + 3
+TypeError: unsupported operand type(s) for *: 'DiagonalArray' and 'int'
+</pre> <p>To support it, we need to define the Python interfaces <code>__add__</code>, <code>__lt__</code>, and so on to dispatch to the corresponding ufunc. We can achieve this conveniently by inheriting from the mixin <a class="reference internal" href="../reference/generated/numpy.lib.mixins.ndarrayoperatorsmixin#numpy.lib.mixins.NDArrayOperatorsMixin" title="numpy.lib.mixins.NDArrayOperatorsMixin"><code>NDArrayOperatorsMixin</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; import numpy.lib.mixins
+&gt;&gt;&gt; class DiagonalArray(numpy.lib.mixins.NDArrayOperatorsMixin):
+...     def __init__(self, N, value):
+...         self._N = N
+...         self._i = value
+...     def __repr__(self):
+...         return f"{self.__class__.__name__}(N={self._N}, value={self._i})"
+...     def __array__(self, dtype=None):
+...         return self._i * np.eye(self._N, dtype=dtype)
+...     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+...         if method == '__call__':
+...             N = None
+...             scalars = []
+...             for input in inputs:
+...                 if isinstance(input, Number):
+...                     scalars.append(input)
+...                 elif isinstance(input, self.__class__):
+...                     scalars.append(input._i)
+...                     if N is not None:
+...                         if N != self._N:
+...                             raise TypeError("inconsistent sizes")
+...                     else:
+...                         N = self._N
+...                 else:
+...                     return NotImplemented
+...             return self.__class__(N, ufunc(*scalars, **kwargs))
+...         else:
+...             return NotImplemented
+</pre> <pre data-language="python">&gt;&gt;&gt; arr = DiagonalArray(5, 1)
+&gt;&gt;&gt; arr + 3
+DiagonalArray(N=5, value=4)
+&gt;&gt;&gt; arr &gt; 0
+DiagonalArray(N=5, value=True)
+</pre> <p>Now let’s tackle <code>__array_function__</code>. We’ll create dict that maps numpy functions to our custom variants.</p> <pre data-language="python">&gt;&gt;&gt; HANDLED_FUNCTIONS = {}
+&gt;&gt;&gt; class DiagonalArray(numpy.lib.mixins.NDArrayOperatorsMixin):
+...     def __init__(self, N, value):
+...         self._N = N
+...         self._i = value
+...     def __repr__(self):
+...         return f"{self.__class__.__name__}(N={self._N}, value={self._i})"
+...     def __array__(self, dtype=None):
+...         return self._i * np.eye(self._N, dtype=dtype)
+...     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+...         if method == '__call__':
+...             N = None
+...             scalars = []
+...             for input in inputs:
+...                 # In this case we accept only scalar numbers or DiagonalArrays.
+...                 if isinstance(input, Number):
+...                     scalars.append(input)
+...                 elif isinstance(input, self.__class__):
+...                     scalars.append(input._i)
+...                     if N is not None:
+...                         if N != self._N:
+...                             raise TypeError("inconsistent sizes")
+...                     else:
+...                         N = self._N
+...                 else:
+...                     return NotImplemented
+...             return self.__class__(N, ufunc(*scalars, **kwargs))
+...         else:
+...             return NotImplemented
+...    def __array_function__(self, func, types, args, kwargs):
+...        if func not in HANDLED_FUNCTIONS:
+...            return NotImplemented
+...        # Note: this allows subclasses that don't override
+...        # __array_function__ to handle DiagonalArray objects.
+...        if not all(issubclass(t, self.__class__) for t in types):
+...            return NotImplemented
+...        return HANDLED_FUNCTIONS[func](*args, **kwargs)
+...
+</pre> <p>A convenient pattern is to define a decorator <code>implements</code> that can be used to add functions to <code>HANDLED_FUNCTIONS</code>.</p> <pre data-language="python">&gt;&gt;&gt; def implements(np_function):
+...    "Register an __array_function__ implementation for DiagonalArray objects."
+...    def decorator(func):
+...        HANDLED_FUNCTIONS[np_function] = func
+...        return func
+...    return decorator
+...
+</pre> <p>Now we write implementations of numpy functions for <code>DiagonalArray</code>. For completeness, to support the usage <code>arr.sum()</code> add a method <code>sum</code> that calls <code>numpy.sum(self)</code>, and the same for <code>mean</code>.</p> <pre data-language="python">&gt;&gt;&gt; @implements(np.sum)
+... def sum(arr):
+...     "Implementation of np.sum for DiagonalArray objects"
+...     return arr._i * arr._N
+...
+&gt;&gt;&gt; @implements(np.mean)
+... def mean(arr):
+...     "Implementation of np.mean for DiagonalArray objects"
+...     return arr._i / arr._N
+...
+&gt;&gt;&gt; arr = DiagonalArray(5, 1)
+&gt;&gt;&gt; np.sum(arr)
+5
+&gt;&gt;&gt; np.mean(arr)
+0.2
+</pre> <p>If the user tries to use any numpy functions not included in <code>HANDLED_FUNCTIONS</code>, a <code>TypeError</code> will be raised by numpy, indicating that this operation is not supported. For example, concatenating two <code>DiagonalArrays</code> does not produce another diagonal array, so it is not supported.</p> <pre data-language="python">&gt;&gt;&gt; np.concatenate([arr, arr])
+TypeError: no implementation found for 'numpy.concatenate' on types that implement __array_function__: [&lt;class '__main__.DiagonalArray'&gt;]
+</pre> <p>Additionally, our implementations of <code>sum</code> and <code>mean</code> do not accept the optional arguments that numpy’s implementation does.</p> <pre data-language="python">&gt;&gt;&gt; np.sum(arr, axis=0)
+TypeError: sum() got an unexpected keyword argument 'axis'
+</pre> <p>The user always has the option of converting to a normal <code>numpy.ndarray</code> with <a class="reference internal" href="../reference/generated/numpy.asarray#numpy.asarray" title="numpy.asarray"><code>numpy.asarray</code></a> and using standard numpy from there.</p> <pre data-language="python">&gt;&gt;&gt; np.concatenate([np.asarray(arr), np.asarray(arr)])
+array([[1., 0., 0., 0., 0.],
+       [0., 1., 0., 0., 0.],
+       [0., 0., 1., 0., 0.],
+       [0., 0., 0., 1., 0.],
+       [0., 0., 0., 0., 1.],
+       [1., 0., 0., 0., 0.],
+       [0., 1., 0., 0., 0.],
+       [0., 0., 1., 0., 0.],
+       [0., 0., 0., 1., 0.],
+       [0., 0., 0., 0., 1.]])
+</pre> <p>Refer to the <a class="reference external" href="https://github.com/dask/dask">dask source code</a> and <a class="reference external" href="https://github.com/cupy/cupy">cupy source code</a> for more fully-worked examples of custom array containers.</p> <p>See also <a class="reference external" href="https://numpy.org/neps/nep-0018-array-function-protocol.html" title="(in NumPy Enhancement Proposals)"><span class="xref std std-doc">NEP 18</span></a>.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/user/basics.dispatch.html" class="_attribution-link">https://numpy.org/doc/1.22/user/basics.dispatch.html</a>
+  </p>
+</div>

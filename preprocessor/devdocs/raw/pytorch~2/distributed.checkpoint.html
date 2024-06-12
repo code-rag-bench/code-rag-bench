@@ -1,0 +1,326 @@
+<h1 id="distributed-checkpoint-torch-distributed-checkpoint">Distributed Checkpoint - torch.distributed.checkpoint</h1> <p>Distributed Checkpoint (DCP) support loading and saving models from multiple ranks in parallel. It handles load-time resharding which enables saving in one cluster topology and loading into another.</p> <p>DCP is different than <code>torch.save</code> and <code>torch.load</code> in a few significant ways:</p> <ul class="simple"> <li>It produces multiple files per checkpoint, with at least one per rank.</li> <li>It operates in place, meaning that the model should allocate its data first and DCP uses that storage instead.</li> </ul> <p>The entrypoints to load and save a checkpoint are the following:</p> <dl class="py function" id="module-torch.distributed.checkpoint"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.load_state_dict">
+<code>torch.distributed.checkpoint.load_state_dict(state_dict, storage_reader, process_group=None, coordinator_rank=0, no_dist=False, planner=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/state_dict_loader.html#load_state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Loads a distributed <code>state_dict</code> in SPMD style.</p> <p>Each rank will try to read the least amount of data necessary to fullfill the requested <code>state_dict</code>. When loading <code>ShardedTensor</code> instances, each rank only reads data for their local shards.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>All tensors in <code>state_dict</code> must be allocated on their destination device <em>prior to</em> calling this function.</p> <p>All non-tensor data is loaded using <code>torch.load()</code> and modified in place on state_dict.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Users must call <code>load_state_dict</code> on the root module to ensure load pos-processing and non-tensor data properly propagates.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>state_dict</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em>) – The state_dict to load. Note that this state dict will updated in place.</li> <li>
+<strong>storage_reader</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.StorageReader" title="torch.distributed.checkpoint.StorageReader">StorageReader</a>) – StorageReader used to load data from.</li> <li>
+<strong>process_group</strong> (<em>ProcessGroup</em>) – ProcessGroup to be used for cross-rank synchronization.</li> <li>
+<strong>coordinator_rank</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – Rank to use to coordinate the checkpoint. rank0 is used by default.</li> <li>
+<strong>no_dist</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – If <code>True</code>, distributed checkpoint will not save in SPMD style. (Default: <code>False</code>)</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>None</p> </dd> </dl> <dl> <dt>Examples</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; my_model = MyModule()
+&gt;&gt;&gt; optimizer = Adagrad(my_model.parameters())
+&gt;&gt;&gt; model_state_dict = my_model.state_dict()
+&gt;&gt;&gt; fs_storage_reader = torch.distributed.checkpoint.FileSystemReader("/checkpoint/1")
+</pre> <pre data-language="python">&gt;&gt;&gt; torch.distributed.checkpoint.load_state_dict(
+&gt;&gt;&gt;     state_dict=model_state_dict,
+&gt;&gt;&gt;     storage_reader=fs_storage_reader,
+&gt;&gt;&gt; )
+</pre> <pre data-language="python">&gt;&gt;&gt; # module.load_state_dict() function might have customized steps
+&gt;&gt;&gt; # to flush the state_dict, must call it to
+&gt;&gt;&gt; # ensure correct behavior.
+&gt;&gt;&gt; my_model.load_state_dict(model_state_dict)
+</pre> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>load_state_dict uses collectives to coordinate reads across ranks. For NCCL-based process groups, internal tensor representations of objects must be moved to the GPU device before communication takes place. In this case, the device used is given by <code>torch.cuda.current_device()</code> and it is the user’s responsibility to ensure that this is set so that each rank has an individual GPU, via <code>torch.cuda.set_device()</code>.</p> </div> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.save_state_dict">
+<code>torch.distributed.checkpoint.save_state_dict(state_dict, storage_writer, process_group=None, coordinator_rank=0, no_dist=False, planner=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/state_dict_saver.html#save_state_dict"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Saves a distributed model in SPMD style.</p> <p>This function is different from <code>torch.save()</code> as it handles <code>ShardedTensor</code> by having each rank only save their local shards.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>There is no guarantees of Backwards Compatibility across PyTorch versions for saved state_dicts.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>If using the <code>process_group</code> argument, make sure that only its ranks call <code>save_state_dict</code> and that all data in state_dict belong to it.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>When saving checkpoint for FSDP’s <code>ShardingStrategy.HYBRID_SHARD</code>, only one of the shard_group should be calling <code>save_state_dict</code> and the corresponding process group needs to be passed in.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This function can be used to save a state_dict without having a process group initialized by passing <code>no_dist=True</code>.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>state_dict</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em>) – The state_dict to save.</li> <li>
+<strong>storage_writer</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.StorageWriter" title="torch.distributed.checkpoint.StorageWriter">StorageWriter</a>) – Instance of StorageWrite use to perform writes.</li> <li>
+<strong>process_group</strong> (<em>ProcessGroup</em>) – ProcessGroup to be used for cross-rank synchronization.</li> <li>
+<strong>coordinator_rank</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – Rank to use to coordinate the checkpoint. rank0 is used by default.</li> <li>
+<strong>no_dist</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – If <code>True</code>, distributed checkpoint will not save in SPMD style. (Default: <code>False</code>)</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Metadata object for the saved checkpoint.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Metadata</p> </dd> </dl> <h4 class="rubric">Example</h4> <pre data-language="python">&gt;&gt;&gt; my_model = MyModule()
+</pre> <pre data-language="python">&gt;&gt;&gt; model_state_dict = my_model.state_dict()
+</pre> <pre data-language="python">&gt;&gt;&gt; fs_storage_writer = torch.distributed.checkpoint.FileSystemWriter("/checkpoint/1")
+&gt;&gt;&gt; torch.distributed.checkpoint.save_state_dict(
+&gt;&gt;&gt;     state_dict=model_state_dict,
+&gt;&gt;&gt;     storage_writer=fs_storage_writer,
+&gt;&gt;&gt; )
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>save_state_dict uses collectives to coordinate writes across ranks. For NCCL-based process groups, internal tensor representations of objects must be moved to the GPU device before communication takes place. In this case, the device used is given by <code>torch.cuda.current_device()</code> and it is the user’s responsibility to ensure that this is set so that each rank has an individual GPU, via <code>torch.cuda.set_device()</code>.</p> </div> </dd>
+</dl> <p>This <a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/distributed/checkpoint/examples/fsdp_checkpoint_example.py">example</a> shows how to use Pytorch Distributed Checkpoint to save a FSDP model.</p> <p>The following types define the IO interface used during checkpoint:</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader">
+<code>class torch.distributed.checkpoint.StorageReader</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Interface used by <code>load_state_dict</code> to read from storage.</p> <p>One StorageReader instance acts as both the coordinator and the follower in a distributed checkpoint. As part of initialization, each instance is told its role.</p> <p>A subclass should expected the following sequence of calls by <code>load_state_dict</code>:</p> <ol class="arabic simple"> <li>(all ranks) read_metadata()</li> <li>(all ranks) set_up_storage_reader()</li> <li>(all ranks) prepare_local_plan()</li> <li>(coordinator) prepare_global_plan()</li> <li>(all ranks) read_data()</li> </ol> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader.prepare_global_plan">
+<code>abstract prepare_global_plan(plans)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader.prepare_global_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Perform centralized planning of storage loading.</p> <p>This method is only called on the coordinator instance.</p> <p>While this method can produce a completely different plan, the preferred way is to store storage specific data in LoadPlan::storage_data.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>plans</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a><em>]</em>) – A list of <code>LoadPlan</code> instances, one for each rank.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A list of transformed <code>LoadPlan</code> after storage global planning</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader.prepare_local_plan">
+<code>abstract prepare_local_plan(plan)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader.prepare_local_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Perform storage-specific local planning.</p> <p>While this method can produce a completely different plan, the recommended way is to store storage specific data in LoadPlan::storage_data.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>plan</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.LoadPlan">LoadPlan</a>) – The local plan from the <code>LoadPlan</code> in use.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A transformed <code>LoadPlan</code> after storage local planning</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader.read_data">
+<code>abstract read_data(plan, planner)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader.read_data"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reads all items from <code>plan</code> using <code>planner</code> to resolve the data.</p> <p>A subclass should call <code>LoadPlanner::load_bytes</code> to deserialize a BytesIO object into the right place.</p> <p>A subclass should call <code>LoadPlanner::resolve_tensor</code> to get access to the tensors that in should load data into.</p> <p>It’s the StorageLayer responsibility to properly schedule any cross device copies required.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>plan</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.LoadPlan">LoadPlan</a>) – The local plan to execute on</li> <li>
+<strong>planner</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.LoadPlanner" title="torch.distributed.checkpoint.LoadPlanner">LoadPlanner</a>) – The planner object to use to resolve items.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A future that completes once all reads are finished.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="futures#torch.futures.Future" title="torch.jit.Future">Future</a>[None]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader.read_metadata">
+<code>abstract read_metadata()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader.read_metadata"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reads the checkpoint metadata.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The metadata object associated with the checkpoint being loaded.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><em>Metadata</em></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageReader.set_up_storage_reader">
+<code>abstract set_up_storage_reader(metadata, is_coordinator)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageReader.set_up_storage_reader"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initialize this instance.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>metadata</strong> (<em>Metadata</em>) – The metadata schema to use.</li> <li>
+<strong>is_coordinator</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Whether this instance is responsible for coordinating the checkpoint.</li> </ul> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter">
+<code>class torch.distributed.checkpoint.StorageWriter</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Interface used by <code>save_state_dict</code> to write to storage.</p> <p>One StorageWriter instance acts as both the coordinator and the follower in a distributed checkpoint. As part of initialization, each instance is told its role.</p> <p>A subclass should expect the following sequence of calls.</p> <ol class="arabic simple"> <li>(all ranks) set_up_storage_writer()</li> <li>(all ranks) prepare_local_plan()</li> <li>(coordinator) prepare_global_plan()</li> <li>(all ranks) write_data()</li> <li>(coordinator) finish()</li> </ol> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter.finish">
+<code>abstract finish(metadata, results)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter.finish"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Writes the metadata and marks the current checkpoint as successful.</p> <p>The actual format/schema used for serializing <code>metadata</code> is an implementation detail. The only requirement is that it’s recoverable in to the same object graph.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>metadata</strong> (<em>Metadata</em>) – metadata for the new checkpoint</li> <li>
+<strong>results</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><em>WriteResult</em><em>]</em><em>]</em>) – A list of WriteResults from all ranks.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>None</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter.prepare_global_plan">
+<code>abstract prepare_global_plan(plans)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter.prepare_global_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Perform centralized planning of storage.</p> <p>This method is only called on the coordinator instance.</p> <p>While this method can produce a completely different plan, the preferred way is to store storage specific data in SavePlan::storage_data.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>plans</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a><em>]</em>) – A list of <code>SavePlan</code> instances, one for each rank.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A list of transformed <code>SavePlan</code> after storage global planning</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter.prepare_local_plan">
+<code>abstract prepare_local_plan(plan)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter.prepare_local_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Perform storage-specific local planning.</p> <p>While this method can produce a completely different plan, the recommended way is to store storage specific data in SavePlan::storage_data.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>plan</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.SavePlan">SavePlan</a>) – The local plan from the <code>SavePlanner</code> in use.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A transformed <code>SavePlan</code> after storage local planning</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter.set_up_storage_writer">
+<code>abstract set_up_storage_writer(is_coordinator)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter.set_up_storage_writer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initialize this instance.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>is_coordinator</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Whether this instance is responsible for coordinating the checkpoint.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.StorageWriter.write_data">
+<code>abstract write_data(plan, planner)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/storage.html#StorageWriter.write_data"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Write all items from <code>plan</code> using <code>planner</code> to resolve the data.</p> <p>A subclass should call <code>SavePlanner::resolve_data</code> on each item from the plan to get access to the underlying object to write.</p> <p>Subclasses should lazily call <code>resolve_data</code> as it can allocate memory. In case of tensors, make following assumptions:</p> <ul class="simple"> <li>They might be on any device, including not matching the one on <code>WriteItem::tensor_data</code>
+</li> <li>They might be views or not contiguous. Only the projection needs to be saved.</li> </ul> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>plan</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.SavePlan">SavePlan</a>) – The save plan to execute.</li> <li>
+<strong>planner</strong> (<a class="reference internal" href="#torch.distributed.checkpoint.SavePlanner" title="torch.distributed.checkpoint.SavePlanner">SavePlanner</a>) – Planner object to be used to resolve items to data.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A future that completes to a list of WriteResult</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="futures#torch.futures.Future" title="torch.jit.Future">Future</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<em>WriteResult</em>]]</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <p>The following types define the planner interface used during checkpoint:</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner">
+<code>class torch.distributed.checkpoint.LoadPlanner</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Abstract class defining the protocol used by load_state_dict to plan the load process.</p> <p>LoadPlanner are stateful objects that can be used to customize the whole load process.</p> <p>LoadPlanner acts as an access proxy to the state_dict, so any transformation done to it will be visible to the whole process.</p> <p>A planner subclass can expect the following sequence of calls during load_state_dict:</p> <ol class="arabic simple"> <li>
+<dl class="simple"> <dt>set_up_planner - called on all ranks.</dt>
+<dd>
+<p>Signals the start of loading a checkpoint.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>create_local_plan - called on all ranks.</dt>
+<dd>
+<p>Process the state_dict and produces a <code>LoadPlan</code> that will be sent for global planning.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>create_global_plan - called on the coordinator rank only.</dt>
+<dd>
+<p>Takes the LoadPlan from all ranks and make any global decision.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>load_bytes - called multiple times on each rank</dt>
+<dd>
+<p>This is called once per non-tensor value in state_dict.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>resolve_tensor and commit_tensor - called multiple times on each rank</dt>
+<dd>
+<p>They are called in pair for each Tensor value in state_dict.</p> </dd> </dl> </li> </ol> <p>Users are recommended to extend DefaultLoadPlanner instead of this interface directly as most changes can be expressed by changes in a single method.</p> <p>There are two usual patterns of extension:</p> <p>Rewriting state_dict. This is the simplest way to extend the load process as it doesn’t requite understanding the intrincacies of how LoadPlan works. We need to keep a reference to the original state_dict as load happens in place so we need to be able to perform it in place</p> <pre data-language="python">&gt;&gt;&gt; class RenamePlanner(DefaultLoadPlanner):
+&gt;&gt;&gt;     def set_up_planner(self, state_dict, metadata, is_coordinator):
+&gt;&gt;&gt;         self.original_state_dict = state_dict
+&gt;&gt;&gt;         super().set_up_planner(self, {"foo_" + k: v for k, v in state_dict.items()}, is_coordinator)
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def load_bytes(self, read_item, value):
+&gt;&gt;&gt;         # Remove the "foo_" prefix
+&gt;&gt;&gt;         self.original_state_dict[read_item.dest_index.fqn[4:]] = torch.load(value)
+</pre> <p>Modifying resolve_tensor and commit_tensor to handle load time transformation.</p> <pre data-language="python">&gt;&gt;&gt; class MetaModelMaterialize(DefaultSavePlanner):
+&gt;&gt;&gt;     def resolve_tensor(self, read_item):
+&gt;&gt;&gt;         tensor = super().resolve_tensor(read_item)
+&gt;&gt;&gt;         return torch.empty_like(tensor, device="cpu")
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def commit_tensor(self, read_item, tensor):
+&gt;&gt;&gt;         self.state_dict[read_item.dest_index.fqn] = tensor
+</pre> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.commit_tensor">
+<code>abstract commit_tensor(read_item, tensor)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.commit_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This method is called once the StorageReader finished loading data into <code>tensor</code>.</p> <p>The provided tensor is the same one returned by the call to <code>resolve_tensor</code>. This method is only needed if this LoadPlanner needs to post process <code>tensor</code> prior to copying it back to the one in the state_dict.</p> <p>The contents of tensor will follow its device synchronization model.</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.create_global_plan">
+<code>abstract create_global_plan(global_plan)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.create_global_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Compute the global load plan and return plans for each rank.</p> <p>. N.B. This is called on the coordinator rank only</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.create_local_plan">
+<code>abstract create_local_plan()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.create_local_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Create a LoadPlan based on state_dict and metadata provided by set_up_planner.</p> <p>. N.B. This is called on every rank.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.finish_plan">
+<code>abstract finish_plan(central_plan)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.finish_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Accept the plan from coordinator and return final LoadPlan.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.LoadPlan" title="torch.distributed.checkpoint.planner.LoadPlan">LoadPlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.load_bytes">
+<code>abstract load_bytes(read_item, value)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.load_bytes"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Load the item described by <code>read_item``and ``value</code>.</p> <p>This method is expected to modify in-place the underlying state_dict.</p> <p>The contents of <code>value</code> are defined by the SavePlanner used to produce the checkpoint being loaded.</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.resolve_tensor">
+<code>abstract resolve_tensor(read_item)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.resolve_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return the tensor described by <code>read_item</code> to be used by the StorageReader to load <code>read_item</code>.</p> <p>The tensor should alias with one on the underlying state_dict as StorageReader will replace its contents. If, for any reason, that’s not possible, the planner can use the <code>commit_tensor</code> method to copy the data back to the one in state_dict.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlanner.set_up_planner">
+<code>abstract set_up_planner(state_dict, metadata, is_coordinator)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlanner.set_up_planner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initialize this instance to load data into <code>state_dict</code></p> <p>. N.B. This is called on every rank.</p>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.LoadPlan">
+<code>class torch.distributed.checkpoint.LoadPlan(items: List[torch.distributed.checkpoint.planner.ReadItem], storage_data: Any = None, planner_data: Any = None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#LoadPlan"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.ReadItem">
+<code>class torch.distributed.checkpoint.ReadItem(type: torch.distributed.checkpoint.planner.LoadItemType, dest_index: torch.distributed.checkpoint.metadata.MetadataIndex, dest_offsets: torch.Size, storage_index: torch.distributed.checkpoint.metadata.MetadataIndex, storage_offsets: torch.Size, lengths: torch.Size)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#ReadItem"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner">
+<code>class torch.distributed.checkpoint.SavePlanner</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Abstract class defining the protocol used by save_state_dict to plan the save process.</p> <p>SavePlanners are stateful objects that can be used to customize the whole save process.</p> <p>SavePlanner acts as an access proxy to the state_dict, so any transformation done to it will be visible to the whole process.</p> <p>A planner subclass can expect the following sequence of calls during save_state_dict:</p> <ol class="arabic simple"> <li>
+<dl class="simple"> <dt>set_up_planner - called on all ranks.</dt>
+<dd>
+<p>Signals the start of a checkpoint save.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>create_local_plan - called on all ranks.</dt>
+<dd>
+<p>Process the state_dict and produces a <code>SavePlan</code> that will be sent for global planning.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>create_global_plan - called on the coordinator rank only.</dt>
+<dd>
+<p>Takes the SavePlan from all ranks and make any global decision.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>finish_plan - called on all ranks.</dt>
+<dd>
+<p>This gives each rank a chance to adjust to global planning decisions.</p> </dd> </dl> </li> <li>
+<dl class="simple"> <dt>resolve_data - called multiple times on each rank</dt>
+<dd>
+<p>Lookups a value on the <code>state_dict</code> for the storage layer to write.</p> </dd> </dl> </li> </ol> <p>Users are recommended to extend DefaultSavePlanner instead of this interface directly as most changes can be expressed by changes in a single method.</p> <p>There are 3 usual patterns of extension:</p> <p>Rewriting state_dict. This is the simplest way to extend the save process as it doesn’t requite understanding the intrincacies of how SavePlan works:</p> <pre data-language="python">&gt;&gt;&gt; class RenamePlanner(DefaultSavePlanner):
+&gt;&gt;&gt;     def set_up_planner(self, state_dict, is_coordinator):
+&gt;&gt;&gt;         # prefix all keys with `foo_``
+&gt;&gt;&gt;         super().set_up_planner({"foo_" + k: v for k, v in state_dict.items()}, is_coordinator)
+</pre> <p>Modifying local plan and lookup in tandem. This is useful when fine control of how data is persisted</p> <pre data-language="python">&gt;&gt;&gt; class FP16Planner(DefaultSavePlanner):
+&gt;&gt;&gt;     def create_local_plan(self):
+&gt;&gt;&gt;         plan = super().create_local_plan()
+&gt;&gt;&gt;         for p in plan:
+&gt;&gt;&gt;             if p.tensor_data is not None:
+&gt;&gt;&gt;                 p.tensor_data.properties.dtype = torch.float16
+&gt;&gt;&gt;         return plan
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def resolve_data(self, write_item):
+&gt;&gt;&gt;         item = super().resolve_data(write_item)
+&gt;&gt;&gt;         return item if write_item.type == WriteItemType.BYTE_IO else item.to(torch.float16)
+</pre> <p>Using the global planning step to make central decisions that can’t be made individually by each rank</p> <pre data-language="python">&gt;&gt;&gt; from itertools import islice
+&gt;&gt;&gt; from dataclasses import replace
+&gt;&gt;&gt; class DDPLoadBalancingPlanner(DefaultSavePlanner):
+&gt;&gt;&gt;     # This uses the default local plan behavior of having all non-sharded writes in rank 0
+&gt;&gt;&gt;     # This sample doesn't handle ShardedTensors
+&gt;&gt;&gt;     def create_global_plan(self, all_plans):
+&gt;&gt;&gt;         def chunk(it, size):
+&gt;&gt;&gt;             it = iter(it)
+&gt;&gt;&gt;         return list(iter(lambda: tuple(islice(it, size)), ()))
+&gt;&gt;&gt;         all_plans = [
+&gt;&gt;&gt;             replace(plan, items=items) for plan, items in
+&gt;&gt;&gt;                 zip(all_plans, chunk(all_plans[0].items, len(all_plans)))
+&gt;&gt;&gt;         ]
+&gt;&gt;&gt;         return super().create_global_plan(all_plans)
+</pre> <p>Finally, some planners need to save additional metadata in the checkpoint, this is accomplished by having each rank contribute their data items in the local plan and the global planner aggregate them:</p> <pre data-language="python">&gt;&gt;&gt; class SaveExtraDataPlanner(DefaultSavePlanner):
+&gt;&gt;&gt;     def create_local_plan(self) -&gt; SavePlan:
+&gt;&gt;&gt;         plan = super().create_local_plan()
+&gt;&gt;&gt;         return replace(plan, planner_data="per-rank-data")
+&gt;&gt;&gt;
+&gt;&gt;&gt;     def create_global_plan(self, all_plans: List[SavePlan]) -&gt; Tuple[List[SavePlan], Metadata]:
+&gt;&gt;&gt;         global_plan, metadata = super().create_global_plan(all_plans)
+&gt;&gt;&gt;         merged_data = [p.planner_data for p in global_plan]
+&gt;&gt;&gt;         metadata = replace(metadata, planner_data=merged_data)
+&gt;&gt;&gt;         return global_plan, metadata
+</pre> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner.create_global_plan">
+<code>abstract create_global_plan(all_plans)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner.create_global_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Compute the global checkpoint plan and return the local plan of each rank.</p> <p>This is called on the coordinator rank only.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a>], <em>Metadata</em>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner.create_local_plan">
+<code>abstract create_local_plan()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner.create_local_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Compute the save plan for the current rank. This will be aggregated and passed to create_global_plan. Planner specific data can be passed through SavePlan::planner_data.</p> <p>This is called on all ranks.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner.finish_plan">
+<code>abstract finish_plan(new_plan)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner.finish_plan"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Merge the plan created by <code>create_local_plan</code> and the result of <code>create_global_plan</code>.</p> <p>This is called on all ranks.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.distributed.checkpoint.SavePlan" title="torch.distributed.checkpoint.planner.SavePlan">SavePlan</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner.resolve_data">
+<code>abstract resolve_data(write_item)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner.resolve_data"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Lookup the object associated with <code>write_item</code> in <code>state_dict</code> and apply any transformation (such as serialization) prior to the storage layer consuming it.</p> <p>Called on each rank multiple times, at least once per WriteItem in the final SavePlan.</p> <p>This method should be idempotent and thread-save. StorageWriter implementations are free to call it as frequently as they need.</p> <p>Any transformation that allocates memory should be lazily done when his method is called in order to reduce peak memory required by checkpointing.</p> <p>When returning tensors, they can be on any device or format, they can be views too. It’s the storage layer responsibility to figure out how to save them.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a>[<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>, <em>BytesIO</em>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlanner.set_up_planner">
+<code>abstract set_up_planner(state_dict, is_coordinator)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlanner.set_up_planner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initialize this planner to save <code>state_dict</code>.</p> <p>Implementations should save those values as they won’t be provided lated in the save process.</p> <p>This is called on all ranks.</p>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.SavePlan">
+<code>class torch.distributed.checkpoint.SavePlan(items: List[torch.distributed.checkpoint.planner.WriteItem], storage_data: Any = None, planner_data: Any = None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#SavePlan"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.WriteItem">
+<code>class torch.distributed.checkpoint.WriteItem(index: torch.distributed.checkpoint.metadata.MetadataIndex, type: torch.distributed.checkpoint.planner.WriteItemType, tensor_data: Union[torch.distributed.checkpoint.planner.TensorWriteData, NoneType] = None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/planner.html#WriteItem"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <p>We provide a filesystem based storage layer:</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.FileSystemReader">
+<code>class torch.distributed.checkpoint.FileSystemReader(path)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/filesystem.html#FileSystemReader"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.FileSystemWriter">
+<code>class torch.distributed.checkpoint.FileSystemWriter(path, single_file_per_rank=True, sync_files=True, thread_count=1, per_thread_copy_ahead=10000000)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/filesystem.html#FileSystemWriter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Basic implementation of StorageWriter using file IO.</p> <p>This implementation makes the following assumptions and simplifications:</p> <ul class="simple"> <li>The checkpoint path is an empty or non-existing directory.</li> <li>File creation is atomic</li> </ul> <p>The checkpoint consist of one file per write request plus a <code>.metadata</code> file with the serialized metadata.</p>  </dd>
+</dl> <p>We provide default implementations of <code>LoadPlanner</code> and <code>SavePlanner</code> that can handle all of torch.distributed constructs such as FSDP, DDP, ShardedTensor and DistributedTensor.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultSavePlanner">
+<code>class torch.distributed.checkpoint.DefaultSavePlanner(flatten_state_dict=True, flatten_sharded_tensors=True, dedup_replicated_tensors=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultSavePlanner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+ <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultSavePlanner.lookup_object">
+<code>lookup_object(index)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultSavePlanner.lookup_object"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is an extension from the planner interface to make it easy to extend the default planner</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultSavePlanner.transform_object">
+<code>transform_object(write_item, object)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultSavePlanner.transform_object"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is an extension from the planner interface to make it easy to extend the default planner</p>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultLoadPlanner">
+<code>class torch.distributed.checkpoint.DefaultLoadPlanner(flatten_state_dict=True, flatten_sharded_tensors=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultLoadPlanner"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>DefaultLoadPlanner that adds multiple features on top of LoadPlanner.</p> <p>In particular it adds the following:</p> <p>flatten_state_dict: Handle state_dict with nested dicts flatten_sharded_tensors: For FSDP in 2D parallel mode</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultLoadPlanner.lookup_tensor">
+<code>lookup_tensor(index)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultLoadPlanner.lookup_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is an extension from the planner interface to make it easy to extend the default planner</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.checkpoint.DefaultLoadPlanner.transform_tensor">
+<code>transform_tensor(read_item, tensor)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/checkpoint/default_planner.html#DefaultLoadPlanner.transform_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is an extension from the planner interface to make it easy to extend the default planner</p>  </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/distributed.checkpoint.html" class="_attribution-link">https://pytorch.org/docs/2.1/distributed.checkpoint.html</a>
+  </p>
+</div>

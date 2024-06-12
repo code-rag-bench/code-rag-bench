@@ -1,0 +1,79 @@
+<h1 class="devsite-page-title">tf.gradients</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/gradients_impl.py#L176-L318">  View source on GitHub </a> </td> </table> <p>Constructs symbolic derivatives of sum of <code translate="no" dir="ltr">ys</code> w.r.t. x in <code translate="no" dir="ltr">xs</code>.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.gradients(
+    ys, xs, grad_ys=None, name='gradients', gate_gradients=False,
+    aggregation_method=None, stop_gradients=None,
+    unconnected_gradients=tf.UnconnectedGradients.NONE
+)
+</pre>  <p><a href="gradients"><code translate="no" dir="ltr">tf.gradients</code></a> is only valid in a graph context. In particular, it is valid in the context of a <a href="function"><code translate="no" dir="ltr">tf.function</code></a> wrapper, where code is executing as a graph.</p> <p><code translate="no" dir="ltr">ys</code> and <code translate="no" dir="ltr">xs</code> are each a <code translate="no" dir="ltr">Tensor</code> or a list of tensors. <code translate="no" dir="ltr">grad_ys</code> is a list of <code translate="no" dir="ltr">Tensor</code>, holding the gradients received by the <code translate="no" dir="ltr">ys</code>. The list must be the same length as <code translate="no" dir="ltr">ys</code>.</p> <p><code translate="no" dir="ltr">gradients()</code> adds ops to the graph to output the derivatives of <code translate="no" dir="ltr">ys</code> with respect to <code translate="no" dir="ltr">xs</code>. It returns a list of <code translate="no" dir="ltr">Tensor</code> of length <code translate="no" dir="ltr">len(xs)</code> where each tensor is the <code translate="no" dir="ltr">sum(dy/dx)</code> for y in <code translate="no" dir="ltr">ys</code> and for x in <code translate="no" dir="ltr">xs</code>.</p> <p><code translate="no" dir="ltr">grad_ys</code> is a list of tensors of the same length as <code translate="no" dir="ltr">ys</code> that holds the initial gradients for each y in <code translate="no" dir="ltr">ys</code>. When <code translate="no" dir="ltr">grad_ys</code> is None, we fill in a tensor of '1's of the shape of y for each y in <code translate="no" dir="ltr">ys</code>. A user can provide their own initial <code translate="no" dir="ltr">grad_ys</code> to compute the derivatives using a different initial gradient for each y (e.g., if one wanted to weight the gradient differently for each value in each y).</p> <p><code translate="no" dir="ltr">stop_gradients</code> is a <code translate="no" dir="ltr">Tensor</code> or a list of tensors to be considered constant with respect to all <code translate="no" dir="ltr">xs</code>. These tensors will not be backpropagated through, as though they had been explicitly disconnected using <code translate="no" dir="ltr">stop_gradient</code>. Among other things, this allows computation of partial derivatives as opposed to total derivatives. For example:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def example():
+  a = tf.constant(0.)
+  b = 2 * a
+  return tf.gradients(a + b, [a, b], stop_gradients=[a, b])
+example()
+[&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;,
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;]
+</pre> <p>Here the partial derivatives <code translate="no" dir="ltr">g</code> evaluate to <code translate="no" dir="ltr">[1.0, 1.0]</code>, compared to the total derivatives <code translate="no" dir="ltr">tf.gradients(a + b, [a, b])</code>, which take into account the influence of <code translate="no" dir="ltr">a</code> on <code translate="no" dir="ltr">b</code> and evaluate to <code translate="no" dir="ltr">[3.0, 1.0]</code>. Note that the above is equivalent to:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def example():
+  a = tf.stop_gradient(tf.constant(0.))
+  b = tf.stop_gradient(2 * a)
+  return tf.gradients(a + b, [a, b])
+example()
+[&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;,
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;]
+</pre> <p><code translate="no" dir="ltr">stop_gradients</code> provides a way of stopping gradient after the graph has already been constructed, as compared to <a href="stop_gradient"><code translate="no" dir="ltr">tf.stop_gradient</code></a> which is used during graph construction. When the two approaches are combined, backpropagation stops at both <a href="stop_gradient"><code translate="no" dir="ltr">tf.stop_gradient</code></a> nodes and nodes in <code translate="no" dir="ltr">stop_gradients</code>, whichever is encountered first.</p> <p>All integer tensors are considered constant with respect to all <code translate="no" dir="ltr">xs</code>, as if they were included in <code translate="no" dir="ltr">stop_gradients</code>.</p> <p><code translate="no" dir="ltr">unconnected_gradients</code> determines the value returned for each x in xs if it is unconnected in the graph to ys. By default this is None to safeguard against errors. Mathematically these gradients are zero which can be requested using the <code translate="no" dir="ltr">'zero'</code> option. <code translate="no" dir="ltr">tf.UnconnectedGradients</code> provides the following options and behaviors:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def example(use_zero):
+  a = tf.ones([1, 2])
+  b = tf.ones([3, 1])
+  if use_zero:
+    return tf.gradients([b], [a], unconnected_gradients='zero')
+  else:
+    return tf.gradients([b], [a], unconnected_gradients='none')
+example(False)
+[None]
+example(True)
+[&lt;tf.Tensor: shape=(1, 2), dtype=float32, numpy=array([[0., 0.]], ...)&gt;]
+</pre> <p>Let us take one practical example which comes during the back propogation phase. This function is used to evaluate the derivatives of the cost function with respect to Weights <code translate="no" dir="ltr">Ws</code> and Biases <code translate="no" dir="ltr">bs</code>. Below sample implementation provides the exaplantion of what it is actually used for :</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def example():
+  Ws = tf.constant(0.)
+  bs = 2 * Ws
+  cost = Ws + bs  # This is just an example. Please ignore the formulas.
+  g = tf.gradients(cost, [Ws, bs])
+  dCost_dW, dCost_db = g
+  return dCost_dW, dCost_db
+example()
+(&lt;tf.Tensor: shape=(), dtype=float32, numpy=3.0&gt;,
+&lt;tf.Tensor: shape=(), dtype=float32, numpy=1.0&gt;)
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ys</code> </td> <td> A <code translate="no" dir="ltr">Tensor</code> or list of tensors to be differentiated. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">xs</code> </td> <td> A <code translate="no" dir="ltr">Tensor</code> or list of tensors to be used for differentiation. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">grad_ys</code> </td> <td> Optional. A <code translate="no" dir="ltr">Tensor</code> or list of tensors the same size as <code translate="no" dir="ltr">ys</code> and holding the gradients computed for each y in <code translate="no" dir="ltr">ys</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Optional name to use for grouping all the gradient ops together. defaults to 'gradients'. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">gate_gradients</code> </td> <td> If True, add a tuple around the gradients returned for an operations. This avoids some race conditions. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">aggregation_method</code> </td> <td> Specifies the method used to combine gradient terms. Accepted values are constants defined in the class <code translate="no" dir="ltr">AggregationMethod</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">stop_gradients</code> </td> <td> Optional. A <code translate="no" dir="ltr">Tensor</code> or list of tensors not to differentiate through. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">unconnected_gradients</code> </td> <td> Optional. Specifies the gradient value returned when the given input tensors are unconnected. Accepted values are constants defined in the class <a href="unconnectedgradients"><code translate="no" dir="ltr">tf.UnconnectedGradients</code></a> and the default value is <code translate="no" dir="ltr">none</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A list of <code translate="no" dir="ltr">Tensor</code> of length <code translate="no" dir="ltr">len(xs)</code> where each tensor is the <code translate="no" dir="ltr">sum(dy/dx)</code> for y in <code translate="no" dir="ltr">ys</code> and for x in <code translate="no" dir="ltr">xs</code>. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">LookupError</code> </td> <td> if one of the operations between <code translate="no" dir="ltr">x</code> and <code translate="no" dir="ltr">y</code> does not have a registered gradient function. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if the arguments are invalid. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">RuntimeError</code> </td> <td> if called in Eager mode. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/gradients" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/gradients</a>
+  </p>
+</div>

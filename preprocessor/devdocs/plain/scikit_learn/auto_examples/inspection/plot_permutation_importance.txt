@@ -1,0 +1,249 @@
+# Permutation Importance vs Random Forest Feature Importance (MDI)
+
+In this example, we will compare the impurity-based feature importance of
+`RandomForestClassifier` with the permutation importance on the titanic
+dataset using `permutation_importance`. We will show that the impurity-based
+feature importance can inflate the importance of numerical features.
+
+Furthermore, the impurity-based feature importance of random forests suffers
+from being computed on statistics derived from the training dataset: the
+importances can be high even for features that are not predictive of the
+target variable, as long as the model has the capacity to use them to overfit.
+
+This example shows how to use Permutation Importances as an alternative that
+can mitigate those limitations.
+
+References:
+
+[1] L. Breiman, “Random Forests”, Machine Learning, 45(1), 5-32,
+
+    
+  2001. https://doi.org/10.1023/A:1010933404324
+
+    
+    print(__doc__)
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    from sklearn.datasets import fetch_openml
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.impute import SimpleImputer
+    from sklearn.inspection import permutation_importance
+    from sklearn.compose import ColumnTransformer
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder
+    
+## Data Loading and Feature Engineering
+
+Let’s use pandas to load a copy of the titanic dataset. The following shows
+how to apply separate preprocessing on numerical and categorical features.
+
+We further include two random variables that are not correlated in any way
+with the target variable (`survived`):
+
+  * `random_num` is a high cardinality numerical variable (as many unique values as records).
+  * `random_cat` is a low cardinality categorical variable (3 possible values).
+
+    
+    X, y = fetch_openml("titanic", version=1, as_frame=True, return_X_y=True)
+    rng = np.random.RandomState(seed=42)
+    X['random_cat'] = rng.randint(3, size=X.shape[0])
+    X['random_num'] = rng.randn(X.shape[0])
+    
+    categorical_columns = ['pclass', 'sex', 'embarked', 'random_cat']
+    numerical_columns = ['age', 'sibsp', 'parch', 'fare', 'random_num']
+    
+    X = X[categorical_columns + numerical_columns]
+    
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, stratify=y, random_state=42)
+    
+    categorical_encoder = OneHotEncoder(handle_unknown='ignore')
+    numerical_pipe = Pipeline([
+        ('imputer', SimpleImputer(strategy='mean'))
+    ])
+    
+    preprocessing = ColumnTransformer(
+        [('cat', categorical_encoder, categorical_columns),
+         ('num', numerical_pipe, numerical_columns)])
+    
+    rf = Pipeline([
+        ('preprocess', preprocessing),
+        ('classifier', RandomForestClassifier(random_state=42))
+    ])
+    rf.fit(X_train, y_train)
+    
+Pipeline
+
+    
+    Pipeline(steps=[('preprocess',
+                     ColumnTransformer(transformers=[('cat',
+                                                      OneHotEncoder(handle_unknown='ignore'),
+                                                      ['pclass', 'sex', 'embarked',
+                                                       'random_cat']),
+                                                     ('num',
+                                                      Pipeline(steps=[('imputer',
+                                                                       SimpleImputer())]),
+                                                      ['age', 'sibsp', 'parch',
+                                                       'fare', 'random_num'])])),
+                    ('classifier', RandomForestClassifier(random_state=42))])
+preprocess: ColumnTransformer
+
+    
+    ColumnTransformer(transformers=[('cat', OneHotEncoder(handle_unknown='ignore'),
+                                     ['pclass', 'sex', 'embarked', 'random_cat']),
+                                    ('num',
+                                     Pipeline(steps=[('imputer', SimpleImputer())]),
+                                     ['age', 'sibsp', 'parch', 'fare',
+                                      'random_num'])])
+cat
+
+    
+    ['pclass', 'sex', 'embarked', 'random_cat']
+OneHotEncoder
+
+    
+    OneHotEncoder(handle_unknown='ignore')
+num
+
+    
+    ['age', 'sibsp', 'parch', 'fare', 'random_num']
+SimpleImputer
+
+    
+    SimpleImputer()
+RandomForestClassifier
+
+    
+    RandomForestClassifier(random_state=42)
+  
+  
+
+## Accuracy of the Model
+
+Prior to inspecting the feature importances, it is important to check that the
+model predictive performance is high enough. Indeed there would be little
+interest of inspecting the important features of a non-predictive model.
+
+Here one can observe that the train accuracy is very high (the forest model
+has enough capacity to completely memorize the training set) but it can still
+generalize well enough to the test set thanks to the built-in bagging of
+random forests.
+
+It might be possible to trade some accuracy on the training set for a slightly
+better accuracy on the test set by limiting the capacity of the trees (for
+instance by setting `min_samples_leaf=5` or `min_samples_leaf=10`) so as to
+limit overfitting while not introducing too much underfitting.
+
+However let’s keep our high capacity random forest model for now so as to
+illustrate some pitfalls with feature importance on variables with many unique
+values.
+
+    
+    print("RF train accuracy: %0.3f" % rf.score(X_train, y_train))
+    print("RF test accuracy: %0.3f" % rf.score(X_test, y_test))
+    
+Out:
+
+    
+    RF train accuracy: 1.000
+    RF test accuracy: 0.817
+    
+## Tree’s Feature Importance from Mean Decrease in Impurity (MDI)
+
+The impurity-based feature importance ranks the numerical features to be the
+most important features. As a result, the non-predictive `random_num` variable
+is ranked the most important!
+
+This problem stems from two limitations of impurity-based feature importances:
+
+  * impurity-based importances are biased towards high cardinality features;
+  * impurity-based importances are computed on training set statistics and therefore do not reflect the ability of feature to be useful to make predictions that generalize to the test set (when the model has enough capacity).
+
+    
+    ohe = (rf.named_steps['preprocess']
+             .named_transformers_['cat'])
+    feature_names = ohe.get_feature_names(input_features=categorical_columns)
+    feature_names = np.r_[feature_names, numerical_columns]
+    
+    tree_feature_importances = (
+        rf.named_steps['classifier'].feature_importances_)
+    sorted_idx = tree_feature_importances.argsort()
+    
+    y_ticks = np.arange(0, len(feature_names))
+    fig, ax = plt.subplots()
+    ax.barh(y_ticks, tree_feature_importances[sorted_idx])
+    ax.set_yticklabels(feature_names[sorted_idx])
+    ax.set_yticks(y_ticks)
+    ax.set_title("Random Forest Feature Importances (MDI)")
+    fig.tight_layout()
+    plt.show()
+    
+![Random Forest Feature Importances
+\(MDI\)](data:image/png;base64,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)
+
+Out:
+
+    
+    /home/circleci/project/examples/inspection/plot_permutation_importance.py:133: UserWarning: FixedFormatter should only be used together with FixedLocator
+      ax.set_yticklabels(feature_names[sorted_idx])
+    
+As an alternative, the permutation importances of `rf` are computed on a held
+out test set. This shows that the low cardinality categorical feature, `sex`
+is the most important feature.
+
+Also note that both random features have very low importances (close to 0) as
+expected.
+
+    
+    result = permutation_importance(rf, X_test, y_test, n_repeats=10,
+                                    random_state=42, n_jobs=2)
+    sorted_idx = result.importances_mean.argsort()
+    
+    fig, ax = plt.subplots()
+    ax.boxplot(result.importances[sorted_idx].T,
+               vert=False, labels=X_test.columns[sorted_idx])
+    ax.set_title("Permutation Importances (test set)")
+    fig.tight_layout()
+    plt.show()
+    
+![Permutation Importances \(test
+set\)](data:image/png;base64,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)
+
+It is also possible to compute the permutation importances on the training
+set. This reveals that `random_num` gets a significantly higher importance
+ranking than when computed on the test set. The difference between those two
+plots is a confirmation that the RF model has enough capacity to use that
+random numerical feature to overfit. You can further confirm this by re-
+running this example with constrained RF with min_samples_leaf=10.
+
+    
+    result = permutation_importance(rf, X_train, y_train, n_repeats=10,
+                                    random_state=42, n_jobs=2)
+    sorted_idx = result.importances_mean.argsort()
+    
+    fig, ax = plt.subplots()
+    ax.boxplot(result.importances[sorted_idx].T,
+               vert=False, labels=X_train.columns[sorted_idx])
+    ax.set_title("Permutation Importances (train set)")
+    fig.tight_layout()
+    plt.show()
+    
+![Permutation Importances \(train
+set\)](data:image/png;base64,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)
+
+Total running time of the script: ( 0 minutes 6.842 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_permutation_importance.py`
+
+`Download Jupyter notebook: plot_permutation_importance.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-
+learn.org/0.24/auto_examples/inspection/plot_permutation_importance.html
+

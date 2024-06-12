@@ -1,0 +1,65 @@
+<h1 class="devsite-page-title">tf.CriticalSection</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/critical_section_ops.py#L126-L421">  View source on GitHub </a> </td> </table> <p>Critical section.</p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/CriticalSection"><code translate="no" dir="ltr">tf.compat.v1.CriticalSection</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.CriticalSection(
+    name=None, shared_name=None, critical_section_def=None, import_scope=None
+)
+</pre>  <p>A <code translate="no" dir="ltr">CriticalSection</code> object is a resource in the graph which executes subgraphs in <strong>serial</strong> order. A common example of a subgraph one may wish to run exclusively is the one given by the following function:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">v = resource_variable_ops.ResourceVariable(0.0, name="v")
+
+def count():
+  value = v.read_value()
+  with tf.control_dependencies([value]):
+    with tf.control_dependencies([v.assign_add(1)]):
+      return tf.identity(value)
+</pre> <p>Here, a snapshot of <code translate="no" dir="ltr">v</code> is captured in <code translate="no" dir="ltr">value</code>; and then <code translate="no" dir="ltr">v</code> is updated. The snapshot value is returned.</p> <p>If multiple workers or threads all execute <code translate="no" dir="ltr">count</code> in parallel, there is no guarantee that access to the variable <code translate="no" dir="ltr">v</code> is atomic at any point within any thread's calculation of <code translate="no" dir="ltr">count</code>. In fact, even implementing an atomic counter that guarantees that the user will see each value <code translate="no" dir="ltr">0, 1, ...,</code> is currently impossible.</p> <p>The solution is to ensure any access to the underlying resource <code translate="no" dir="ltr">v</code> is only processed through a critical section:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">cs = CriticalSection()
+f1 = cs.execute(count)
+f2 = cs.execute(count)
+output = f1 + f2
+session.run(output)
+</pre> <p>The functions <code translate="no" dir="ltr">f1</code> and <code translate="no" dir="ltr">f2</code> will be executed serially, and updates to <code translate="no" dir="ltr">v</code> will be atomic.</p> <p><strong>NOTES</strong></p> <p>All resource objects, including the critical section and any captured variables of functions executed on that critical section, will be colocated to the same device (host and cpu/gpu).</p> <p>When using multiple critical sections on the same resources, there is no guarantee of exclusive access to those resources. This behavior is disallowed by default (but see the kwarg <code translate="no" dir="ltr">exclusive_resource_access</code>).</p> <p>For example, running the same function in two separate critical sections will not ensure serial execution:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">v = tf.compat.v1.get_variable("v", initializer=0.0, use_resource=True)
+def accumulate(up):
+  x = v.read_value()
+  with tf.control_dependencies([x]):
+    with tf.control_dependencies([v.assign_add(up)]):
+      return tf.identity(x)
+ex1 = CriticalSection().execute(
+  accumulate, 1.0, exclusive_resource_access=False)
+ex2 = CriticalSection().execute(
+  accumulate, 1.0, exclusive_resource_access=False)
+bad_sum = ex1 + ex2
+sess.run(v.initializer)
+sess.run(bad_sum)  # May return 0.0
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> 
+</td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="execute" data-text="execute"><code translate="no" dir="ltr">execute</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/critical_section_ops.py#L234-L337">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+execute(
+    fn, exclusive_resource_access=True, name=None
+)
+</pre> <p>Execute function <code translate="no" dir="ltr">fn()</code> inside the critical section.</p> <p><code translate="no" dir="ltr">fn</code> should not accept any arguments. To add extra arguments to when calling <code translate="no" dir="ltr">fn</code> in the critical section, create a lambda:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">critical_section.execute(lambda: fn(*my_args, **my_kwargs))
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">fn</code> </td> <td> The function to execute. Must return at least one tensor. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">exclusive_resource_access</code> </td> <td> Whether the resources required by <code translate="no" dir="ltr">fn</code> should be exclusive to this <code translate="no" dir="ltr">CriticalSection</code>. Default: <code translate="no" dir="ltr">True</code>. You may want to set this to <code translate="no" dir="ltr">False</code> if you will be accessing a resource in read-only mode in two different CriticalSections. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> The name to use when creating the execute operation. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> The tensors returned from <code translate="no" dir="ltr">fn()</code>. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If <code translate="no" dir="ltr">fn</code> attempts to lock this <code translate="no" dir="ltr">CriticalSection</code> in any nested or lazy way that may cause a deadlock. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If <code translate="no" dir="ltr">exclusive_resource_access == True</code> and another <code translate="no" dir="ltr">CriticalSection</code> has an execution requesting the same resources as <code translate="no" dir="ltr">fn</code><code translate="no" dir="ltr">. Note, even if</code>exclusive_resource_access<code translate="no" dir="ltr">is</code>True<code translate="no" dir="ltr">, if another execution in another</code>CriticalSection<code translate="no" dir="ltr">was created without</code>exclusive_resource_access=True<code translate="no" dir="ltr">, a</code>ValueError` will be raised. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/CriticalSection" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/CriticalSection</a>
+  </p>
+</div>

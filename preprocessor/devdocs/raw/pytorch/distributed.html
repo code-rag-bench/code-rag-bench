@@ -1,0 +1,712 @@
+<h1 id="distributed-communication-package-torch-distributed">Distributed communication package - torch.distributed</h1> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Please refer to <a class="reference external" href="https://pytorch.org/tutorials/beginner/dist_overview.html">PyTorch Distributed Overview</a> for a brief introduction to all features related to distributed training.</p> </div>  <h2 id="backends">Backends</h2> <p><code>torch.distributed</code> supports three built-in backends, each with different capabilities. The table below shows which functions are available for use with CPU / CUDA tensors. MPI supports CUDA only if the implementation used to build PyTorch supports it.</p> <table class="docutils colwidths-auto align-default"> <thead> <tr>
+<th class="head"><p>Backend</p></th> <th class="head" colspan="2"><p><code>gloo</code></p></th> <th class="head" colspan="2"><p><code>mpi</code></p></th> <th class="head" colspan="2"><p><code>nccl</code></p></th> </tr> <tr>
+<th class="head"><p>Device</p></th> <th class="head"><p>CPU</p></th> <th class="head"><p>GPU</p></th> <th class="head"><p>CPU</p></th> <th class="head"><p>GPU</p></th> <th class="head"><p>CPU</p></th> <th class="head"><p>GPU</p></th> </tr> </thead>  <tr>
+<td><p>send</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✘</p></td> </tr> <tr>
+<td><p>recv</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✘</p></td> </tr> <tr>
+<td><p>broadcast</p></td> <td><p>✓</p></td> <td><p>✓</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr> <tr>
+<td><p>all_reduce</p></td> <td><p>✓</p></td> <td><p>✓</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr> <tr>
+<td><p>reduce</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr> <tr>
+<td><p>all_gather</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr> <tr>
+<td><p>gather</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✘</p></td> </tr> <tr>
+<td><p>scatter</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✘</p></td> </tr> <tr>
+<td><p>reduce_scatter</p></td> <td><p>✘</p></td> <td><p>✘</p></td> <td><p>✘</p></td> <td><p>✘</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr> <tr>
+<td><p>all_to_all</p></td> <td><p>✘</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✘</p></td> </tr> <tr>
+<td><p>barrier</p></td> <td><p>✓</p></td> <td><p>✘</p></td> <td><p>✓</p></td> <td><p>?</p></td> <td><p>✘</p></td> <td><p>✓</p></td> </tr>  </table>  <h3 id="backends-that-come-with-pytorch">Backends that come with PyTorch</h3> <p>PyTorch distributed package supports Linux (stable), MacOS (stable), and Windows (prototype). By default for Linux, the Gloo and NCCL backends are built and included in PyTorch distributed (NCCL only when building with CUDA). MPI is an optional backend that can only be included if you build PyTorch from source. (e.g.building PyTorch on a host that has MPI installed.)</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>As of PyTorch v1.8, Windows supports all collective communications backend but NCCL, If the <code>init_method</code> argument of <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> points to a file it must adhere to the following schema:</p> <ul class="simple"> <li>Local file system, <code>init_method="file:///d:/tmp/some_file"</code>
+</li> <li>Shared file system, <code>init_method="file://////{machine_name}/{share_folder_name}/some_file"</code>
+</li> </ul> <p>Same as on Linux platform, you can enable TcpStore by setting environment variables, MASTER_ADDR and MASTER_PORT.</p> </div>   <h3 id="which-backend-to-use">Which backend to use?</h3> <p>In the past, we were often asked: “which backend should I use?”.</p> <ul class="simple"> <li>
+<p>Rule of thumb</p> <ul> <li>Use the NCCL backend for distributed <strong>GPU</strong> training</li> <li>Use the Gloo backend for distributed <strong>CPU</strong> training.</li> </ul> </li> <li>
+<p>GPU hosts with InfiniBand interconnect</p> <ul> <li>Use NCCL, since it’s the only backend that currently supports InfiniBand and GPUDirect.</li> </ul> </li> <li>
+<p>GPU hosts with Ethernet interconnect</p> <ul> <li>Use NCCL, since it currently provides the best distributed GPU training performance, especially for multiprocess single-node or multi-node distributed training. If you encounter any problem with NCCL, use Gloo as the fallback option. (Note that Gloo currently runs slower than NCCL for GPUs.)</li> </ul> </li> <li>
+<p>CPU hosts with InfiniBand interconnect</p> <ul> <li>If your InfiniBand has enabled IP over IB, use Gloo, otherwise, use MPI instead. We are planning on adding InfiniBand support for Gloo in the upcoming releases.</li> </ul> </li> <li>
+<p>CPU hosts with Ethernet interconnect</p> <ul> <li>Use Gloo, unless you have specific reasons to use MPI.</li> </ul> </li> </ul>   <h3 id="common-environment-variables">Common environment variables</h3>  <h4 id="choosing-the-network-interface-to-use">Choosing the network interface to use</h4> <p>By default, both the NCCL and Gloo backends will try to find the right network interface to use. If the automatically detected interface is not correct, you can override it using the following environment variables (applicable to the respective backend):</p> <ul class="simple"> <li>
+<strong>NCCL_SOCKET_IFNAME</strong>, for example <code>export NCCL_SOCKET_IFNAME=eth0</code>
+</li> <li>
+<strong>GLOO_SOCKET_IFNAME</strong>, for example <code>export GLOO_SOCKET_IFNAME=eth0</code>
+</li> </ul> <p>If you’re using the Gloo backend, you can specify multiple interfaces by separating them by a comma, like this: <code>export GLOO_SOCKET_IFNAME=eth0,eth1,eth2,eth3</code>. The backend will dispatch operations in a round-robin fashion across these interfaces. It is imperative that all processes specify the same number of interfaces in this variable.</p>   <h4 id="other-nccl-environment-variables">Other NCCL environment variables</h4> <p>NCCL has also provided a number of environment variables for fine-tuning purposes.</p> <p>Commonly used ones include the following for debugging purposes:</p> <ul class="simple"> <li><code>export NCCL_DEBUG=INFO</code></li> <li><code>export NCCL_DEBUG_SUBSYS=ALL</code></li> </ul> <p>For the full list of NCCL environment variables, please refer to <a class="reference external" href="https://docs.nvidia.com/deeplearning/sdk/nccl-developer-guide/docs/env.html">NVIDIA NCCL’s official documentation</a></p>     <h2 id="distributed-basics">Basics</h2> <p id="basics">The <code>torch.distributed</code> package provides PyTorch support and communication primitives for multiprocess parallelism across several computation nodes running on one or more machines. The class <a class="reference internal" href="generated/torch.nn.parallel.distributeddataparallel#torch.nn.parallel.DistributedDataParallel" title="torch.nn.parallel.DistributedDataParallel"><code>torch.nn.parallel.DistributedDataParallel()</code></a> builds on this functionality to provide synchronous distributed training as a wrapper around any PyTorch model. This differs from the kinds of parallelism provided by <a class="reference internal" href="multiprocessing"><span class="doc">Multiprocessing package - torch.multiprocessing</span></a> and <a class="reference internal" href="generated/torch.nn.dataparallel#torch.nn.DataParallel" title="torch.nn.DataParallel"><code>torch.nn.DataParallel()</code></a> in that it supports multiple network-connected machines and in that the user must explicitly launch a separate copy of the main training script for each process.</p> <p>In the single-machine synchronous case, <code>torch.distributed</code> or the <a class="reference internal" href="generated/torch.nn.parallel.distributeddataparallel#torch.nn.parallel.DistributedDataParallel" title="torch.nn.parallel.DistributedDataParallel"><code>torch.nn.parallel.DistributedDataParallel()</code></a> wrapper may still have advantages over other approaches to data-parallelism, including <a class="reference internal" href="generated/torch.nn.dataparallel#torch.nn.DataParallel" title="torch.nn.DataParallel"><code>torch.nn.DataParallel()</code></a>:</p> <ul class="simple"> <li>Each process maintains its own optimizer and performs a complete optimization step with each iteration. While this may appear redundant, since the gradients have already been gathered together and averaged across processes and are thus the same for every process, this means that no parameter broadcast step is needed, reducing time spent transferring tensors between nodes.</li> <li>Each process contains an independent Python interpreter, eliminating the extra interpreter overhead and “GIL-thrashing” that comes from driving several execution threads, model replicas, or GPUs from a single Python process. This is especially important for models that make heavy use of the Python runtime, including models with recurrent layers or many small components.</li> </ul>   <h2 id="initialization">Initialization</h2> <p>The package needs to be initialized using the <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>torch.distributed.init_process_group()</code></a> function before calling any other methods. This blocks until all processes have joined.</p> <dl class="function"> <dt id="torch.distributed.is_available">
+<code>torch.distributed.is_available()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed.html#is_available"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns <code>True</code> if the distributed package is available. Otherwise, <code>torch.distributed</code> does not expose any other APIs. Currently, <code>torch.distributed</code> is available on Linux, MacOS and Windows. Set <code>USE_DISTRIBUTED=1</code> to enable it when building PyTorch from source. Currently, the default value is <code>USE_DISTRIBUTED=1</code> for Linux and Windows, <code>USE_DISTRIBUTED=0</code> for MacOS.</p> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.init_process_group">
+<code>torch.distributed.init_process_group(backend, init_method=None, timeout=datetime.timedelta(seconds=1800), world_size=-1, rank=-1, store=None, group_name='')</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#init_process_group"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initializes the default distributed process group, and this will also initialize the distributed package.</p> <dl class="simple"> <dt>There are 2 main ways to initialize a process group:</dt>
+<dd>
+<ol class="arabic simple"> <li>Specify <code>store</code>, <code>rank</code>, and <code>world_size</code> explicitly.</li> <li>Specify <code>init_method</code> (a URL string) which indicates where/how to discover peers. Optionally specify <code>rank</code> and <code>world_size</code>, or encode all required parameters in the URL and omit them.</li> </ol> </dd> </dl> <p>If neither is specified, <code>init_method</code> is assumed to be “env://”.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>backend</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em> or </em><a class="reference internal" href="#torch.distributed.Backend" title="torch.distributed.Backend">Backend</a>) – The backend to use. Depending on build-time configurations, valid values include <code>mpi</code>, <code>gloo</code>, and <code>nccl</code>. This field should be given as a lowercase string (e.g., <code>"gloo"</code>), which can also be accessed via <a class="reference internal" href="#torch.distributed.Backend" title="torch.distributed.Backend"><code>Backend</code></a> attributes (e.g., <code>Backend.GLOO</code>). If using multiple processes per machine with <code>nccl</code> backend, each process must have exclusive access to every GPU it uses, as sharing GPUs between processes can result in deadlocks.</li> <li>
+<strong>init_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>optional</em>) – URL specifying how to initialize the process group. Default is “env://” if no <code>init_method</code> or <code>store</code> is specified. Mutually exclusive with <code>store</code>.</li> <li>
+<strong>world_size</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Number of processes participating in the job. Required if <code>store</code> is specified.</li> <li>
+<strong>rank</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Rank of the current process (it should be a number between 0 and <code>world_size</code>-1). Required if <code>store</code> is specified.</li> <li>
+<strong>store</strong> (<a class="reference internal" href="#torch.distributed.Store" title="torch.distributed.Store">Store</a><em>, </em><em>optional</em>) – Key/value store accessible to all workers, used to exchange connection/address information. Mutually exclusive with <code>init_method</code>.</li> <li>
+<strong>timeout</strong> (<em>timedelta</em><em>, </em><em>optional</em>) – Timeout for operations executed against the process group. Default value equals 30 minutes. This is applicable for the <code>gloo</code> backend. For <code>nccl</code>, this is applicable only if the environment variable <code>NCCL_BLOCKING_WAIT</code> or <code>NCCL_ASYNC_ERROR_HANDLING</code> is set to 1. When <code>NCCL_BLOCKING_WAIT</code> is set, this is the duration for which the process will block and wait for collectives to complete before throwing an exception. When <code>NCCL_ASYNC_ERROR_HANDLING</code> is set, this is the duration after which collectives will be aborted asynchronously and the process will crash. <code>NCCL_BLOCKING_WAIT</code> will provide errors to the user which can be caught and handled, but due to its blocking nature, it has a performance overhead. On the other hand, <code>NCCL_ASYNC_ERROR_HANDLING</code> has very little performance overhead, but crashes the process on errors. This is done since CUDA execution is async and it is no longer safe to continue executing user code since failed async NCCL operations might result in subsequent CUDA operations running on corrupted data. Only one of these two environment variables should be set.</li> <li>
+<strong>group_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>optional</em><em>, </em><em>deprecated</em>) – Group name.</li> </ul> </dd> </dl> <p>To enable <code>backend == Backend.MPI</code>, PyTorch needs to be built from source on a system that supports MPI.</p> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.Backend">
+<code>class torch.distributed.Backend</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#Backend"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>An enum-like class of available backends: GLOO, NCCL, MPI, and other registered backends.</p> <p>The values of this class are lowercase strings, e.g., <code>"gloo"</code>. They can be accessed as attributes, e.g., <code>Backend.NCCL</code>.</p> <p>This class can be directly called to parse the string, e.g., <code>Backend(backend_str)</code> will check if <code>backend_str</code> is valid, and return the parsed lowercase string if so. It also accepts uppercase strings, e.g., <code>Backend("GLOO")</code> returns <code>"gloo"</code>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The entry <code>Backend.UNDEFINED</code> is present but only used as initial value of some fields. Users should neither use it directly nor assume its existence.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.get_backend">
+<code>torch.distributed.get_backend(group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#get_backend"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the backend of the given process group.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. The default is the general main process group. If another specific group is specified, the calling process must be part of <code>group</code>.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The backend of the given process group as a lower case string.</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.get_rank">
+<code>torch.distributed.get_rank(group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#get_rank"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the rank of current process group</p> <p>Rank is a unique identifier assigned to each process within a distributed process group. They are always consecutive integers ranging from 0 to <code>world_size</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The rank of the process group -1, if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.get_world_size">
+<code>torch.distributed.get_world_size(group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#get_world_size"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the number of processes in the current process group</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The world size of the process group -1, if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.is_initialized">
+<code>torch.distributed.is_initialized()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#is_initialized"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Checking if the default process group has been initialized</p> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.is_mpi_available">
+<code>torch.distributed.is_mpi_available()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#is_mpi_available"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Checks if the MPI backend is available.</p> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.is_nccl_available">
+<code>torch.distributed.is_nccl_available()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#is_nccl_available"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Checks if the NCCL backend is available.</p> </dd>
+</dl>  <p>Currently three initialization methods are supported:</p>  <h3 id="tcp-initialization">TCP initialization</h3> <p>There are two ways to initialize using TCP, both requiring a network address reachable from all processes and a desired <code>world_size</code>. The first way requires specifying an address that belongs to the rank 0 process. This initialization method requires that all processes have manually specified ranks.</p> <p>Note that multicast address is not supported anymore in the latest distributed package. <code>group_name</code> is deprecated as well.</p> <pre data-language="python">import torch.distributed as dist
+
+# Use address of one of the machines
+dist.init_process_group(backend, init_method='tcp://10.1.1.20:23456',
+                        rank=args.rank, world_size=4)
+</pre>   <h3 id="shared-file-system-initialization">Shared file-system initialization</h3> <p>Another initialization method makes use of a file system that is shared and visible from all machines in a group, along with a desired <code>world_size</code>. The URL should start with <code>file://</code> and contain a path to a non-existent file (in an existing directory) on a shared file system. File-system initialization will automatically create that file if it doesn’t exist, but will not delete the file. Therefore, it is your responsibility to make sure that the file is cleaned up before the next <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> call on the same file path/name.</p> <p>Note that automatic rank assignment is not supported anymore in the latest distributed package and <code>group_name</code> is deprecated as well.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This method assumes that the file system supports locking using <code>fcntl</code> - most local systems and NFS support it.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This method will always create the file and try its best to clean up and remove the file at the end of the program. In other words, each initialization with the file init method will need a brand new empty file in order for the initialization to succeed. If the same file used by the previous initialization (which happens not to get cleaned up) is used again, this is unexpected behavior and can often cause deadlocks and failures. Therefore, even though this method will try its best to clean up the file, if the auto-delete happens to be unsuccessful, it is your responsibility to ensure that the file is removed at the end of the training to prevent the same file to be reused again during the next time. This is especially important if you plan to call <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> multiple times on the same file name. In other words, if the file is not removed/cleaned up and you call <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> again on that file, failures are expected. The rule of thumb here is that, make sure that the file is non-existent or empty every time <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> is called.</p> </div> <pre data-language="python">import torch.distributed as dist
+
+# rank should always be specified
+dist.init_process_group(backend, init_method='file:///mnt/nfs/sharedfile',
+                        world_size=4, rank=args.rank)
+</pre>   <h3 id="environment-variable-initialization">Environment variable initialization</h3> <p>This method will read the configuration from environment variables, allowing one to fully customize how the information is obtained. The variables to be set are:</p> <ul class="simple"> <li>
+<code>MASTER_PORT</code> - required; has to be a free port on machine with rank 0</li> <li>
+<code>MASTER_ADDR</code> - required (except for rank 0); address of rank 0 node</li> <li>
+<code>WORLD_SIZE</code> - required; can be set either here, or in a call to init function</li> <li>
+<code>RANK</code> - required; can be set either here, or in a call to init function</li> </ul> <p>The machine with rank 0 will be used to set up all connections.</p> <p>This is the default method, meaning that <code>init_method</code> does not have to be specified (or can be <code>env://</code>).</p>    <h2 id="distributed-key-value-store">Distributed Key-Value Store</h2> <p>The distributed package comes with a distributed key-value store, which can be used to share information between processes in the group as well as to initialize the distributed pacakge in <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>torch.distributed.init_process_group()</code></a> (by explicitly creating the store as an alternative to specifying <code>init_method</code>.) There are 3 choices for Key-Value Stores: <a class="reference internal" href="#torch.distributed.TCPStore" title="torch.distributed.TCPStore"><code>TCPStore</code></a>, <a class="reference internal" href="#torch.distributed.FileStore" title="torch.distributed.FileStore"><code>FileStore</code></a>, and <a class="reference internal" href="#torch.distributed.HashStore" title="torch.distributed.HashStore"><code>HashStore</code></a>.</p> <dl class="class"> <dt id="torch.distributed.Store">
+<code>class torch.distributed.Store</code> </dt> <dd>
+<p>Base class for all store implementations, such as the 3 provided by PyTorch distributed: (<a class="reference internal" href="#torch.distributed.TCPStore" title="torch.distributed.TCPStore"><code>TCPStore</code></a>, <a class="reference internal" href="#torch.distributed.FileStore" title="torch.distributed.FileStore"><code>FileStore</code></a>, and <a class="reference internal" href="#torch.distributed.HashStore" title="torch.distributed.HashStore"><code>HashStore</code></a>).</p> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.TCPStore">
+<code>class torch.distributed.TCPStore</code> </dt> <dd>
+<p>A TCP-based distributed key-value store implementation. The server store holds the data, while the client stores can connect to the server store over TCP and perform actions such as <code>set()</code> to insert a key-value pair, <code>get()</code> to retrieve a key-value pair, etc.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>host_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The hostname or IP Address the server store should run on.</li> <li>
+<strong>port</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The port on which the server store should listen for incoming requests.</li> <li>
+<strong>world_size</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The total number of store users (number of clients + 1 for the server).</li> <li>
+<strong>is_master</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – True when initializing the server store, False for client stores.</li> <li>
+<strong>timeout</strong> (<em>timedelta</em>) – Timeout used by the store during initialization and for methods such as <code>get()</code> and <code>wait()</code>.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Run on process 1 (server)
+&gt;&gt;&gt; server_store = dist.TCPStore("127.0.0.1", 1234, 2, True, timedelta(seconds=30))
+&gt;&gt;&gt; # Run on process 2 (client)
+&gt;&gt;&gt; client_store = dist.TCPStore("127.0.0.1", 1234, 2, False)
+&gt;&gt;&gt; # Use any of the store methods from either the client or server after initialization
+&gt;&gt;&gt; server_store.set("first_key", "first_value")
+&gt;&gt;&gt; client_store.get("first_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.HashStore">
+<code>class torch.distributed.HashStore</code> </dt> <dd>
+<p>A thread-safe store implementation based on an underlying hashmap. This store can be used within the same process (for example, by other threads), but cannot be used across processes.</p> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; store = dist.HashStore()
+&gt;&gt;&gt; # store can be used from other threads
+&gt;&gt;&gt; # Use any of the store methods after initialization
+&gt;&gt;&gt; store.set("first_key", "first_value")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.FileStore">
+<code>class torch.distributed.FileStore</code> </dt> <dd>
+<p>A store implementation that uses a file to store the underlying key-value pairs.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>file_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – path of the file in which to store the key-value pairs</li> <li>
+<strong>world_size</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The total number of processes using the store</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; store1 = dist.FileStore("/tmp/filestore", 2)
+&gt;&gt;&gt; store2 = dist.FileStore("/tmp/filestore", 2)
+&gt;&gt;&gt; # Use any of the store methods from either the client or server after initialization
+&gt;&gt;&gt; store1.set("first_key", "first_value")
+&gt;&gt;&gt; store2.get("first_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.PrefixStore">
+<code>class torch.distributed.PrefixStore</code> </dt> <dd>
+<p>A wrapper around any of the 3 key-value stores (<a class="reference internal" href="#torch.distributed.TCPStore" title="torch.distributed.TCPStore"><code>TCPStore</code></a>, <a class="reference internal" href="#torch.distributed.FileStore" title="torch.distributed.FileStore"><code>FileStore</code></a>, and <a class="reference internal" href="#torch.distributed.HashStore" title="torch.distributed.HashStore"><code>HashStore</code></a>) that adds a prefix to each key inserted to the store.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>prefix</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The prefix string that is prepended to each key before being inserted into the store.</li> <li>
+<strong>store</strong> (<em>torch.distributed.store</em>) – A store object that forms the underlying key-value store.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.set">
+<code>torch.distributed.Store.set(self: torch._C._distributed_c10d.Store, arg0: str, arg1: str) → None</code> </dt> <dd>
+<p>Inserts the key-value pair into the store based on the supplied <code>key</code> and <code>value</code>. If <code>key</code> already exists in the store, it will overwrite the old value with the new supplied <code>value</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The key to be added to the store.</li> <li>
+<strong>value</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The value associated with <code>key</code> to be added to the store.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.set("first_key", "first_value")
+&gt;&gt;&gt; # Should return "first_value"
+&gt;&gt;&gt; store.get("first_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.get">
+<code>torch.distributed.Store.get(self: torch._C._distributed_c10d.Store, arg0: str) → bytes</code> </dt> <dd>
+<p>Retrieves the value associated with the given <code>key</code> in the store. If <code>key</code> is not present in the store, the function will wait for <code>timeout</code>, which is defined when initializing the store, before throwing an exception.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The function will return the value associated with this key.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Value associated with <code>key</code> if <code>key</code> is in the store.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.set("first_key", "first_value")
+&gt;&gt;&gt; # Should return "first_value"
+&gt;&gt;&gt; store.get("first_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.add">
+<code>torch.distributed.Store.add(self: torch._C._distributed_c10d.Store, arg0: str, arg1: int) → int</code> </dt> <dd>
+<p>The first call to add for a given <code>key</code> creates a counter associated with <code>key</code> in the store, initialized to <code>amount</code>. Subsequent calls to add with the same <code>key</code> increment the counter by the specified <code>amount</code>. Calling <code>add()</code> with a key that has already been set in the store by <code>set()</code> will result in an exception.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The key in the store whose counter will be incremented.</li> <li>
+<strong>amount</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The quantity by which the counter will be incremented.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, other store types can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.add("first_key", 1)
+&gt;&gt;&gt; store.add("first_key", 6)
+&gt;&gt;&gt; # Should return 7
+&gt;&gt;&gt; store.get("first_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.wait">
+<code>torch.distributed.Store.wait(*args, **kwargs)</code> </dt> <dd>
+<p>Overloaded function.</p> <ol class="arabic simple"> <li>wait(self: torch._C._distributed_c10d.Store, arg0: List[str]) -&gt; None</li> </ol> <p>Waits for each key in <code>keys</code> to be added to the store. If not all keys are set before the <code>timeout</code> (set during store initialization), then <code>wait</code> will throw an exception.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>keys</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a>) – List of keys on which to wait until they are set in the store.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, other store types can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; # This will throw an exception after 30 seconds
+&gt;&gt;&gt; store.wait(["bad_key"])
+</pre> </dd> </dl> <ol class="arabic simple" start="2"> <li>wait(self: torch._C._distributed_c10d.Store, arg0: List[str], arg1: datetime.timedelta) -&gt; None</li> </ol> <p>Waits for each key in <code>keys</code> to be added to the store, and throws an exception if the keys have not been set by the supplied <code>timeout</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>keys</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a>) – List of keys on which to wait until they are set in the store.</li> <li>
+<strong>timeout</strong> (<em>timedelta</em>) – Time to wait for the keys to be added before throwing an exception.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, other store types can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; # This will throw an exception after 10 seconds
+&gt;&gt;&gt; store.wait(["bad_key"], timedelta(seconds=10))
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.num_keys">
+<code>torch.distributed.Store.num_keys(self: torch._C._distributed_c10d.Store) → int</code> </dt> <dd>
+<p>Returns the number of keys set in the store. Note that this number will typically be one greater than the number of keys added by <code>set()</code> and <code>add()</code> since one key is used to coordinate all the workers using the store.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>When used with the <a class="reference internal" href="#torch.distributed.TCPStore" title="torch.distributed.TCPStore"><code>TCPStore</code></a>, <code>num_keys</code> returns the number of keys written to the underlying file. If the store is destructed and another store is created with the same file, the original keys will be retained.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The number of keys present in the store.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, other store types can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.set("first_key", "first_value")
+&gt;&gt;&gt; # This should return 2
+&gt;&gt;&gt; store.num_keys()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.delete_key">
+<code>torch.distributed.Store.delete_key(self: torch._C._distributed_c10d.Store, arg0: str) → bool</code> </dt> <dd>
+<p>Deletes the key-value pair associated with <code>key</code> from the store. Returns <code>true</code> if the key was successfully deleted, and <code>false</code> if it was not.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The <code>delete_key</code> API is only supported by the <a class="reference internal" href="#torch.distributed.TCPStore" title="torch.distributed.TCPStore"><code>TCPStore</code></a> and <a class="reference internal" href="#torch.distributed.HashStore" title="torch.distributed.HashStore"><code>HashStore</code></a>. Using this API with the <a class="reference internal" href="#torch.distributed.FileStore" title="torch.distributed.FileStore"><code>FileStore</code></a> will result in an exception.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The key to be deleted from the store</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><code>True</code> if <code>key</code> was deleted, otherwise <code>False</code>.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, HashStore can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.set("first_key")
+&gt;&gt;&gt; # This should return true
+&gt;&gt;&gt; store.delete_key("first_key")
+&gt;&gt;&gt; # This should return false
+&gt;&gt;&gt; store.delete_key("bad_key")
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.Store.set_timeout">
+<code>torch.distributed.Store.set_timeout(self: torch._C._distributed_c10d.Store, arg0: datetime.timedelta) → None</code> </dt> <dd>
+<p>Sets the store’s default timeout. This timeout is used during initialization and in <code>wait()</code> and <code>get()</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<em>timedelta</em>) – timeout to be set in the store.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; # Using TCPStore as an example, other store types can also be used
+&gt;&gt;&gt; store = dist.TCPStore("127.0.0.1", 0, 1, True, timedelta(seconds=30))
+&gt;&gt;&gt; store.set_timeout(timedelta(seconds=10))
+&gt;&gt;&gt; # This will throw an exception after 10 seconds
+&gt;&gt;&gt; store.wait(["bad_key"])
+</pre> </dd> </dl> </dd>
+</dl>   <h2 id="groups">Groups</h2> <p>By default collectives operate on the default group (also called the world) and require all processes to enter the distributed function call. However, some workloads can benefit from more fine-grained communication. This is where distributed groups come into play. <a class="reference internal" href="#torch.distributed.new_group" title="torch.distributed.new_group"><code>new_group()</code></a> function can be used to create new groups, with arbitrary subsets of all processes. It returns an opaque group handle that can be given as a <code>group</code> argument to all collectives (collectives are distributed functions to exchange information in certain well-known programming patterns).</p> <dl class="function"> <dt id="torch.distributed.new_group">
+<code>torch.distributed.new_group(ranks=None, timeout=datetime.timedelta(seconds=1800), backend=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#new_group"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Creates a new distributed group.</p> <p>This function requires that all processes in the main group (i.e. all processes that are part of the distributed job) enter this function, even if they are not going to be members of the group. Additionally, groups should be created in the same order in all processes.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Using multiple process groups with the <code>NCCL</code> backend concurrently is not safe and the user should perform explicit synchronization in their application to ensure only one process group is used at a time. This means collectives from one process group should have completed execution on the device (not just enqueued since CUDA execution is async) before collectives from another process group are enqueued. See <a class="reference external" href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/communicators.html#using-multiple-nccl-communicators-concurrently">Using multiple NCCL communicators concurrently</a> for more details.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>ranks</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em>) – List of ranks of group members. If <code>None</code>, will be set to all ranks. Default is <code>None</code>.</li> <li>
+<strong>timeout</strong> (<em>timedelta</em><em>, </em><em>optional</em>) – Timeout for operations executed against the process group. Default value equals 30 minutes. This is only applicable for the <code>gloo</code> backend.</li> <li>
+<strong>backend</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em> or </em><a class="reference internal" href="#torch.distributed.Backend" title="torch.distributed.Backend">Backend</a><em>, </em><em>optional</em>) – The backend to use. Depending on build-time configurations, valid values are <code>gloo</code> and <code>nccl</code>. By default uses the same backend as the global group. This field should be given as a lowercase string (e.g., <code>"gloo"</code>), which can also be accessed via <a class="reference internal" href="#torch.distributed.Backend" title="torch.distributed.Backend"><code>Backend</code></a> attributes (e.g., <code>Backend.GLOO</code>).</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A handle of distributed group that can be given to collective calls.</p> </dd> </dl> </dd>
+</dl>   <h2 id="point-to-point-communication">Point-to-point communication</h2> <dl class="function"> <dt id="torch.distributed.send">
+<code>torch.distributed.send(tensor, dst, group=None, tag=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#send"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Sends a tensor synchronously.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Tensor to send.</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Destination rank.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>tag</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Tag to match send with remote recv</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.recv">
+<code>torch.distributed.recv(tensor, src=None, group=None, tag=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#recv"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Receives a tensor synchronously.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Tensor to fill with received data.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Source rank. Will receive from any process if unspecified.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>tag</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Tag to match recv with remote send</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Sender rank -1, if not part of the group</p> </dd> </dl> </dd>
+</dl> <p><a class="reference internal" href="#torch.distributed.isend" title="torch.distributed.isend"><code>isend()</code></a> and <a class="reference internal" href="#torch.distributed.irecv" title="torch.distributed.irecv"><code>irecv()</code></a> return distributed request objects when used. In general, the type of this object is unspecified as they should never be created manually, but they are guaranteed to support two methods:</p> <ul class="simple"> <li>
+<code>is_completed()</code> - returns True if the operation has finished</li> <li>
+<code>wait()</code> - will block the process until the operation is finished. <code>is_completed()</code> is guaranteed to return True once it returns.</li> </ul> <dl class="function"> <dt id="torch.distributed.isend">
+<code>torch.distributed.isend(tensor, dst, group=None, tag=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#isend"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Sends a tensor asynchronously.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Tensor to send.</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Destination rank.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>tag</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Tag to match send with remote recv</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A distributed request object. None, if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.irecv">
+<code>torch.distributed.irecv(tensor, src=None, group=None, tag=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#irecv"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Receives a tensor asynchronously.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Tensor to fill with received data.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Source rank. Will receive from any process if unspecified.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>tag</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Tag to match recv with remote send</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A distributed request object. None, if not part of the group</p> </dd> </dl> </dd>
+</dl>   <h2 id="synchronous-and-asynchronous-collective-operations">Synchronous and asynchronous collective operations</h2> <p>Every collective operation function supports the following two kinds of operations, depending on the setting of the <code>async_op</code> flag passed into the collective:</p> <p><strong>Synchronous operation</strong> - the default mode, when <code>async_op</code> is set to <code>False</code>. When the function returns, it is guaranteed that the collective operation is performed. In the case of CUDA operations, it is not guaranteed that the CUDA operation is completed, since CUDA operations are asynchronous. For CPU collectives, any further function calls utilizing the output of the collective call will behave as expected. For CUDA collectives, function calls utilizing the output on the same CUDA stream will behave as expected. Users must take care of synchronization under the scenario of running under different streams. For details on CUDA semantics such as stream synchronization, see <a class="reference external" href="https://pytorch.org/docs/stable/notes/cuda.html">CUDA Semantics</a>. See the below script to see examples of differences in these semantics for CPU and CUDA operations.</p> <p><strong>Asynchronous operation</strong> - when <code>async_op</code> is set to True. The collective operation function returns a distributed request object. In general, you don’t need to create it manually and it is guaranteed to support two methods:</p> <ul class="simple"> <li>
+<code>is_completed()</code> - in the case of CPU collectives, returns <code>True</code> if completed. In the case of CUDA operations, returns <code>True</code> if the operation has been successfully enqueued onto a CUDA stream and the output can be utilized on the default stream without further synchronization.</li> <li>
+<code>wait()</code> - in the case of CPU collectives, will block the process until the operation is completed. In the case of CUDA collectives, will block until the operation has been successfully enqueued onto a CUDA stream and the output can be utilized on the default stream without further synchronization.</li> </ul> <p><strong>Example</strong></p> <p>The following code can serve as a reference regarding semantics for CUDA operations when using distributed collectives. It shows the explicit need to synchronize when using collective outputs on different CUDA streams:</p> <pre data-language="python"># Code runs on each rank.
+dist.init_process_group("nccl", rank=rank, world_size=2)
+output = torch.tensor([rank]).cuda(rank)
+s = torch.cuda.Stream()
+handle = dist.all_reduce(output, async_op=True)
+# Wait ensures the operation is enqueued, but not necessarily complete.
+handle.wait()
+# Using result on non-default stream.
+with torch.cuda.stream(s):
+    s.wait_stream(torch.cuda.default_stream())
+    output.add_(100)
+if rank == 0:
+    # if the explicit call to wait_stream was omitted, the output below will be
+    # non-deterministically 1 or 101, depending on whether the allreduce overwrote
+    # the value after the add completed.
+    print(output)
+</pre>   <h2 id="collective-functions">Collective functions</h2> <dl class="function"> <dt id="torch.distributed.broadcast">
+<code>torch.distributed.broadcast(tensor, src, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#broadcast"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Broadcasts the tensor to the whole group.</p> <p><code>tensor</code> must have the same number of elements in all processes participating in the collective.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Data to be sent if <code>src</code> is the rank of current process, and tensor to be used to save received data otherwise.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Source rank.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.broadcast_object_list">
+<code>torch.distributed.broadcast_object_list(object_list, src=0, group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#broadcast_object_list"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Broadcasts picklable objects in <code>object_list</code> to the whole group. Similar to <a class="reference internal" href="#torch.distributed.broadcast" title="torch.distributed.broadcast"><code>broadcast()</code></a>, but Python objects can be passed in. Note that all objects in <code>object_list</code> must be picklable in order to be broadcasted.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>object_list</strong> (<em>List</em><em>[</em><em>Any</em><em>]</em>) – List of input objects to broadcast. Each object must be picklable. Only objects on the <code>src</code> rank will be broadcast, but each rank must provide lists of equal sizes.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Source rank from which to broadcast <code>object_list</code>.</li> <li>
+<strong>group</strong> – (ProcessGroup, optional): The process group to work on. If None, the default process group will be used. Default is <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><code>None</code>. If rank is part of the group, <code>object_list</code> will contain the broadcasted objects from <code>src</code> rank.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>For NCCL-based processed groups, internal tensor representations of objects must be moved to the GPU device before communication takes place. In this case, the device used is given by <code>torch.cuda.current_device()</code> and it is the user’s responsiblity to ensure that this is set so that each rank has an individual GPU, via <code>torch.cuda.set_device()</code>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that this API differs slightly from the <a class="reference internal" href="#torch.distributed.all_gather" title="torch.distributed.all_gather"><code>all_gather()</code></a> collective since it does not provide an <code>async_op</code> handle and thus will be a blocking call.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#torch.distributed.broadcast_object_list" title="torch.distributed.broadcast_object_list"><code>broadcast_object_list()</code></a> uses <code>pickle</code> module implicitly, which is known to be insecure. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling. Only call this function with data you trust.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; # Note: Process group initialization omitted on each rank.
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; if dist.get_rank() == 0:
+&gt;&gt;&gt;     # Assumes world_size of 3.
+&gt;&gt;&gt;     objects = ["foo", 12, {1: 2}] # any picklable object
+&gt;&gt;&gt; else:
+&gt;&gt;&gt;     objects = [None, None, None]
+&gt;&gt;&gt; dist.broadcast_object_list(objects, src=0)
+&gt;&gt;&gt; broadcast_objects
+['foo', 12, {1: 2}]
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_reduce">
+<code>torch.distributed.all_reduce(tensor, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_reduce"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduces the tensor data across all machines in such a way that all get the final result.</p> <p>After the call <code>tensor</code> is going to be bitwise identical in all processes.</p> <p>Complex tensors are supported.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Input and output of the collective. The function operates in-place.</li> <li>
+<strong>op</strong> (<em>optional</em>) – One of the values from <code>torch.distributed.ReduceOp</code> enum. Specifies an operation used for element-wise reductions.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; # All tensors below are of torch.int64 type.
+&gt;&gt;&gt; # We have 2 process groups, 2 ranks.
+&gt;&gt;&gt; tensor = torch.arange(2, dtype=torch.int64) + 1 + 2 * rank
+&gt;&gt;&gt; tensor
+tensor([1, 2]) # Rank 0
+tensor([3, 4]) # Rank 1
+&gt;&gt;&gt; dist.all_reduce(tensor, op=ReduceOp.SUM)
+&gt;&gt;&gt; tensor
+tensor([4, 6]) # Rank 0
+tensor([4, 6]) # Rank 1
+</pre> <pre data-language="python">&gt;&gt;&gt; # All tensors below are of torch.cfloat type.
+&gt;&gt;&gt; # We have 2 process groups, 2 ranks.
+&gt;&gt;&gt; tensor = torch.tensor([1+1j, 2+2j], dtype=torch.cfloat) + 2 * rank * (1+1j)
+&gt;&gt;&gt; tensor
+tensor([1.+1.j, 2.+2.j]) # Rank 0
+tensor([3.+3.j, 4.+4.j]) # Rank 1
+&gt;&gt;&gt; dist.all_reduce(tensor, op=ReduceOp.SUM)
+&gt;&gt;&gt; tensor
+tensor([4.+4.j, 6.+6.j]) # Rank 0
+tensor([4.+4.j, 6.+6.j]) # Rank 1
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.reduce">
+<code>torch.distributed.reduce(tensor, dst, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#reduce"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduces the tensor data across all machines.</p> <p>Only the process with rank <code>dst</code> is going to receive the final result.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Input and output of the collective. The function operates in-place.</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Destination rank</li> <li>
+<strong>op</strong> (<em>optional</em>) – One of the values from <code>torch.distributed.ReduceOp</code> enum. Specifies an operation used for element-wise reductions.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_gather">
+<code>torch.distributed.all_gather(tensor_list, tensor, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_gather"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Gathers tensors from the whole group in a list.</p> <p>Complex tensors are supported.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – Output list. It should contain correctly-sized tensors to be used for output of the collective.</li> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Tensor to be broadcast from current process.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; # All tensors below are of torch.int64 dtype.
+&gt;&gt;&gt; # We have 2 process groups, 2 ranks.
+&gt;&gt;&gt; tensor_list = [torch.zero(2, dtype=torch.int64) for _ in range(2)]
+&gt;&gt;&gt; tensor_list
+[tensor([0, 0]), tensor([0, 0])] # Rank 0 and 1
+&gt;&gt;&gt; tensor = torch.arange(2, dtype=torch.int64) + 1 + 2 * rank
+&gt;&gt;&gt; tensor
+tensor([1, 2]) # Rank 0
+tensor([3, 4]) # Rank 1
+&gt;&gt;&gt; dist.all_gather(tensor_list, tensor)
+&gt;&gt;&gt; tensor_list
+[tensor([1, 2]), tensor([3, 4])] # Rank 0
+[tensor([1, 2]), tensor([3, 4])] # Rank 1
+</pre> <pre data-language="python">&gt;&gt;&gt; # All tensors below are of torch.cfloat dtype.
+&gt;&gt;&gt; # We have 2 process groups, 2 ranks.
+&gt;&gt;&gt; tensor_list = [torch.zero(2, dtype=torch.cfloat) for _ in range(2)]
+&gt;&gt;&gt; tensor_list
+[tensor([0.+0.j, 0.+0.j]), tensor([0.+0.j, 0.+0.j])] # Rank 0 and 1
+&gt;&gt;&gt; tensor = torch.tensor([1+1j, 2+2j], dtype=torch.cfloat) + 2 * rank * (1+1j)
+&gt;&gt;&gt; tensor
+tensor([1.+1.j, 2.+2.j]) # Rank 0
+tensor([3.+3.j, 4.+4.j]) # Rank 1
+&gt;&gt;&gt; dist.all_gather(tensor_list, tensor)
+&gt;&gt;&gt; tensor_list
+[tensor([1.+1.j, 2.+2.j]), tensor([3.+3.j, 4.+4.j])] # Rank 0
+[tensor([1.+1.j, 2.+2.j]), tensor([3.+3.j, 4.+4.j])] # Rank 1
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_gather_object">
+<code>torch.distributed.all_gather_object(object_list, obj, group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_gather_object"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Gathers picklable objects from the whole group into a list. Similar to <a class="reference internal" href="#torch.distributed.all_gather" title="torch.distributed.all_gather"><code>all_gather()</code></a>, but Python objects can be passed in. Note that the object must be picklable in order to be gathered.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>object_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><em>Any</em><em>]</em>) – Output list. It should be correctly sized as the size of the group for this collective and will contain the output.</li> <li>
+<strong>object</strong> (<em>Any</em>) – Pickable Python object to be broadcast from current process.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used. Default is <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None. If the calling rank is part of this group, the output of the collective will be populated into the input <code>object_list</code>. If the calling rank is not part of the group, the passed in <code>object_list</code> will be unmodified.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that this API differs slightly from the <a class="reference internal" href="#torch.distributed.all_gather" title="torch.distributed.all_gather"><code>all_gather()</code></a> collective since it does not provide an <code>async_op</code> handle and thus will be a blocking call.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>For NCCL-based processed groups, internal tensor representations of objects must be moved to the GPU device before communication takes place. In this case, the device used is given by <code>torch.cuda.current_device()</code> and it is the user’s responsiblity to ensure that this is set so that each rank has an individual GPU, via <code>torch.cuda.set_device()</code>.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#torch.distributed.all_gather_object" title="torch.distributed.all_gather_object"><code>all_gather_object()</code></a> uses <code>pickle</code> module implicitly, which is known to be insecure. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling. Only call this function with data you trust.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; # Note: Process group initialization omitted on each rank.
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; # Assumes world_size of 3.
+&gt;&gt;&gt; gather_objects = ["foo", 12, {1: 2}] # any picklable object
+&gt;&gt;&gt; output = [None for _ in gather_objects]
+&gt;&gt;&gt; dist.all_gather_object(output, gather_objects[dist.get_rank()])
+&gt;&gt;&gt; output
+['foo', 12, {1: 2}]
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.gather">
+<code>torch.distributed.gather(tensor, gather_list=None, dst=0, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#gather"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Gathers a list of tensors in a single process.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Input tensor.</li> <li>
+<strong>gather_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em><em>, </em><em>optional</em>) – List of appropriately-sized tensors to use for gathered data (default is None, must be specified on the destination rank)</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Destination rank (default is 0)</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.gather_object">
+<code>torch.distributed.gather_object(obj, object_gather_list=None, dst=0, group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#gather_object"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Gathers picklable objects from the whole group in a single process. Similar to <a class="reference internal" href="#torch.distributed.gather" title="torch.distributed.gather"><code>gather()</code></a>, but Python objects can be passed in. Note that the object must be picklable in order to be gathered.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>obj</strong> (<em>Any</em>) – Input object. Must be picklable.</li> <li>
+<strong>object_gather_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><em>Any</em><em>]</em>) – Output list. On the <code>dst</code> rank, it should be correctly sized as the size of the group for this collective and will contain the output. Must be <code>None</code> on non-dst ranks. (default is <code>None</code>)</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Destination rank. (default is 0)</li> <li>
+<strong>group</strong> – (ProcessGroup, optional): The process group to work on. If None, the default process group will be used. Default is <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None. On the <code>dst</code> rank, <code>object_gather_list</code> will contain the output of the collective.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that this API differs slightly from the gather collective since it does not provide an async_op handle and thus will be a blocking call.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that this API is not supported when using the NCCL backend.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#torch.distributed.gather_object" title="torch.distributed.gather_object"><code>gather_object()</code></a> uses <code>pickle</code> module implicitly, which is known to be insecure. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling. Only call this function with data you trust.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; # Note: Process group initialization omitted on each rank.
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; # Assumes world_size of 3.
+&gt;&gt;&gt; gather_objects = ["foo", 12, {1: 2}] # any picklable object
+&gt;&gt;&gt; output = [None for _ in gather_objects]
+&gt;&gt;&gt; dist.gather_object(
+        gather_objects[dist.get_rank()],
+        output if dist.get_rank() == 0 else None,
+        dst=0
+    )
+&gt;&gt;&gt; # On rank 0
+&gt;&gt;&gt; output
+['foo', 12, {1: 2}]
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.scatter">
+<code>torch.distributed.scatter(tensor, scatter_list=None, src=0, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#scatter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Scatters a list of tensors to all processes in a group.</p> <p>Each process will receive exactly one tensor and store its data in the <code>tensor</code> argument.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Output tensor.</li> <li>
+<strong>scatter_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – List of tensors to scatter (default is None, must be specified on the source rank)</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Source rank (default is 0)</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.scatter_object_list">
+<code>torch.distributed.scatter_object_list(scatter_object_output_list, scatter_object_input_list, src=0, group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#scatter_object_list"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Scatters picklable objects in <code>scatter_object_input_list</code> to the whole group. Similar to <a class="reference internal" href="#torch.distributed.scatter" title="torch.distributed.scatter"><code>scatter()</code></a>, but Python objects can be passed in. On each rank, the scattered object will be stored as the first element of <code>scatter_object_output_list</code>. Note that all objects in <code>scatter_object_input_list</code> must be picklable in order to be scattered.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>scatter_object_output_list</strong> (<em>List</em><em>[</em><em>Any</em><em>]</em>) – Non-empty list whose first element will store the object scattered to this rank.</li> <li>
+<strong>scatter_object_input_list</strong> (<em>List</em><em>[</em><em>Any</em><em>]</em>) – List of input objects to scatter. Each object must be picklable. Only objects on the <code>src</code> rank will be scattered, and the argument can be <code>None</code> for non-src ranks.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Source rank from which to scatter <code>scatter_object_input_list</code>.</li> <li>
+<strong>group</strong> – (ProcessGroup, optional): The process group to work on. If None, the default process group will be used. Default is <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><code>None</code>. If rank is part of the group, <code>scatter_object_output_list</code> will have its first element set to the scattered object for this rank.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that this API differs slightly from the scatter collective since it does not provide an <code>async_op</code> handle and thus will be a blocking call.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#torch.distributed.scatter_object_list" title="torch.distributed.scatter_object_list"><code>scatter_object_list()</code></a> uses <code>pickle</code> module implicitly, which is known to be insecure. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling. Only call this function with data you trust.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; # Note: Process group initialization omitted on each rank.
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; if dist.get_rank() == 0:
+&gt;&gt;&gt;     # Assumes world_size of 3.
+&gt;&gt;&gt;     objects = ["foo", 12, {1: 2}] # any picklable object
+&gt;&gt;&gt; else:
+&gt;&gt;&gt;     # Can be any list on non-src ranks, elements are not used.
+&gt;&gt;&gt;     objects = [None, None, None]
+&gt;&gt;&gt; output_list = [None]
+&gt;&gt;&gt; dist.scatter_object_list(output_list, objects, src=0)
+&gt;&gt;&gt; # Rank i gets objects[i]. For example, on rank 2:
+&gt;&gt;&gt; output_list
+[{1: 2}]
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.reduce_scatter">
+<code>torch.distributed.reduce_scatter(output, input_list, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#reduce_scatter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduces, then scatters a list of tensors to all processes in a group.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – Output tensor.</li> <li>
+<strong>input_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – List of tensors to reduce and scatter.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group.</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_to_all">
+<code>torch.distributed.all_to_all(output_tensor_list, input_tensor_list, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_to_all"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Each process scatters list of input tensors to all processes in a group and return gathered list of tensors in output list.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output_tensor_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – List of tensors to be gathered one per rank.</li> <li>
+<strong>input_tensor_list</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – List of tensors to scatter one per rank.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><code>all_to_all</code> is experimental and subject to change.</p> </div> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; input = torch.arange(4) + rank * 4
+&gt;&gt;&gt; input = list(input.chunk(4))
+&gt;&gt;&gt; input
+[tensor([0]), tensor([1]), tensor([2]), tensor([3])]     # Rank 0
+[tensor([4]), tensor([5]), tensor([6]), tensor([7])]     # Rank 1
+[tensor([8]), tensor([9]), tensor([10]), tensor([11])]   # Rank 2
+[tensor([12]), tensor([13]), tensor([14]), tensor([15])] # Rank 3
+&gt;&gt;&gt; output = list(torch.empty([4], dtype=torch.int64).chunk(4))
+&gt;&gt;&gt; dist.all_to_all(output, input)
+&gt;&gt;&gt; output
+[tensor([0]), tensor([4]), tensor([8]), tensor([12])]    # Rank 0
+[tensor([1]), tensor([5]), tensor([9]), tensor([13])]    # Rank 1
+[tensor([2]), tensor([6]), tensor([10]), tensor([14])]   # Rank 2
+[tensor([3]), tensor([7]), tensor([11]), tensor([15])]   # Rank 3
+</pre> <pre data-language="python">&gt;&gt;&gt; # Essentially, it is similar to following operation:
+&gt;&gt;&gt; scatter_list = input
+&gt;&gt;&gt; gather_list  = output
+&gt;&gt;&gt; for i in range(world_size):
+&gt;&gt;&gt;   dist.scatter(gather_list[i], scatter_list if i == rank else [], src = i)
+</pre> <pre data-language="python">&gt;&gt;&gt; input
+tensor([0, 1, 2, 3, 4, 5])                                       # Rank 0
+tensor([10, 11, 12, 13, 14, 15, 16, 17, 18])                     # Rank 1
+tensor([20, 21, 22, 23, 24])                                     # Rank 2
+tensor([30, 31, 32, 33, 34, 35, 36])                             # Rank 3
+&gt;&gt;&gt; input_splits
+[2, 2, 1, 1]                                                     # Rank 0
+[3, 2, 2, 2]                                                     # Rank 1
+[2, 1, 1, 1]                                                     # Rank 2
+[2, 2, 2, 1]                                                     # Rank 3
+&gt;&gt;&gt; output_splits
+[2, 3, 2, 2]                                                     # Rank 0
+[2, 2, 1, 2]                                                     # Rank 1
+[1, 2, 1, 2]                                                     # Rank 2
+[1, 2, 1, 1]                                                     # Rank 3
+&gt;&gt;&gt; input = list(input.split(input_splits))
+&gt;&gt;&gt; input
+[tensor([0, 1]), tensor([2, 3]), tensor([4]), tensor([5])]                   # Rank 0
+[tensor([10, 11, 12]), tensor([13, 14]), tensor([15, 16]), tensor([17, 18])] # Rank 1
+[tensor([20, 21]), tensor([22]), tensor([23]), tensor([24])]                 # Rank 2
+[tensor([30, 31]), tensor([32, 33]), tensor([34, 35]), tensor([36])]         # Rank 3
+&gt;&gt;&gt; output = ...
+&gt;&gt;&gt; dist.all_to_all(output, input)
+&gt;&gt;&gt; output
+[tensor([0, 1]), tensor([10, 11, 12]), tensor([20, 21]), tensor([30, 31])]   # Rank 0
+[tensor([2, 3]), tensor([13, 14]), tensor([22]), tensor([32, 33])]           # Rank 1
+[tensor([4]), tensor([15, 16]), tensor([23]), tensor([34, 35])]              # Rank 2
+[tensor([5]), tensor([17, 18]), tensor([24]), tensor([36])]                  # Rank 3
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.barrier">
+<code>torch.distributed.barrier(group=None, async_op=False, device_ids=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#barrier"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Synchronizes all processes.</p> <p>This collective blocks processes until the whole group enters this function, if async_op is False, or if async work handle is called on wait().</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> <li>
+<strong>device_ids</strong> (<em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em><em>, </em><em>optional</em>) – List of device/GPU ids. Valid only for NCCL backend.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.ReduceOp">
+<code>class torch.distributed.ReduceOp</code> </dt> <dd>
+<p>An enum-like class for available reduction operations: <code>SUM</code>, <code>PRODUCT</code>, <code>MIN</code>, <code>MAX</code>, <code>BAND</code>, <code>BOR</code>, and <code>BXOR</code>.</p> <p>Note that <code>BAND</code>, <code>BOR</code>, and <code>BXOR</code> reductions are not available when using the <code>NCCL</code> backend.</p> <p>Additionally, <code>MAX</code>, <code>MIN</code> and <code>PRODUCT</code> are not supported for complex tensors.</p> <p>The values of this class can be accessed as attributes, e.g., <code>ReduceOp.SUM</code>. They are used in specifying strategies for reduction collectives, e.g., <a class="reference internal" href="#torch.distributed.reduce" title="torch.distributed.reduce"><code>reduce()</code></a>, <a class="reference internal" href="#torch.distributed.all_reduce_multigpu" title="torch.distributed.all_reduce_multigpu"><code>all_reduce_multigpu()</code></a>, etc.</p> <p>Members:</p>  <p>SUM</p> <p>PRODUCT</p> <p>MIN</p> <p>MAX</p> <p>BAND</p> <p>BOR</p> <p>BXOR</p>  </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.reduce_op">
+<code>class torch.distributed.reduce_op</code> </dt> <dd>
+<p>Deprecated enum-like class for reduction operations: <code>SUM</code>, <code>PRODUCT</code>, <code>MIN</code>, and <code>MAX</code>.</p> <p><a class="reference internal" href="#torch.distributed.ReduceOp" title="torch.distributed.ReduceOp"><code>ReduceOp</code></a> is recommended to use instead.</p> </dd>
+</dl>   <h2 id="autograd-enabled-communication-primitives">Autograd-enabled communication primitives</h2> <p>If you want to use collective communication functions supporting autograd you can find an implementation of those in the <code>torch.distributed.nn.*</code> module.</p> <p>Functions here are synchronous and will be inserted in the autograd graph, so you need to ensure that all the processes that participated in the collective operation will do the backward pass for the backward communication to effectively happen and don’t cause a deadlock.</p> <p>Please notice that currently the only backend where all the functions are guaranteed to work is <code>gloo</code>. .. autofunction:: torch.distributed.nn.broadcast .. autofunction:: torch.distributed.nn.gather .. autofunction:: torch.distributed.nn.scatter .. autofunction:: torch.distributed.nn.reduce .. autofunction:: torch.distributed.nn.all_gather .. autofunction:: torch.distributed.nn.all_to_all .. autofunction:: torch.distributed.nn.all_reduce</p>   <h2 id="multi-gpu-collective-functions">Multi-GPU collective functions</h2> <p>If you have more than one GPU on each node, when using the NCCL and Gloo backend, <a class="reference internal" href="#torch.distributed.broadcast_multigpu" title="torch.distributed.broadcast_multigpu"><code>broadcast_multigpu()</code></a> <a class="reference internal" href="#torch.distributed.all_reduce_multigpu" title="torch.distributed.all_reduce_multigpu"><code>all_reduce_multigpu()</code></a> <a class="reference internal" href="#torch.distributed.reduce_multigpu" title="torch.distributed.reduce_multigpu"><code>reduce_multigpu()</code></a> <a class="reference internal" href="#torch.distributed.all_gather_multigpu" title="torch.distributed.all_gather_multigpu"><code>all_gather_multigpu()</code></a> and <a class="reference internal" href="#torch.distributed.reduce_scatter_multigpu" title="torch.distributed.reduce_scatter_multigpu"><code>reduce_scatter_multigpu()</code></a> support distributed collective operations among multiple GPUs within each node. These functions can potentially improve the overall distributed training performance and be easily used by passing a list of tensors. Each Tensor in the passed tensor list needs to be on a separate GPU device of the host where the function is called. Note that the length of the tensor list needs to be identical among all the distributed processes. Also note that currently the multi-GPU collective functions are only supported by the NCCL backend.</p> <p>For example, if the system we use for distributed training has 2 nodes, each of which has 8 GPUs. On each of the 16 GPUs, there is a tensor that we would like to all-reduce. The following code can serve as a reference:</p> <p>Code running on Node 0</p> <pre data-language="python">import torch
+import torch.distributed as dist
+
+dist.init_process_group(backend="nccl",
+                        init_method="file:///distributed_test",
+                        world_size=2,
+                        rank=0)
+tensor_list = []
+for dev_idx in range(torch.cuda.device_count()):
+    tensor_list.append(torch.FloatTensor([1]).cuda(dev_idx))
+
+dist.all_reduce_multigpu(tensor_list)
+</pre> <p>Code running on Node 1</p> <pre data-language="python">import torch
+import torch.distributed as dist
+
+dist.init_process_group(backend="nccl",
+                        init_method="file:///distributed_test",
+                        world_size=2,
+                        rank=1)
+tensor_list = []
+for dev_idx in range(torch.cuda.device_count()):
+    tensor_list.append(torch.FloatTensor([1]).cuda(dev_idx))
+
+dist.all_reduce_multigpu(tensor_list)
+</pre> <p>After the call, all 16 tensors on the two nodes will have the all-reduced value of 16</p> <dl class="function"> <dt id="torch.distributed.broadcast_multigpu">
+<code>torch.distributed.broadcast_multigpu(tensor_list, src, group=None, async_op=False, src_tensor=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#broadcast_multigpu"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Broadcasts the tensor to the whole group with multiple GPU tensors per node.</p> <p><code>tensor</code> must have the same number of elements in all the GPUs from all processes participating in the collective. each tensor in the list must be on a different GPU</p> <p>Only nccl and gloo backend are currently supported tensors should only be GPU tensors</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor_list</strong> (<em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – Tensors that participate in the collective operation. If <code>src</code> is the rank, then the specified <code>src_tensor</code> element of <code>tensor_list</code> (<code>tensor_list[src_tensor]</code>) will be broadcast to all other tensors (on different GPUs) in the src process and all tensors in <code>tensor_list</code> of other non-src processes. You also need to make sure that <code>len(tensor_list)</code> is the same for all the distributed processes calling this function.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Source rank.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> <li>
+<strong>src_tensor</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Source tensor rank within <code>tensor_list</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_reduce_multigpu">
+<code>torch.distributed.all_reduce_multigpu(tensor_list, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_reduce_multigpu"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduces the tensor data across all machines in such a way that all get the final result. This function reduces a number of tensors on every node, while each tensor resides on different GPUs. Therefore, the input tensor in the tensor list needs to be GPU tensors. Also, each tensor in the tensor list needs to reside on a different GPU.</p> <p>After the call, all <code>tensor</code> in <code>tensor_list</code> is going to be bitwise identical in all processes.</p> <p>Complex tensors are supported.</p> <p>Only nccl and gloo backend is currently supported tensors should only be GPU tensors</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>list</strong> (<em>tensor</em>) – List of input and output tensors of the collective. The function operates in-place and requires that each tensor to be a GPU tensor on different GPUs. You also need to make sure that <code>len(tensor_list)</code> is the same for all the distributed processes calling this function.</li> <li>
+<strong>op</strong> (<em>optional</em>) – One of the values from <code>torch.distributed.ReduceOp</code> enum. Specifies an operation used for element-wise reductions.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.reduce_multigpu">
+<code>torch.distributed.reduce_multigpu(tensor_list, dst, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False, dst_tensor=0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#reduce_multigpu"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduces the tensor data on multiple GPUs across all machines. Each tensor in <code>tensor_list</code> should reside on a separate GPU</p> <p>Only the GPU of <code>tensor_list[dst_tensor]</code> on the process with rank <code>dst</code> is going to receive the final result.</p> <p>Only nccl backend is currently supported tensors should only be GPU tensors</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor_list</strong> (<em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – Input and output GPU tensors of the collective. The function operates in-place. You also need to make sure that <code>len(tensor_list)</code> is the same for all the distributed processes calling this function.</li> <li>
+<strong>dst</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Destination rank</li> <li>
+<strong>op</strong> (<em>optional</em>) – One of the values from <code>torch.distributed.ReduceOp</code> enum. Specifies an operation used for element-wise reductions.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> <li>
+<strong>dst_tensor</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – Destination tensor rank within <code>tensor_list</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, otherwise</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.all_gather_multigpu">
+<code>torch.distributed.all_gather_multigpu(output_tensor_lists, input_tensor_list, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#all_gather_multigpu"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Gathers tensors from the whole group in a list. Each tensor in <code>tensor_list</code> should reside on a separate GPU</p> <p>Only nccl backend is currently supported tensors should only be GPU tensors</p> <p>Complex tensors are supported.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<p><strong>output_tensor_lists</strong> (<em>List</em><em>[</em><em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em><em>]</em>) – </p>
+<p>Output lists. It should contain correctly-sized tensors on each GPU to be used for output of the collective, e.g. <code>output_tensor_lists[i]</code> contains the all_gather result that resides on the GPU of <code>input_tensor_list[i]</code>.</p> <p>Note that each element of <code>output_tensor_lists</code> has the size of <code>world_size * len(input_tensor_list)</code>, since the function all gathers the result from every single GPU in the group. To interpret each element of <code>output_tensor_lists[i]</code>, note that <code>input_tensor_list[j]</code> of rank k will be appear in <code>output_tensor_lists[i][k * world_size + j]</code></p> <p>Also note that <code>len(output_tensor_lists)</code>, and the size of each element in <code>output_tensor_lists</code> (each element is a list, therefore <code>len(output_tensor_lists[i])</code>) need to be the same for all the distributed processes calling this function.</p> </li> <li>
+<strong>input_tensor_list</strong> (<em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – List of tensors(on different GPUs) to be broadcast from current process. Note that <code>len(input_tensor_list)</code> needs to be the same for all the distributed processes calling this function.</li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.reduce_scatter_multigpu">
+<code>torch.distributed.reduce_scatter_multigpu(output_tensor_list, input_tensor_lists, op=&lt;ReduceOp.SUM: 0&gt;, group=None, async_op=False)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/distributed_c10d.html#reduce_scatter_multigpu"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Reduce and scatter a list of tensors to the whole group. Only nccl backend is currently supported.</p> <p>Each tensor in <code>output_tensor_list</code> should reside on a separate GPU, as should each list of tensors in <code>input_tensor_lists</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<p><strong>output_tensor_list</strong> (<em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – </p>
+<p>Output tensors (on different GPUs) to receive the result of the operation.</p> <p>Note that <code>len(output_tensor_list)</code> needs to be the same for all the distributed processes calling this function.</p> </li> <li>
+<p><strong>input_tensor_lists</strong> (<em>List</em><em>[</em><em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em><em>]</em>) – </p>
+<p>Input lists. It should contain correctly-sized tensors on each GPU to be used for input of the collective, e.g. <code>input_tensor_lists[i]</code> contains the reduce_scatter input that resides on the GPU of <code>output_tensor_list[i]</code>.</p> <p>Note that each element of <code>input_tensor_lists</code> has the size of <code>world_size * len(output_tensor_list)</code>, since the function scatters the result from every single GPU in the group. To interpret each element of <code>input_tensor_lists[i]</code>, note that <code>output_tensor_list[j]</code> of rank k receives the reduce-scattered result from <code>input_tensor_lists[i][k * world_size + j]</code></p> <p>Also note that <code>len(input_tensor_lists)</code>, and the size of each element in <code>input_tensor_lists</code> (each element is a list, therefore <code>len(input_tensor_lists[i])</code>) need to be the same for all the distributed processes calling this function.</p> </li> <li>
+<strong>group</strong> (<em>ProcessGroup</em><em>, </em><em>optional</em>) – The process group to work on. If None, the default process group will be used.</li> <li>
+<strong>async_op</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – Whether this op should be an async op.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Async work handle, if async_op is set to True. None, if not async_op or if not part of the group.</p> </dd> </dl> </dd>
+</dl>   <h2 id="distributed-launch">Third-party backends</h2> <p id="third-party-backends">Besides the GLOO/MPI/NCCL backends, PyTorch distributed supports third-party backends through a run-time register mechanism. For references on how to develop a third-party backend through C++ Extension, please refer to <a class="reference external" href="https://pytorch.org/tutorials/advanced/cpp_extension.html">Tutorials - Custom C++ and CUDA Extensions</a> and <code>test/cpp_extensions/cpp_c10d_extension.cpp</code>. The capability of third-party backends are decided by their own implementations.</p> <p>The new backend derives from <code>c10d.ProcessGroup</code> and registers the backend name and the instantiating interface through <code>torch.distributed.Backend.register_backend()</code> when imported.</p> <p>When manually importing this backend and invoking <a class="reference internal" href="#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>torch.distributed.init_process_group()</code></a> with the corresponding backend name, the <code>torch.distributed</code> package runs on the new backend.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The support of third-party backend is experimental and subject to change.</p> </div>   <h2 id="launch-utility">Launch utility</h2> <p>The <code>torch.distributed</code> package also provides a launch utility in <code>torch.distributed.launch</code>. This helper utility can be used to launch multiple processes per node for distributed training.</p> <p id="module-torch.distributed.launch"><code>torch.distributed.launch</code> is a module that spawns up multiple distributed training processes on each of the training nodes.</p> <p>The utility can be used for single-node distributed training, in which one or more processes per node will be spawned. The utility can be used for either CPU training or GPU training. If the utility is used for GPU training, each distributed process will be operating on a single GPU. This can achieve well-improved single-node training performance. It can also be used in multi-node distributed training, by spawning up multiple processes on each node for well-improved multi-node distributed training performance as well. This will especially be benefitial for systems with multiple Infiniband interfaces that have direct-GPU support, since all of them can be utilized for aggregated communication bandwidth.</p> <p>In both cases of single-node distributed training or multi-node distributed training, this utility will launch the given number of processes per node (<code>--nproc_per_node</code>). If used for GPU training, this number needs to be less or equal to the number of GPUs on the current system (<code>nproc_per_node</code>), and each process will be operating on a single GPU from <em>GPU 0 to GPU (nproc_per_node - 1)</em>.</p> <p><strong>How to use this module:</strong></p> <ol class="arabic simple"> <li>Single-Node multi-process distributed training</li> </ol> <pre data-language="python">&gt;&gt;&gt; python -m torch.distributed.launch --nproc_per_node=NUM_GPUS_YOU_HAVE
+           YOUR_TRAINING_SCRIPT.py (--arg1 --arg2 --arg3 and all other
+           arguments of your training script)
+</pre> <ol class="arabic simple" start="2"> <li>Multi-Node multi-process distributed training: (e.g. two nodes)</li> </ol> <p>Node 1: <em>(IP: 192.168.1.1, and has a free port: 1234)</em></p> <pre data-language="python">&gt;&gt;&gt; python -m torch.distributed.launch --nproc_per_node=NUM_GPUS_YOU_HAVE
+           --nnodes=2 --node_rank=0 --master_addr="192.168.1.1"
+           --master_port=1234 YOUR_TRAINING_SCRIPT.py (--arg1 --arg2 --arg3
+           and all other arguments of your training script)
+</pre> <p>Node 2:</p> <pre data-language="python">&gt;&gt;&gt; python -m torch.distributed.launch --nproc_per_node=NUM_GPUS_YOU_HAVE
+           --nnodes=2 --node_rank=1 --master_addr="192.168.1.1"
+           --master_port=1234 YOUR_TRAINING_SCRIPT.py (--arg1 --arg2 --arg3
+           and all other arguments of your training script)
+</pre> <ol class="arabic simple" start="3"> <li>To look up what optional arguments this module offers:</li> </ol> <pre data-language="python">&gt;&gt;&gt; python -m torch.distributed.launch --help
+</pre> <p><strong>Important Notices:</strong></p> <p>1. This utility and multi-process distributed (single-node or multi-node) GPU training currently only achieves the best performance using the NCCL distributed backend. Thus NCCL backend is the recommended backend to use for GPU training.</p> <p>2. In your training program, you must parse the command-line argument: <code>--local_rank=LOCAL_PROCESS_RANK</code>, which will be provided by this module. If your training program uses GPUs, you should ensure that your code only runs on the GPU device of LOCAL_PROCESS_RANK. This can be done by:</p> <p>Parsing the local_rank argument</p> <pre data-language="python">&gt;&gt;&gt; import argparse
+&gt;&gt;&gt; parser = argparse.ArgumentParser()
+&gt;&gt;&gt; parser.add_argument("--local_rank", type=int)
+&gt;&gt;&gt; args = parser.parse_args()
+</pre> <p>Set your device to local rank using either</p> <pre data-language="python">&gt;&gt;&gt; torch.cuda.set_device(args.local_rank)  # before your code runs
+</pre> <p>or</p> <pre data-language="python">&gt;&gt;&gt; with torch.cuda.device(args.local_rank):
+&gt;&gt;&gt;    # your code to run
+</pre> <p>3. In your training program, you are supposed to call the following function at the beginning to start the distributed backend. You need to make sure that the init_method uses <code>env://</code>, which is the only supported <code>init_method</code> by this module.</p> <pre data-language="python">torch.distributed.init_process_group(backend='YOUR BACKEND',
+                                     init_method='env://')
+</pre> <p>4. In your training program, you can either use regular distributed functions or use <a class="reference internal" href="generated/torch.nn.parallel.distributeddataparallel#torch.nn.parallel.DistributedDataParallel" title="torch.nn.parallel.DistributedDataParallel"><code>torch.nn.parallel.DistributedDataParallel()</code></a> module. If your training program uses GPUs for training and you would like to use <a class="reference internal" href="generated/torch.nn.parallel.distributeddataparallel#torch.nn.parallel.DistributedDataParallel" title="torch.nn.parallel.DistributedDataParallel"><code>torch.nn.parallel.DistributedDataParallel()</code></a> module, here is how to configure it.</p> <pre data-language="python">model = torch.nn.parallel.DistributedDataParallel(model,
+                                                  device_ids=[args.local_rank],
+                                                  output_device=args.local_rank)
+</pre> <p>Please ensure that <code>device_ids</code> argument is set to be the only GPU device id that your code will be operating on. This is generally the local rank of the process. In other words, the <code>device_ids</code> needs to be <code>[args.local_rank]</code>, and <code>output_device</code> needs to be <code>args.local_rank</code> in order to use this utility</p> <p>5. Another way to pass <code>local_rank</code> to the subprocesses via environment variable <code>LOCAL_RANK</code>. This behavior is enabled when you launch the script with <code>--use_env=True</code>. You must adjust the subprocess example above to replace <code>args.local_rank</code> with <code>os.environ['LOCAL_RANK']</code>; the launcher will not pass <code>--local_rank</code> when you specify this flag.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><code>local_rank</code> is NOT globally unique: it is only unique per process on a machine. Thus, don’t use it to decide if you should, e.g., write to a networked filesystem. See <a class="reference external" href="https://github.com/pytorch/pytorch/issues/12042">https://github.com/pytorch/pytorch/issues/12042</a> for an example of how things can go wrong if you don’t do this correctly.</p> </div>   <h2 id="spawn-utility">Spawn utility</h2> <p>The <a class="reference internal" href="multiprocessing#multiprocessing-doc"><span class="std std-ref">Multiprocessing package - torch.multiprocessing</span></a> package also provides a <code>spawn</code> function in <a class="reference internal" href="multiprocessing#torch.multiprocessing.spawn" title="torch.multiprocessing.spawn"><code>torch.multiprocessing.spawn()</code></a>. This helper function can be used to spawn multiple processes. It works by passing in the function that you want to run and spawns N processes to run it. This can be used for multiprocess distributed training as well.</p> <p>For references on how to use it, please refer to <a class="reference external" href="https://github.com/pytorch/examples/tree/master/imagenet">PyTorch example - ImageNet implementation</a></p> <p>Note that this function requires Python 3.4 or higher.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/distributed.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/distributed.html</a>
+  </p>
+</div>

@@ -1,0 +1,645 @@
+# 3.2. Tuning the hyper-parameters of an estimator
+
+Hyper-parameters are parameters that are not directly learnt within
+estimators. In scikit-learn they are passed as arguments to the constructor of
+the estimator classes. Typical examples include `C`, `kernel` and `gamma` for
+Support Vector Classifier, `alpha` for Lasso, etc.
+
+It is possible and recommended to search the hyper-parameter space for the
+best cross validation score.
+
+Any parameter provided when constructing an estimator may be optimized in this
+manner. Specifically, to find the names and current values for all parameters
+for a given estimator, use:
+
+    
+    estimator.get_params()
+    
+A search consists of:
+
+  * an estimator (regressor or classifier such as `sklearn.svm.SVC()`);
+  * a parameter space;
+  * a method for searching or sampling candidates;
+  * a cross-validation scheme; and
+  * a score function.
+
+Two generic approaches to parameter search are provided in scikit-learn: for
+given values, `GridSearchCV` exhaustively considers all parameter
+combinations, while `RandomizedSearchCV` can sample a given number of
+candidates from a parameter space with a specified distribution. Both these
+tools have successive halving counterparts `HalvingGridSearchCV` and
+`HalvingRandomSearchCV`, which can be much faster at finding a good parameter
+combination.
+
+After describing these tools we detail best practices applicable to these
+approaches. Some models allow for specialized, efficient parameter search
+strategies, outlined in Alternatives to brute force parameter search.
+
+Note that it is common that a small subset of those parameters can have a
+large impact on the predictive or computation performance of the model while
+others can be left to their default values. It is recommended to read the
+docstring of the estimator class to get a finer understanding of their
+expected behavior, possibly by reading the enclosed reference to the
+literature.
+
+##  3.2.1. Exhaustive Grid Search
+
+The grid search provided by `GridSearchCV` exhaustively generates candidates
+from a grid of parameter values specified with the `param_grid` parameter. For
+instance, the following `param_grid`:
+
+    
+    param_grid = [
+      {'C': [1, 10, 100, 1000], 'kernel': ['linear']},
+      {'C': [1, 10, 100, 1000], 'gamma': [0.001, 0.0001], 'kernel': ['rbf']},
+     ]
+    
+specifies that two grids should be explored: one with a linear kernel and C
+values in [1, 10, 100, 1000], and the second one with an RBF kernel, and the
+cross-product of C values ranging in [1, 10, 100, 1000] and gamma values in
+[0.001, 0.0001].
+
+The `GridSearchCV` instance implements the usual estimator API: when “fitting”
+it on a dataset all the possible combinations of parameter values are
+evaluated and the best combination is retained.
+
+Examples:
+
+  * See Parameter estimation using grid search with cross-validation for an example of Grid Search computation on the digits dataset.
+  * See Sample pipeline for text feature extraction and evaluation for an example of Grid Search coupling parameters from a text documents feature extractor (n-gram count vectorizer and TF-IDF transformer) with a classifier (here a linear SVM trained with SGD with either elastic net or L2 penalty) using a `pipeline.Pipeline` instance.
+  * See Nested versus non-nested cross-validation for an example of Grid Search within a cross validation loop on the iris dataset. This is the best practice for evaluating the performance of a model with grid search.
+  * See Demonstration of multi-metric evaluation on cross_val_score and GridSearchCV for an example of `GridSearchCV` being used to evaluate multiple metrics simultaneously.
+  * See Balance model complexity and cross-validated score for an example of using `refit=callable` interface in `GridSearchCV`. The example shows how this interface adds certain amount of flexibility in identifying the “best” estimator. This interface can also be used in multiple metrics evaluation.
+  * See Statistical comparison of models using grid search for an example of how to do a statistical comparison on the outputs of `GridSearchCV`.
+
+##  3.2.2. Randomized Parameter Optimization
+
+While using a grid of parameter settings is currently the most widely used
+method for parameter optimization, other search methods have more favourable
+properties. `RandomizedSearchCV` implements a randomized search over
+parameters, where each setting is sampled from a distribution over possible
+parameter values. This has two main benefits over an exhaustive search:
+
+  * A budget can be chosen independent of the number of parameters and possible values.
+  * Adding parameters that do not influence the performance does not decrease efficiency.
+
+Specifying how parameters should be sampled is done using a dictionary, very
+similar to specifying parameters for `GridSearchCV`. Additionally, a
+computation budget, being the number of sampled candidates or sampling
+iterations, is specified using the `n_iter` parameter. For each parameter,
+either a distribution over possible values or a list of discrete choices
+(which will be sampled uniformly) can be specified:
+
+    
+    {'C': scipy.stats.expon(scale=100), 'gamma': scipy.stats.expon(scale=.1),
+      'kernel': ['rbf'], 'class_weight':['balanced', None]}
+    
+This example uses the `scipy.stats` module, which contains many useful
+distributions for sampling parameters, such as `expon`, `gamma`, `uniform` or
+`randint`.
+
+In principle, any function can be passed that provides a `rvs` (random variate
+sample) method to sample a value. A call to the `rvs` function should provide
+independent random samples from possible parameter values on consecutive
+calls.
+
+Warning
+
+The distributions in `scipy.stats` prior to version scipy 0.16 do not allow
+specifying a random state. Instead, they use the global numpy random state,
+that can be seeded via `np.random.seed` or set using `np.random.set_state`.
+However, beginning scikit-learn 0.18, the `sklearn.model_selection` module
+sets the random state provided by the user if scipy >= 0.16 is also available.
+
+For continuous parameters, such as `C` above, it is important to specify a
+continuous distribution to take full advantage of the randomization. This way,
+increasing `n_iter` will always lead to a finer search.
+
+A continuous log-uniform random variable is available through `loguniform`.
+This is a continuous version of log-spaced parameters. For example to specify
+`C` above, `loguniform(1, 100)` can be used instead of `[1, 10, 100]` or
+`np.logspace(0, 2, num=1000)`. This is an alias to SciPy’s stats.reciprocal.
+
+Mirroring the example above in grid search, we can specify a continuous random
+variable that is log-uniformly distributed between `1e0` and `1e3`:
+
+    
+    from sklearn.utils.fixes import loguniform
+    {'C': loguniform(1e0, 1e3),
+     'gamma': loguniform(1e-4, 1e-3),
+     'kernel': ['rbf'],
+     'class_weight':['balanced', None]}
+    
+Examples:
+
+  * Comparing randomized search and grid search for hyperparameter estimation compares the usage and efficiency of randomized search and grid search.
+
+References:
+
+  * Bergstra, J. and Bengio, Y., Random search for hyper-parameter optimization, The Journal of Machine Learning Research (2012)
+
+##  3.2.3. Searching for optimal parameters with successive halving
+
+Scikit-learn also provides the `HalvingGridSearchCV` and
+`HalvingRandomSearchCV` estimators that can be used to search a parameter
+space using successive halving 1 2. Successive halving (SH) is like a
+tournament among candidate parameter combinations. SH is an iterative
+selection process where all candidates (the parameter combinations) are
+evaluated with a small amount of resources at the first iteration. Only some
+of these candidates are selected for the next iteration, which will be
+allocated more resources. For parameter tuning, the resource is typically the
+number of training samples, but it can also be an arbitrary numeric parameter
+such as `n_estimators` in a random forest.
+
+As illustrated in the figure below, only a subset of candidates ‘survive’
+until the last iteration. These are the candidates that have consistently
+ranked among the top-scoring candidates across all iterations. Each iteration
+is allocated an increasing amount of resources per candidate, here the number
+of samples.
+
+![../_images/sphx_glr_plot_successive_halving_iterations_0012.png](data:image/png;base64,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)
+
+We here briefly describe the main parameters, but each parameter and their
+interactions are described in more details in the sections below. The `factor`
+(> 1) parameter controls the rate at which the resources grow, and the rate at
+which the number of candidates decreases. In each iteration, the number of
+resources per candidate is multiplied by `factor` and the number of candidates
+is divided by the same factor. Along with `resource` and `min_resources`,
+`factor` is the most important parameter to control the search in our
+implementation, though a value of 3 usually works well. `factor` effectively
+controls the number of iterations in `HalvingGridSearchCV` and the number of
+candidates (by default) and iterations in `HalvingRandomSearchCV`.
+`aggressive_elimination=True` can also be used if the number of available
+resources is small. More control is available through tuning the
+`min_resources` parameter.
+
+These estimators are still experimental: their predictions and their API might
+change without any deprecation cycle. To use them, you need to explicitly
+import `enable_halving_search_cv`:
+
+    
+    >>> # explicitly require this experimental feature
+    >>> from sklearn.experimental import enable_halving_search_cv  # noqa
+    >>> # now you can import normally from model_selection
+    >>> from sklearn.model_selection import HalvingGridSearchCV
+    >>> from sklearn.model_selection import HalvingRandomSearchCV
+    
+Examples:
+
+  * Comparison between grid search and successive halving
+  * Successive Halving Iterations
+
+###  3.2.3.1. Choosing `min_resources` and the number of candidates
+
+Beside `factor`, the two main parameters that influence the behaviour of a
+successive halving search are the `min_resources` parameter, and the number of
+candidates (or parameter combinations) that are evaluated. `min_resources` is
+the amount of resources allocated at the first iteration for each candidate.
+The number of candidates is specified directly in `HalvingRandomSearchCV`, and
+is determined from the `param_grid` parameter of `HalvingGridSearchCV`.
+
+Consider a case where the resource is the number of samples, and where we have
+1000 samples. In theory, with `min_resources=10` and `factor=2`, we are able
+to run at most 7 iterations with the following number of samples: `[10, 20,
+40, 80, 160, 320, 640]`.
+
+But depending on the number of candidates, we might run less than 7
+iterations: if we start with a small number of candidates, the last iteration
+might use less than 640 samples, which means not using all the available
+resources (samples). For example if we start with 5 candidates, we only need 2
+iterations: 5 candidates for the first iteration, then `5 // 2 = 2` candidates
+at the second iteration, after which we know which candidate performs the best
+(so we don’t need a third one). We would only be using at most 20 samples
+which is a waste since we have 1000 samples at our disposal. On the other
+hand, if we start with a high number of candidates, we might end up with a lot
+of candidates at the last iteration, which may not always be ideal: it means
+that many candidates will run with the full resources, basically reducing the
+procedure to standard search.
+
+In the case of `HalvingRandomSearchCV`, the number of candidates is set by
+default such that the last iteration uses as much of the available resources
+as possible. For `HalvingGridSearchCV`, the number of candidates is determined
+by the `param_grid` parameter. Changing the value of `min_resources` will
+impact the number of possible iterations, and as a result will also have an
+effect on the ideal number of candidates.
+
+Another consideration when choosing `min_resources` is whether or not it is
+easy to discriminate between good and bad candidates with a small amount of
+resources. For example, if you need a lot of samples to distinguish between
+good and bad parameters, a high `min_resources` is recommended. On the other
+hand if the distinction is clear even with a small amount of samples, then a
+small `min_resources` may be preferable since it would speed up the
+computation.
+
+Notice in the example above that the last iteration does not use the maximum
+amount of resources available: 1000 samples are available, yet only 640 are
+used, at most. By default, both `HalvingRandomSearchCV` and
+`HalvingGridSearchCV` try to use as many resources as possible in the last
+iteration, with the constraint that this amount of resources must be a
+multiple of both `min_resources` and `factor` (this constraint will be clear
+in the next section). `HalvingRandomSearchCV` achieves this by sampling the
+right amount of candidates, while `HalvingGridSearchCV` achieves this by
+properly setting `min_resources`. Please see Exhausting the available
+resources for details.
+
+###  3.2.3.2. Amount of resource and number of candidates at each iteration
+
+At any iteration `i`, each candidate is allocated a given amount of resources
+which we denote `n_resources_i`. This quantity is controlled by the parameters
+`factor` and `min_resources` as follows (`factor` is strictly greater than 1):
+
+    
+    n_resources_i = factor**i * min_resources,
+    
+or equivalently:
+
+    
+    n_resources_{i+1} = n_resources_i * factor
+    
+where `min_resources == n_resources_0` is the amount of resources used at the
+first iteration. `factor` also defines the proportions of candidates that will
+be selected for the next iteration:
+
+    
+    n_candidates_i = n_candidates // (factor ** i)
+    
+or equivalently:
+
+    
+    n_candidates_0 = n_candidates
+    n_candidates_{i+1} = n_candidates_i // factor
+    
+So in the first iteration, we use `min_resources` resources `n_candidates`
+times. In the second iteration, we use `min_resources * factor` resources
+`n_candidates // factor` times. The third again multiplies the resources per
+candidate and divides the number of candidates. This process stops when the
+maximum amount of resource per candidate is reached, or when we have
+identified the best candidate. The best candidate is identified at the
+iteration that is evaluating `factor` or less candidates (see just below for
+an explanation).
+
+Here is an example with `min_resources=3` and `factor=2`, starting with 70
+candidates:
+
+`n_resources_i` | `n_candidates_i`  
+---|---  
+3 (=min_resources) | 70 (=n_candidates)  
+3 * 2 = 6 | 70 // 2 = 35  
+6 * 2 = 12 | 35 // 2 = 17  
+12 * 2 = 24 | 17 // 2 = 8  
+24 * 2 = 48 | 8 // 2 = 4  
+48 * 2 = 96 | 4 // 2 = 2  
+We can note that:
+
+  * the process stops at the first iteration which evaluates `factor=2` candidates: the best candidate is the best out of these 2 candidates. It is not necessary to run an additional iteration, since it would only evaluate one candidate (namely the best one, which we have already identified). For this reason, in general, we want the last iteration to run at most `factor` candidates. If the last iteration evaluates more than `factor` candidates, then this last iteration reduces to a regular search (as in `RandomizedSearchCV` or `GridSearchCV`).
+  * each `n_resources_i` is a multiple of both `factor` and `min_resources` (which is confirmed by its definition above).
+
+The amount of resources that is used at each iteration can be found in the
+`n_resources_` attribute.
+
+###  3.2.3.3. Choosing a resource
+
+By default, the resource is defined in terms of number of samples. That is,
+each iteration will use an increasing amount of samples to train on. You can
+however manually specify a parameter to use as the resource with the
+`resource` parameter. Here is an example where the resource is defined in
+terms of the number of estimators of a random forest:
+
+    
+    >>> from sklearn.datasets import make_classification
+    >>> from sklearn.ensemble import RandomForestClassifier
+    >>> from sklearn.experimental import enable_halving_search_cv  # noqa
+    >>> from sklearn.model_selection import HalvingGridSearchCV
+    >>> import pandas as pd
+    >>>
+    >>> param_grid = {'max_depth': [3, 5, 10],
+    ...               'min_samples_split': [2, 5, 10]}
+    >>> base_estimator = RandomForestClassifier(random_state=0)
+    >>> X, y = make_classification(n_samples=1000, random_state=0)
+    >>> sh = HalvingGridSearchCV(base_estimator, param_grid, cv=5,
+    ...                          factor=2, resource='n_estimators',
+    ...                          max_resources=30).fit(X, y)
+    >>> sh.best_estimator_
+    RandomForestClassifier(max_depth=5, n_estimators=24, random_state=0)
+    
+Note that it is not possible to budget on a parameter that is part of the
+parameter grid.
+
+###  3.2.3.4. Exhausting the available resources
+
+As mentioned above, the number of resources that is used at each iteration
+depends on the `min_resources` parameter. If you have a lot of resources
+available but start with a low number of resources, some of them might be
+wasted (i.e. not used):
+
+    
+    >>> from sklearn.datasets import make_classification
+    >>> from sklearn.svm import SVC
+    >>> from sklearn.experimental import enable_halving_search_cv  # noqa
+    >>> from sklearn.model_selection import HalvingGridSearchCV
+    >>> import pandas as pd
+    >>> param_grid= {'kernel': ('linear', 'rbf'),
+    ...              'C': [1, 10, 100]}
+    >>> base_estimator = SVC(gamma='scale')
+    >>> X, y = make_classification(n_samples=1000)
+    >>> sh = HalvingGridSearchCV(base_estimator, param_grid, cv=5,
+    ...                          factor=2, min_resources=20).fit(X, y)
+    >>> sh.n_resources_
+    [20, 40, 80]
+    
+The search process will only use 80 resources at most, while our maximum
+amount of available resources is `n_samples=1000`. Here, we have
+`min_resources = r_0 = 20`.
+
+For `HalvingGridSearchCV`, by default, the `min_resources` parameter is set to
+‘exhaust’. This means that `min_resources` is automatically set such that the
+last iteration can use as many resources as possible, within the
+`max_resources` limit:
+
+    
+    >>> sh = HalvingGridSearchCV(base_estimator, param_grid, cv=5,
+    ...                          factor=2, min_resources='exhaust').fit(X, y)
+    >>> sh.n_resources_
+    [250, 500, 1000]
+    
+`min_resources` was here automatically set to 250, which results in the last
+iteration using all the resources. The exact value that is used depends on the
+number of candidate parameter, on `max_resources` and on `factor`.
+
+For `HalvingRandomSearchCV`, exhausting the resources can be done in 2 ways:
+
+  * by setting `min_resources='exhaust'`, just like for `HalvingGridSearchCV`;
+  * by setting `n_candidates='exhaust'`.
+
+Both options are mutally exclusive: using `min_resources='exhaust'` requires
+knowing the number of candidates, and symmetrically `n_candidates='exhaust'`
+requires knowing `min_resources`.
+
+In general, exhausting the total number of resources leads to a better final
+candidate parameter, and is slightly more time-intensive.
+
+###  3.2.3.5. Aggressive elimination of candidates
+
+Ideally, we want the last iteration to evaluate `factor` candidates (see
+Amount of resource and number of candidates at each iteration). We then just
+have to pick the best one. When the number of available resources is small
+with respect to the number of candidates, the last iteration may have to
+evaluate more than `factor` candidates:
+
+    
+    >>> from sklearn.datasets import make_classification
+    >>> from sklearn.svm import SVC
+    >>> from sklearn.experimental import enable_halving_search_cv  # noqa
+    >>> from sklearn.model_selection import HalvingGridSearchCV
+    >>> import pandas as pd
+    >>>
+    >>>
+    >>> param_grid = {'kernel': ('linear', 'rbf'),
+    ...               'C': [1, 10, 100]}
+    >>> base_estimator = SVC(gamma='scale')
+    >>> X, y = make_classification(n_samples=1000)
+    >>> sh = HalvingGridSearchCV(base_estimator, param_grid, cv=5,
+    ...                          factor=2, max_resources=40,
+    ...                          aggressive_elimination=False).fit(X, y)
+    >>> sh.n_resources_
+    [20, 40]
+    >>> sh.n_candidates_
+    [6, 3]
+    
+Since we cannot use more than `max_resources=40` resources, the process has to
+stop at the second iteration which evaluates more than `factor=2` candidates.
+
+Using the `aggressive_elimination` parameter, you can force the search process
+to end up with less than `factor` candidates at the last iteration. To do
+this, the process will eliminate as many candidates as necessary using
+`min_resources` resources:
+
+    
+    >>> sh = HalvingGridSearchCV(base_estimator, param_grid, cv=5,
+    ...                            factor=2,
+    ...                            max_resources=40,
+    ...                            aggressive_elimination=True,
+    ...                            ).fit(X, y)
+    >>> sh.n_resources_
+    [20, 20,  40]
+    >>> sh.n_candidates_
+    [6, 3, 2]
+    
+Notice that we end with 2 candidates at the last iteration since we have
+eliminated enough candidates during the first iterations, using `n_resources =
+min_resources = 20`.
+
+###  3.2.3.6. Analysing results with the `cv_results_` attribute
+
+The `cv_results_` attribute contains useful information for analysing the
+results of a search. It can be converted to a pandas dataframe with `df =
+pd.DataFrame(est.cv_results_)`. The `cv_results_` attribute of
+`HalvingGridSearchCV` and `HalvingRandomSearchCV` is similar to that of
+`GridSearchCV` and `RandomizedSearchCV`, with additional information related
+to the successive halving process.
+
+Here is an example with some of the columns of a (truncated) dataframe:
+
+| iter | n_resources | mean_test_score | params  
+---|---|---|---|---  
+0 | 0 | 125 | 0.983667 | {‘criterion’: ‘entropy’, ‘max_depth’: None, ‘max_features’: 9, ‘min_samples_split’: 5}  
+1 | 0 | 125 | 0.983667 | {‘criterion’: ‘gini’, ‘max_depth’: None, ‘max_features’: 8, ‘min_samples_split’: 7}  
+2 | 0 | 125 | 0.983667 | {‘criterion’: ‘gini’, ‘max_depth’: None, ‘max_features’: 10, ‘min_samples_split’: 10}  
+3 | 0 | 125 | 0.983667 | {‘criterion’: ‘entropy’, ‘max_depth’: None, ‘max_features’: 6, ‘min_samples_split’: 6}  
+… | … | … | … | …  
+15 | 2 | 500 | 0.951958 | {‘criterion’: ‘entropy’, ‘max_depth’: None, ‘max_features’: 9, ‘min_samples_split’: 10}  
+16 | 2 | 500 | 0.947958 | {‘criterion’: ‘gini’, ‘max_depth’: None, ‘max_features’: 10, ‘min_samples_split’: 10}  
+17 | 2 | 500 | 0.951958 | {‘criterion’: ‘gini’, ‘max_depth’: None, ‘max_features’: 10, ‘min_samples_split’: 4}  
+18 | 3 | 1000 | 0.961009 | {‘criterion’: ‘entropy’, ‘max_depth’: None, ‘max_features’: 9, ‘min_samples_split’: 10}  
+19 | 3 | 1000 | 0.955989 | {‘criterion’: ‘gini’, ‘max_depth’: None, ‘max_features’: 10, ‘min_samples_split’: 4}  
+Each row corresponds to a given parameter combination (a candidate) and a
+given iteration. The iteration is given by the `iter` column. The
+`n_resources` column tells you how many resources were used.
+
+In the example above, the best parameter combination is `{'criterion':
+'entropy', 'max_depth': None, 'max_features': 9, 'min_samples_split': 10}`
+since it has reached the last iteration (3) with the highest score: 0.96.
+
+References:
+
+`1`
+
+    
+K. Jamieson, A. Talwalkar, Non-stochastic Best Arm Identification and
+Hyperparameter Optimization, in proc. of Machine Learning Research, 2016.
+
+`2`
+
+    
+L. Li, K. Jamieson, G. DeSalvo, A. Rostamizadeh, A. Talwalkar, Hyperband: A
+Novel Bandit-Based Approach to Hyperparameter Optimization, in Machine
+Learning Research 18, 2018.
+
+##  3.2.4. Tips for parameter search
+
+###  3.2.4.1. Specifying an objective metric
+
+By default, parameter search uses the `score` function of the estimator to
+evaluate a parameter setting. These are the `sklearn.metrics.accuracy_score`
+for classification and `sklearn.metrics.r2_score` for regression. For some
+applications, other scoring functions are better suited (for example in
+unbalanced classification, the accuracy score is often uninformative). An
+alternative scoring function can be specified via the `scoring` parameter of
+most parameter search tools. See The scoring parameter: defining model
+evaluation rules for more details.
+
+###  3.2.4.2. Specifying multiple metrics for evaluation
+
+`GridSearchCV` and `RandomizedSearchCV` allow specifying multiple metrics for
+the `scoring` parameter.
+
+Multimetric scoring can either be specified as a list of strings of predefined
+scores names or a dict mapping the scorer name to the scorer function and/or
+the predefined scorer name(s). See Using multiple metric evaluation for more
+details.
+
+When specifying multiple metrics, the `refit` parameter must be set to the
+metric (string) for which the `best_params_` will be found and used to build
+the `best_estimator_` on the whole dataset. If the search should not be refit,
+set `refit=False`. Leaving refit to the default value `None` will result in an
+error when using multiple metrics.
+
+See Demonstration of multi-metric evaluation on cross_val_score and
+GridSearchCV for an example usage.
+
+`HalvingRandomSearchCV` and `HalvingGridSearchCV` do not support multimetric
+scoring.
+
+###  3.2.4.3. Composite estimators and parameter spaces
+
+`GridSearchCV` and `RandomizedSearchCV` allow searching over parameters of
+composite or nested estimators such as `Pipeline`, `ColumnTransformer`,
+`VotingClassifier` or `CalibratedClassifierCV` using a dedicated
+`<estimator>__<parameter>` syntax:
+
+    
+    >>> from sklearn.model_selection import GridSearchCV
+    >>> from sklearn.calibration import CalibratedClassifierCV
+    >>> from sklearn.ensemble import RandomForestClassifier
+    >>> from sklearn.datasets import make_moons
+    >>> X, y = make_moons()
+    >>> calibrated_forest = CalibratedClassifierCV(
+    ...    base_estimator=RandomForestClassifier(n_estimators=10))
+    >>> param_grid = {
+    ...    'base_estimator__max_depth': [2, 4, 6, 8]}
+    >>> search = GridSearchCV(calibrated_forest, param_grid, cv=5)
+    >>> search.fit(X, y)
+    GridSearchCV(cv=5,
+                 estimator=CalibratedClassifierCV(...),
+                 param_grid={'base_estimator__max_depth': [2, 4, 6, 8]})
+    
+Here, `<estimator>` is the parameter name of the nested estimator, in this
+case `base_estimator`. If the meta-estimator is constructed as a collection of
+estimators as in `pipeline.Pipeline`, then `<estimator>` refers to the name of
+the estimator, see Nested parameters. In practice, there can be several levels
+of nesting:
+
+    
+    >>> from sklearn.pipeline import Pipeline
+    >>> from sklearn.feature_selection import SelectKBest
+    >>> pipe = Pipeline([
+    ...    ('select', SelectKBest()),
+    ...    ('model', calibrated_forest)])
+    >>> param_grid = {
+    ...    'select__k': [1, 2],
+    ...    'model__base_estimator__max_depth': [2, 4, 6, 8]}
+    >>> search = GridSearchCV(pipe, param_grid, cv=5).fit(X, y)
+    
+Please refer to Pipeline: chaining estimators for performing parameter
+searches over pipelines.
+
+###  3.2.4.4. Model selection: development and evaluation
+
+Model selection by evaluating various parameter settings can be seen as a way
+to use the labeled data to “train” the parameters of the grid.
+
+When evaluating the resulting model it is important to do it on held-out
+samples that were not seen during the grid search process: it is recommended
+to split the data into a development set (to be fed to the `GridSearchCV`
+instance) and an evaluation set to compute performance metrics.
+
+This can be done by using the `train_test_split` utility function.
+
+###  3.2.4.5. Parallelism
+
+The parameter search tools evaluate each parameter combination on each data
+fold independently. Computations can be run in parallel by using the keyword
+`n_jobs=-1`. See function signature for more details, and also the Glossary
+entry for n_jobs.
+
+###  3.2.4.6. Robustness to failure
+
+Some parameter settings may result in a failure to `fit` one or more folds of
+the data. By default, this will cause the entire search to fail, even if some
+parameter settings could be fully evaluated. Setting `error_score=0` (or
+`=np.NaN`) will make the procedure robust to such failure, issuing a warning
+and setting the score for that fold to 0 (or `NaN`), but completing the
+search.
+
+##  3.2.5. Alternatives to brute force parameter search
+
+###  3.2.5.1. Model specific cross-validation
+
+Some models can fit data for a range of values of some parameter almost as
+efficiently as fitting the estimator for a single value of the parameter. This
+feature can be leveraged to perform a more efficient cross-validation used for
+model selection of this parameter.
+
+The most common parameter amenable to this strategy is the parameter encoding
+the strength of the regularizer. In this case we say that we compute the
+regularization path of the estimator.
+
+Here is the list of such models:
+
+`linear_model.ElasticNetCV`(*[, l1_ratio, …]) | Elastic Net model with iterative fitting along a regularization path.  
+---|---  
+`linear_model.LarsCV`(*[, fit_intercept, …]) | Cross-validated Least Angle Regression model.  
+`linear_model.LassoCV`(*[, eps, n_alphas, …]) | Lasso linear model with iterative fitting along a regularization path.  
+`linear_model.LassoLarsCV`(*[, fit_intercept, …]) | Cross-validated Lasso, using the LARS algorithm.  
+`linear_model.LogisticRegressionCV`(*[, Cs, …]) | Logistic Regression CV (aka logit, MaxEnt) classifier.  
+`linear_model.MultiTaskElasticNetCV`(*[, …]) | Multi-task L1/L2 ElasticNet with built-in cross-validation.  
+`linear_model.MultiTaskLassoCV`(*[, eps, …]) | Multi-task Lasso model trained with L1/L2 mixed-norm as regularizer.  
+`linear_model.OrthogonalMatchingPursuitCV`(*) | Cross-validated Orthogonal Matching Pursuit model (OMP).  
+`linear_model.RidgeCV`([alphas, …]) | Ridge regression with built-in cross-validation.  
+`linear_model.RidgeClassifierCV`([alphas, …]) | Ridge classifier with built-in cross-validation.  
+###  3.2.5.2. Information Criterion
+
+Some models can offer an information-theoretic closed-form formula of the
+optimal estimate of the regularization parameter by computing a single
+regularization path (instead of several when using cross-validation).
+
+Here is the list of models benefiting from the Akaike Information Criterion
+(AIC) or the Bayesian Information Criterion (BIC) for automated model
+selection:
+
+`linear_model.LassoLarsIC`([criterion, …]) | Lasso model fit with Lars using BIC or AIC for model selection  
+---|---  
+###  3.2.5.3. Out of Bag Estimates
+
+When using ensemble methods base upon bagging, i.e. generating new training
+sets using sampling with replacement, part of the training set remains unused.
+For each classifier in the ensemble, a different part of the training set is
+left out.
+
+This left out portion can be used to estimate the generalization error without
+having to rely on a separate validation set. This estimate comes “for free” as
+no additional data is needed and can be used for model selection.
+
+This is currently implemented in the following classes:
+
+`ensemble.RandomForestClassifier`([…]) | A random forest classifier.  
+---|---  
+`ensemble.RandomForestRegressor`([…]) | A random forest regressor.  
+`ensemble.ExtraTreesClassifier`([…]) | An extra-trees classifier.  
+`ensemble.ExtraTreesRegressor`([n_estimators, …]) | An extra-trees regressor.  
+`ensemble.GradientBoostingClassifier`(*[, …]) | Gradient Boosting for classification.  
+`ensemble.GradientBoostingRegressor`(*[, …]) | Gradient Boosting for regression.  
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-learn.org/0.24/modules/grid_search.html
+

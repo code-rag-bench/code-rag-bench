@@ -1,0 +1,510 @@
+# Scaling to large datasets
+
+pandas provides data structures for in-memory analytics, which makes using
+pandas to analyze datasets that are larger than memory datasets somewhat
+tricky. Even datasets that are a sizable fraction of memory become unwieldy,
+as some pandas operations need to make intermediate copies.
+
+This document provides a few recommendations for scaling your analysis to
+larger datasets. It’s a complement to Enhancing performance, which focuses on
+speeding up analysis for datasets that fit in memory.
+
+But first, it’s worth considering not using pandas. pandas isn’t the right
+tool for all situations. If you’re working with very large datasets and a tool
+like PostgreSQL fits your needs, then you should probably be using that.
+Assuming you want or need the expressiveness and power of pandas, let’s carry
+on.
+
+    
+    In [1]: import pandas as pd
+    
+    In [2]: import numpy as np
+    
+## Load less data
+
+Suppose our raw dataset on disk has many columns:
+
+    
+                         id_0    name_0       x_0       y_0  id_1   name_1       x_1  ...  name_8       x_8       y_8  id_9   name_9       x_9       y_9
+    timestamp                                                                         ...
+    2000-01-01 00:00:00  1015   Michael -0.399453  0.095427   994    Frank -0.176842  ...     Dan -0.315310  0.713892  1025   Victor -0.135779  0.346801
+    2000-01-01 00:01:00   969  Patricia  0.650773 -0.874275  1003    Laura  0.459153  ...  Ursula  0.913244 -0.630308  1047    Wendy -0.886285  0.035852
+    2000-01-01 00:02:00  1016    Victor -0.721465 -0.584710  1046  Michael  0.524994  ...     Ray -0.656593  0.692568  1064   Yvonne  0.070426  0.432047
+    2000-01-01 00:03:00   939     Alice -0.746004 -0.908008   996   Ingrid -0.414523  ...   Jerry -0.958994  0.608210   978    Wendy  0.855949 -0.648988
+    2000-01-01 00:04:00  1017       Dan  0.919451 -0.803504  1048    Jerry -0.569235  ...   Frank -0.577022 -0.409088   994      Bob -0.270132  0.335176
+    ...                   ...       ...       ...       ...   ...      ...       ...  ...     ...       ...       ...   ...      ...       ...       ...
+    2000-12-30 23:56:00   999       Tim  0.162578  0.512817   973    Kevin -0.403352  ...     Tim -0.380415  0.008097  1041  Charlie  0.191477 -0.599519
+    2000-12-30 23:57:00   970     Laura -0.433586 -0.600289   958   Oliver -0.966577  ...   Zelda  0.971274  0.402032  1038   Ursula  0.574016 -0.930992
+    2000-12-30 23:58:00  1065     Edith  0.232211 -0.454540   971      Tim  0.158484  ...   Alice -0.222079 -0.919274  1022      Dan  0.031345 -0.657755
+    2000-12-30 23:59:00  1019    Ingrid  0.322208 -0.615974   981   Hannah  0.607517  ...   Sarah -0.424440 -0.117274   990   George -0.375530  0.563312
+    2000-12-31 00:00:00   937    Ursula -0.906523  0.943178  1018    Alice -0.564513  ...   Jerry  0.236837  0.807650   985   Oliver  0.777642  0.783392
+    
+    [525601 rows x 40 columns]
+    
+To load the columns we want, we have two options. Option 1 loads in all the
+data and then filters to what we need.
+
+    
+    In [3]: columns = ["id_0", "name_0", "x_0", "y_0"]
+    
+    In [4]: pd.read_parquet("timeseries_wide.parquet")[columns]
+    Out[4]: 
+                         id_0    name_0       x_0       y_0
+    timestamp                                              
+    2000-01-01 00:00:00  1015   Michael -0.399453  0.095427
+    2000-01-01 00:01:00   969  Patricia  0.650773 -0.874275
+    2000-01-01 00:02:00  1016    Victor -0.721465 -0.584710
+    2000-01-01 00:03:00   939     Alice -0.746004 -0.908008
+    2000-01-01 00:04:00  1017       Dan  0.919451 -0.803504
+    ...                   ...       ...       ...       ...
+    2000-12-30 23:56:00   999       Tim  0.162578  0.512817
+    2000-12-30 23:57:00   970     Laura -0.433586 -0.600289
+    2000-12-30 23:58:00  1065     Edith  0.232211 -0.454540
+    2000-12-30 23:59:00  1019    Ingrid  0.322208 -0.615974
+    2000-12-31 00:00:00   937    Ursula -0.906523  0.943178
+    
+    [525601 rows x 4 columns]
+    
+Option 2 only loads the columns we request.
+
+    
+    In [5]: pd.read_parquet("timeseries_wide.parquet", columns=columns)
+    Out[5]: 
+                         id_0    name_0       x_0       y_0
+    timestamp                                              
+    2000-01-01 00:00:00  1015   Michael -0.399453  0.095427
+    2000-01-01 00:01:00   969  Patricia  0.650773 -0.874275
+    2000-01-01 00:02:00  1016    Victor -0.721465 -0.584710
+    2000-01-01 00:03:00   939     Alice -0.746004 -0.908008
+    2000-01-01 00:04:00  1017       Dan  0.919451 -0.803504
+    ...                   ...       ...       ...       ...
+    2000-12-30 23:56:00   999       Tim  0.162578  0.512817
+    2000-12-30 23:57:00   970     Laura -0.433586 -0.600289
+    2000-12-30 23:58:00  1065     Edith  0.232211 -0.454540
+    2000-12-30 23:59:00  1019    Ingrid  0.322208 -0.615974
+    2000-12-31 00:00:00   937    Ursula -0.906523  0.943178
+    
+    [525601 rows x 4 columns]
+    
+If we were to measure the memory usage of the two calls, we’d see that
+specifying `columns` uses about 1/10th the memory in this case.
+
+With `pandas.read_csv()`, you can specify `usecols` to limit the columns read
+into memory. Not all file formats that can be read by pandas provide an option
+to read a subset of columns.
+
+## Use efficient datatypes
+
+The default pandas data types are not the most memory efficient. This is
+especially true for text data columns with relatively few unique values
+(commonly referred to as “low-cardinality” data). By using more efficient data
+types, you can store larger datasets in memory.
+
+    
+    In [6]: ts = pd.read_parquet("timeseries.parquet")
+    
+    In [7]: ts
+    Out[7]: 
+                           id      name         x         y
+    timestamp                                              
+    2000-01-01 00:00:00  1029   Michael  0.278837  0.247932
+    2000-01-01 00:00:30  1010  Patricia  0.077144  0.490260
+    2000-01-01 00:01:00  1001    Victor  0.214525  0.258635
+    2000-01-01 00:01:30  1018     Alice -0.646866  0.822104
+    2000-01-01 00:02:00   991       Dan  0.902389  0.466665
+    ...                   ...       ...       ...       ...
+    2000-12-30 23:58:00   992     Sarah  0.721155  0.944118
+    2000-12-30 23:58:30  1007    Ursula  0.409277  0.133227
+    2000-12-30 23:59:00  1009    Hannah -0.452802  0.184318
+    2000-12-30 23:59:30   978     Kevin -0.904728 -0.179146
+    2000-12-31 00:00:00   973    Ingrid -0.370763 -0.794667
+    
+    [1051201 rows x 4 columns]
+    
+Now, let’s inspect the data types and memory usage to see where we should
+focus our attention.
+
+    
+    In [8]: ts.dtypes
+    Out[8]: 
+    id        int64
+    name     object
+    x       float64
+    y       float64
+    dtype: object
+    
+    
+    In [9]: ts.memory_usage(deep=True)  # memory usage in bytes
+    Out[9]: 
+    Index     8409608
+    id        8409608
+    name     65537768
+    x         8409608
+    y         8409608
+    dtype: int64
+    
+The `name` column is taking up much more memory than any other. It has just a
+few unique values, so it’s a good candidate for converting to a `Categorical`.
+With a Categorical, we store each unique name once and use space-efficient
+integers to know which specific name is used in each row.
+
+    
+    In [10]: ts2 = ts.copy()
+    
+    In [11]: ts2["name"] = ts2["name"].astype("category")
+    
+    In [12]: ts2.memory_usage(deep=True)
+    Out[12]: 
+    Index    8409608
+    id       8409608
+    name     1053894
+    x        8409608
+    y        8409608
+    dtype: int64
+    
+We can go a bit further and downcast the numeric columns to their smallest
+types using `pandas.to_numeric()`.
+
+    
+    In [13]: ts2["id"] = pd.to_numeric(ts2["id"], downcast="unsigned")
+    
+    In [14]: ts2[["x", "y"]] = ts2[["x", "y"]].apply(pd.to_numeric, downcast="float")
+    
+    In [15]: ts2.dtypes
+    Out[15]: 
+    id        uint16
+    name    category
+    x        float32
+    y        float32
+    dtype: object
+    
+    
+    In [16]: ts2.memory_usage(deep=True)
+    Out[16]: 
+    Index    8409608
+    id       2102402
+    name     1053894
+    x        4204804
+    y        4204804
+    dtype: int64
+    
+    
+    In [17]: reduction = ts2.memory_usage(deep=True).sum() / ts.memory_usage(deep=True).sum()
+    
+    In [18]: print(f"{reduction:0.2f}")
+    0.20
+    
+In all, we’ve reduced the in-memory footprint of this dataset to 1/5 of its
+original size.
+
+See Categorical data for more on `Categorical` and dtypes for an overview of
+all of pandas’ dtypes.
+
+## Use chunking
+
+Some workloads can be achieved with chunking: splitting a large problem like
+“convert this directory of CSVs to parquet” into a bunch of small problems
+(“convert this individual CSV file into a Parquet file. Now repeat that for
+each file in this directory.”). As long as each chunk fits in memory, you can
+work with datasets that are much larger than memory.
+
+Note
+
+Chunking works well when the operation you’re performing requires zero or
+minimal coordination between chunks. For more complicated workflows, you’re
+better off using another library.
+
+Suppose we have an even larger “logical dataset” on disk that’s a directory of
+parquet files. Each file in the directory represents a different year of the
+entire dataset.
+
+    
+    data
+    └── timeseries
+        ├── ts-00.parquet
+        ├── ts-01.parquet
+        ├── ts-02.parquet
+        ├── ts-03.parquet
+        ├── ts-04.parquet
+        ├── ts-05.parquet
+        ├── ts-06.parquet
+        ├── ts-07.parquet
+        ├── ts-08.parquet
+        ├── ts-09.parquet
+        ├── ts-10.parquet
+        └── ts-11.parquet
+    
+Now we’ll implement an out-of-core `value_counts`. The peak memory usage of
+this workflow is the single largest chunk, plus a small series storing the
+unique value counts up to this point. As long as each individual file fits in
+memory, this will work for arbitrary-sized datasets.
+
+    
+    In [19]: %%time
+       ....: files = pathlib.Path("data/timeseries/").glob("ts*.parquet")
+       ....: counts = pd.Series(dtype=int)
+       ....: for path in files:
+       ....:     df = pd.read_parquet(path)
+       ....:     counts = counts.add(df["name"].value_counts(), fill_value=0)
+       ....: counts.astype(int)
+       ....: 
+    CPU times: user 663 ms, sys: 43.4 ms, total: 706 ms
+    Wall time: 469 ms
+    Out[19]: 
+    Alice      229802
+    Bob        229211
+    Charlie    229303
+    Dan        230621
+    Edith      230349
+                ...  
+    Victor     230502
+    Wendy      230038
+    Xavier     229553
+    Yvonne     228766
+    Zelda      229909
+    Length: 26, dtype: int64
+    
+Some readers, like `pandas.read_csv()`, offer parameters to control the
+`chunksize` when reading a single file.
+
+Manually chunking is an OK option for workflows that don’t require too
+sophisticated of operations. Some operations, like `groupby`, are much harder
+to do chunkwise. In these cases, you may be better switching to a different
+library that implements these out-of-core algorithms for you.
+
+## Use other libraries
+
+pandas is just one library offering a DataFrame API. Because of its
+popularity, pandas’ API has become something of a standard that other
+libraries implement. The pandas documentation maintains a list of libraries
+implementing a DataFrame API in our ecosystem page.
+
+For example, Dask, a parallel computing library, has dask.dataframe, a pandas-
+like API for working with larger than memory datasets in parallel. Dask can
+use multiple threads or processes on a single machine, or a cluster of
+machines to process data in parallel.
+
+We’ll import `dask.dataframe` and notice that the API feels similar to pandas.
+We can use Dask’s `read_parquet` function, but provide a globstring of files
+to read in.
+
+    
+    In [20]: import dask.dataframe as dd
+    
+    In [21]: ddf = dd.read_parquet("data/timeseries/ts*.parquet", engine="pyarrow")
+    
+    In [22]: ddf
+    Out[22]: 
+    Dask DataFrame Structure:
+                       id    name        x        y
+    npartitions=12                                 
+                    int64  object  float64  float64
+                      ...     ...      ...      ...
+    ...               ...     ...      ...      ...
+                      ...     ...      ...      ...
+                      ...     ...      ...      ...
+    Dask Name: read-parquet, 12 tasks
+    
+Inspecting the `ddf` object, we see a few things
+
+  * There are familiar attributes like `.columns` and `.dtypes`
+  * There are familiar methods like `.groupby`, `.sum`, etc.
+  * There are new attributes like `.npartitions` and `.divisions`
+
+The partitions and divisions are how Dask parallelizes computation. A Dask
+DataFrame is made up of many pandas DataFrames. A single method call on a Dask
+DataFrame ends up making many pandas method calls, and Dask knows how to
+coordinate everything to get the result.
+
+    
+    In [23]: ddf.columns
+    Out[23]: Index(['id', 'name', 'x', 'y'], dtype='object')
+    
+    In [24]: ddf.dtypes
+    Out[24]: 
+    id        int64
+    name     object
+    x       float64
+    y       float64
+    dtype: object
+    
+    In [25]: ddf.npartitions
+    Out[25]: 12
+    
+One major difference: the `dask.dataframe` API is lazy. If you look at the
+repr above, you’ll notice that the values aren’t actually printed out; just
+the column names and dtypes. That’s because Dask hasn’t actually read the data
+yet. Rather than executing immediately, doing operations build up a task
+graph.
+
+    
+    In [26]: ddf
+    Out[26]: 
+    Dask DataFrame Structure:
+                       id    name        x        y
+    npartitions=12                                 
+                    int64  object  float64  float64
+                      ...     ...      ...      ...
+    ...               ...     ...      ...      ...
+                      ...     ...      ...      ...
+                      ...     ...      ...      ...
+    Dask Name: read-parquet, 12 tasks
+    
+    In [27]: ddf["name"]
+    Out[27]: 
+    Dask Series Structure:
+    npartitions=12
+        object
+           ...
+         ...  
+           ...
+           ...
+    Name: name, dtype: object
+    Dask Name: getitem, 24 tasks
+    
+    In [28]: ddf["name"].value_counts()
+    Out[28]: 
+    Dask Series Structure:
+    npartitions=1
+        int64
+          ...
+    Name: name, dtype: int64
+    Dask Name: value-counts-agg, 39 tasks
+    
+Each of these calls is instant because the result isn’t being computed yet.
+We’re just building up a list of computation to do when someone needs the
+result. Dask knows that the return type of a `pandas.Series.value_counts` is a
+pandas Series with a certain dtype and a certain name. So the Dask version
+returns a Dask Series with the same dtype and the same name.
+
+To get the actual result you can call `.compute()`.
+
+    
+    In [29]: %time ddf["name"].value_counts().compute()
+    CPU times: user 841 ms, sys: 281 ms, total: 1.12 s
+    Wall time: 544 ms
+    Out[29]: 
+    Laura      230906
+    Ingrid     230838
+    Kevin      230698
+    Dan        230621
+    Frank      230595
+                ...  
+    Ray        229603
+    Xavier     229553
+    Charlie    229303
+    Bob        229211
+    Yvonne     228766
+    Name: name, Length: 26, dtype: int64
+    
+At that point, you get back the same thing you’d get with pandas, in this case
+a concrete pandas Series with the count of each `name`.
+
+Calling `.compute` causes the full task graph to be executed. This includes
+reading the data, selecting the columns, and doing the `value_counts`. The
+execution is done in parallel where possible, and Dask tries to keep the
+overall memory footprint small. You can work with datasets that are much
+larger than memory, as long as each partition (a regular pandas DataFrame)
+fits in memory.
+
+By default, `dask.dataframe` operations use a threadpool to do operations in
+parallel. We can also connect to a cluster to distribute the work on many
+machines. In this case we’ll connect to a local “cluster” made up of several
+processes on this single machine.
+
+    
+    >>> from dask.distributed import Client, LocalCluster
+    
+    >>> cluster = LocalCluster()
+    >>> client = Client(cluster)
+    >>> client
+    <Client: 'tcp://127.0.0.1:53349' processes=4 threads=8, memory=17.18 GB>
+    
+Once this `client` is created, all of Dask’s computation will take place on
+the cluster (which is just processes in this case).
+
+Dask implements the most used parts of the pandas API. For example, we can do
+a familiar groupby aggregation.
+
+    
+    In [30]: %time ddf.groupby("name")[["x", "y"]].mean().compute().head()
+    CPU times: user 1.78 s, sys: 735 ms, total: 2.51 s
+    Wall time: 1.14 s
+    Out[30]: 
+                    x         y
+    name                       
+    Alice    0.000086 -0.001170
+    Bob     -0.000843 -0.000799
+    Charlie  0.000564 -0.000038
+    Dan      0.000584  0.000818
+    Edith   -0.000116 -0.000044
+    
+The grouping and aggregation is done out-of-core and in parallel.
+
+When Dask knows the `divisions` of a dataset, certain optimizations are
+possible. When reading parquet datasets written by dask, the divisions will be
+known automatically. In this case, since we created the parquet files
+manually, we need to supply the divisions manually.
+
+    
+    In [31]: N = 12
+    
+    In [32]: starts = [f"20{i:>02d}-01-01" for i in range(N)]
+    
+    In [33]: ends = [f"20{i:>02d}-12-13" for i in range(N)]
+    
+    In [34]: divisions = tuple(pd.to_datetime(starts)) + (pd.Timestamp(ends[-1]),)
+    
+    In [35]: ddf.divisions = divisions
+    
+    In [36]: ddf
+    Out[36]: 
+    Dask DataFrame Structure:
+                       id    name        x        y
+    npartitions=12                                 
+    2000-01-01      int64  object  float64  float64
+    2001-01-01        ...     ...      ...      ...
+    ...               ...     ...      ...      ...
+    2011-01-01        ...     ...      ...      ...
+    2011-12-13        ...     ...      ...      ...
+    Dask Name: read-parquet, 12 tasks
+    
+Now we can do things like fast random access with `.loc`.
+
+    
+    In [37]: ddf.loc["2002-01-01 12:01":"2002-01-01 12:05"].compute()
+    Out[37]: 
+                           id    name         x         y
+    timestamp                                            
+    2002-01-01 12:01:00   983   Laura  0.243985 -0.079392
+    2002-01-01 12:02:00  1001   Laura -0.523119 -0.226026
+    2002-01-01 12:03:00  1059  Oliver  0.612886  0.405680
+    2002-01-01 12:04:00   993   Kevin  0.451977  0.332947
+    2002-01-01 12:05:00  1014  Yvonne -0.948681  0.361748
+    
+Dask knows to just look in the 3rd partition for selecting values in 2002. It
+doesn’t need to look at any other data.
+
+Many workflows involve a large amount of data and processing it in a way that
+reduces the size to something that fits in memory. In this case, we’ll
+resample to daily frequency and take the mean. Once we’ve taken the mean, we
+know the results will fit in memory, so we can safely call `compute` without
+running out of memory. At that point it’s just a regular pandas object.
+
+    
+    In [38]: ddf[["x", "y"]].resample("1D").mean().cumsum().compute().plot()
+    Out[38]: <AxesSubplot:xlabel='timestamp'>
+    
+![../_images/dask_resample.png](data:image/png;base64,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)
+
+These Dask examples have all be done using multiple processes on a single
+machine. Dask can be deployed on a cluster to scale up to even larger
+datasets.
+
+You see more dask examples at https://examples.dask.org.
+
+© 2008–2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData
+Development Team  
+Licensed under the 3-clause BSD License.  
+https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/scale.html
+

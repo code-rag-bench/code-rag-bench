@@ -1,0 +1,46 @@
+<h1>Deploying with Fabric</h1> <p><a class="reference external" href="https://www.fabfile.org/">Fabric</a> is a tool for Python similar to Makefiles but with the ability to execute commands on a remote server. In combination with a properly set up Python package (<a class="reference internal" href="../packages/index"><span class="doc">Large Applications as Packages</span></a>) and a good concept for configurations (<a class="reference internal" href="../../config/index"><span class="doc">Configuration Handling</span></a>) it is very easy to deploy Flask applications to external servers.</p> <p>Before we get started, here a quick checklist of things we have to ensure upfront:</p> <ul class="simple"> <li>Fabric 1.0 has to be installed locally. This tutorial assumes the latest version of Fabric.</li> <li>The application already has to be a package and requires a working <code>setup.py</code> file (<a class="reference internal" href="../distribute/index"><span class="doc">Deploying with Setuptools</span></a>).</li> <li>In the following example we are using <code>mod_wsgi</code> for the remote servers. You can of course use your own favourite server there, but for this example we chose Apache + <code>mod_wsgi</code> because it’s very easy to setup and has a simple way to reload applications without root access.</li> </ul>  <h2 id="creating-the-first-fabfile">Creating the first Fabfile</h2> <p>A fabfile is what controls what Fabric executes. It is named <code>fabfile.py</code> and executed by the <code>fab</code> command. All the functions defined in that file will show up as <code>fab</code> subcommands. They are executed on one or more hosts. These hosts can be defined either in the fabfile or on the command line. In this case we will add them to the fabfile.</p> <p>This is a basic first example that has the ability to upload the current source code to the server and install it into a pre-existing virtual environment:</p> <pre data-language="python">from fabric.api import *
+
+# the user to use for the remote commands
+env.user = 'appuser'
+# the servers where the commands are executed
+env.hosts = ['server1.example.com', 'server2.example.com']
+
+def pack():
+    # build the package
+    local('python setup.py sdist --formats=gztar', capture=False)
+
+def deploy():
+    # figure out the package name and version
+    dist = local('python setup.py --fullname', capture=True).strip()
+    filename = f'{dist}.tar.gz'
+
+    # upload the package to the temporary folder on the server
+    put(f'dist/{filename}', f'/tmp/{filename}')
+
+    # install the package in the application's virtualenv with pip
+    run(f'/var/www/yourapplication/env/bin/pip install /tmp/{filename}')
+
+    # remove the uploaded package
+    run(f'rm -r /tmp/{filename}')
+
+    # touch the .wsgi file to trigger a reload in mod_wsgi
+    run('touch /var/www/yourapplication.wsgi')
+</pre>   <h2 id="running-fabfiles">Running Fabfiles</h2> <p>Now how do you execute that fabfile? You use the <code>fab</code> command. To deploy the current version of the code on the remote server you would use this command:</p> <pre data-language="python">$ fab pack deploy
+</pre> <p>However this requires that our server already has the <code>/var/www/yourapplication</code> folder created and <code>/var/www/yourapplication/env</code> to be a virtual environment. Furthermore are we not creating the configuration or <code>.wsgi</code> file on the server. So how do we bootstrap a new server into our infrastructure?</p> <p>This now depends on the number of servers we want to set up. If we just have one application server (which the majority of applications will have), creating a command in the fabfile for this is overkill. But obviously you can do that. In that case you would probably call it <code>setup</code> or <code>bootstrap</code> and then pass the servername explicitly on the command line:</p> <pre data-language="python">$ fab -H newserver.example.com bootstrap
+</pre> <p>To setup a new server you would roughly do these steps:</p> <ol class="arabic"> <li>
+<p>Create the directory structure in <code>/var/www</code>:</p> <pre data-language="python">$ mkdir /var/www/yourapplication
+$ cd /var/www/yourapplication
+$ virtualenv --distribute env
+</pre> </li> <li>Upload a new <code>application.wsgi</code> file to the server and the configuration file for the application (eg: <code>application.cfg</code>)</li> <li>Create a new Apache config for <code>yourapplication</code> and activate it. Make sure to activate watching for changes of the <code>.wsgi</code> file so that we can automatically reload the application by touching it. See <a class="reference internal" href="../../deploying/mod_wsgi/index"><span class="doc">mod_wsgi (Apache)</span></a>.</li> </ol> <p>So now the question is, where do the <code>application.wsgi</code> and <code>application.cfg</code> files come from?</p>   <h2 id="the-wsgi-file">The WSGI File</h2> <p>The WSGI file has to import the application and also to set an environment variable so that the application knows where to look for the config. This is a short example that does exactly that:</p> <pre data-language="python">import os
+os.environ['YOURAPPLICATION_CONFIG'] = '/var/www/yourapplication/application.cfg'
+from yourapplication import app
+</pre> <p>The application itself then has to initialize itself like this to look for the config at that environment variable:</p> <pre data-language="python">app = Flask(__name__)
+app.config.from_object('yourapplication.default_config')
+app.config.from_envvar('YOURAPPLICATION_CONFIG')
+</pre> <p>This approach is explained in detail in the <a class="reference internal" href="../../config/index"><span class="doc">Configuration Handling</span></a> section of the documentation.</p>   <h2 id="the-configuration-file">The Configuration File</h2> <p>Now as mentioned above, the application will find the correct configuration file by looking up the <code>YOURAPPLICATION_CONFIG</code> environment variable. So we have to put the configuration in a place where the application will able to find it. Configuration files have the unfriendly quality of being different on all computers, so you do not version them usually.</p> <p>A popular approach is to store configuration files for different servers in a separate version control repository and check them out on all servers. Then symlink the file that is active for the server into the location where it’s expected (eg: <code>/var/www/yourapplication</code>).</p> <p>Either way, in our case here we only expect one or two servers and we can upload them ahead of time by hand.</p>   <h2 id="first-deployment">First Deployment</h2> <p>Now we can do our first deployment. We have set up the servers so that they have their virtual environments and activated apache configs. Now we can pack up the application and deploy it:</p> <pre data-language="python">$ fab pack deploy
+</pre> <p>Fabric will now connect to all servers and run the commands as written down in the fabfile. First it will execute pack so that we have our tarball ready and then it will execute deploy and upload the source code to all servers and install it there. Thanks to the <code>setup.py</code> file we will automatically pull in the required libraries into our virtual environment.</p>   <h2 id="next-steps">Next Steps</h2> <p>From that point onwards there is so much that can be done to make deployment actually fun:</p> <ul class="simple"> <li>Create a <code>bootstrap</code> command that initializes new servers. It could initialize a new virtual environment, setup apache appropriately etc.</li> <li>Put configuration files into a separate version control repository and symlink the active configs into place.</li> <li>You could also put your application code into a repository and check out the latest version on the server and then install. That way you can also easily go back to older versions.</li> <li>hook in testing functionality so that you can deploy to an external server and run the test suite.</li> </ul> <p>Working with Fabric is fun and you will notice that it’s quite magical to type <code>fab deploy</code> and see your application being deployed automatically to one or more remote servers.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/fabric/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/fabric/</a>
+  </p>
+</div>

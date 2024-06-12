@@ -1,0 +1,96 @@
+<h1 id="torch-jit-script">torch.jit.script</h1> <dl class="function"> <dt id="torch.jit.script">
+<code>torch.jit.script(obj, optimize=None, _frames_up=0, _rcb=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/jit/_script.html#script"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Scripting a function or <code>nn.Module</code> will inspect the source code, compile it as TorchScript code using the TorchScript compiler, and return a <a class="reference internal" href="torch.jit.scriptmodule#torch.jit.ScriptModule" title="torch.jit.ScriptModule"><code>ScriptModule</code></a> or <a class="reference internal" href="torch.jit.scriptfunction#torch.jit.ScriptFunction" title="torch.jit.ScriptFunction"><code>ScriptFunction</code></a>. TorchScript itself is a subset of the Python language, so not all features in Python work, but we provide enough functionality to compute on tensors and do control-dependent operations. For a complete guide, see the <a class="reference internal" href="../jit_language_reference#language-reference"><span class="std std-ref">TorchScript Language Reference</span></a>.</p> <p><code>torch.jit.script</code> can be used as a function for modules and functions, and as a decorator <code>@torch.jit.script</code> for <a class="reference internal" href="../jit_language_reference#id2"><span class="std std-ref">TorchScript Classes</span></a> and functions.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>obj</strong> (callable, class, or <code>nn.Module</code>) – The <code>nn.Module</code>, function, or class type to compile.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>If <code>obj</code> is <code>nn.Module</code>, <code>script</code> returns a <a class="reference internal" href="torch.jit.scriptmodule#torch.jit.ScriptModule" title="torch.jit.ScriptModule"><code>ScriptModule</code></a> object. The returned <a class="reference internal" href="torch.jit.scriptmodule#torch.jit.ScriptModule" title="torch.jit.ScriptModule"><code>ScriptModule</code></a> will have the same set of sub-modules and parameters as the original <code>nn.Module</code>. If <code>obj</code> is a standalone function, a <a class="reference internal" href="torch.jit.scriptfunction#torch.jit.ScriptFunction" title="torch.jit.ScriptFunction"><code>ScriptFunction</code></a> will be returned.</p> </dd> </dl> <dl> <dt><strong>Scripting a function</strong></dt>
+<dd>
+<p>The <code>@torch.jit.script</code> decorator will construct a <a class="reference internal" href="torch.jit.scriptfunction#torch.jit.ScriptFunction" title="torch.jit.ScriptFunction"><code>ScriptFunction</code></a> by compiling the body of the function.</p> <p>Example (scripting a function):</p> <pre data-language="python">import torch
+
+@torch.jit.script
+def foo(x, y):
+    if x.max() &gt; y.max():
+        r = x
+    else:
+        r = y
+    return r
+
+print(type(foo))  # torch.jit.ScriptFuncion
+
+# See the compiled graph as Python code
+print(foo.code)
+
+# Call the function using the TorchScript interpreter
+foo(torch.ones(2, 2), torch.ones(2, 2))
+</pre> </dd> <dt><strong>Scripting an nn.Module</strong></dt>
+<dd>
+<p>Scripting an <code>nn.Module</code> by default will compile the <code>forward</code> method and recursively compile any methods, submodules, and functions called by <code>forward</code>. If a <code>nn.Module</code> only uses features supported in TorchScript, no changes to the original module code should be necessary. <code>script</code> will construct <a class="reference internal" href="torch.jit.scriptmodule#torch.jit.ScriptModule" title="torch.jit.ScriptModule"><code>ScriptModule</code></a> that has copies of the attributes, parameters, and methods of the original module.</p> <p>Example (scripting a simple module with a Parameter):</p> <pre data-language="python">import torch
+
+class MyModule(torch.nn.Module):
+    def __init__(self, N, M):
+        super(MyModule, self).__init__()
+        # This parameter will be copied to the new ScriptModule
+        self.weight = torch.nn.Parameter(torch.rand(N, M))
+
+        # When this submodule is used, it will be compiled
+        self.linear = torch.nn.Linear(N, M)
+
+    def forward(self, input):
+        output = self.weight.mv(input)
+
+        # This calls the `forward` method of the `nn.Linear` module, which will
+        # cause the `self.linear` submodule to be compiled to a `ScriptModule` here
+        output = self.linear(output)
+        return output
+
+scripted_module = torch.jit.script(MyModule(2, 3))
+</pre> <p>Example (scripting a module with traced submodules):</p> <pre data-language="python">import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super(MyModule, self).__init__()
+        # torch.jit.trace produces a ScriptModule's conv1 and conv2
+        self.conv1 = torch.jit.trace(nn.Conv2d(1, 20, 5), torch.rand(1, 1, 16, 16))
+        self.conv2 = torch.jit.trace(nn.Conv2d(20, 20, 5), torch.rand(1, 20, 16, 16))
+
+    def forward(self, input):
+        input = F.relu(self.conv1(input))
+        input = F.relu(self.conv2(input))
+        return input
+
+scripted_module = torch.jit.script(MyModule())
+</pre> <p>To compile a method other than <code>forward</code> (and recursively compile anything it calls), add the <a class="reference internal" href="../jit#torch.jit.export" title="torch.jit.export"><code>@torch.jit.export</code></a> decorator to the method. To opt out of compilation use <a class="reference internal" href="torch.jit.ignore#torch.jit.ignore" title="torch.jit.ignore"><code>@torch.jit.ignore</code></a> or <a class="reference internal" href="torch.jit.unused#torch.jit.unused" title="torch.jit.unused"><code>@torch.jit.unused</code></a>.</p> <p>Example (an exported and ignored method in a module):</p> <pre data-language="python">import torch
+import torch.nn as nn
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super(MyModule, self).__init__()
+
+    @torch.jit.export
+    def some_entry_point(self, input):
+        return input + 10
+
+    @torch.jit.ignore
+    def python_only_fn(self, input):
+        # This function won't be compiled, so any
+        # Python APIs can be used
+        import pdb
+        pdb.set_trace()
+
+    def forward(self, input):
+        if self.training:
+            self.python_only_fn(input)
+        return input * 99
+
+scripted_module = torch.jit.script(MyModule())
+print(scripted_module.some_entry_point(torch.randn(2, 2)))
+print(scripted_module(torch.randn(2, 2)))
+</pre> </dd> </dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/generated/torch.jit.script.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/generated/torch.jit.script.html</a>
+  </p>
+</div>

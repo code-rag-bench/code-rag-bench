@@ -1,0 +1,152 @@
+<h1 class="devsite-page-title">tf.function</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/eager/def_function.py#L1331-L1620">  View source on GitHub </a> </td> </table> <p>Compiles a function into a callable TensorFlow graph.</p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/function"><code translate="no" dir="ltr">tf.compat.v1.function</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.function(
+    func=None, input_signature=None, autograph=True, experimental_implements=None,
+    experimental_autograph_options=None, experimental_relax_shapes=False,
+    experimental_compile=None, experimental_follow_type_hints=None
+)
+</pre>  <p><a href="function"><code translate="no" dir="ltr">tf.function</code></a> constructs a callable that executes a TensorFlow graph (<a href="graph"><code translate="no" dir="ltr">tf.Graph</code></a>) created by trace-compiling the TensorFlow operations in <code translate="no" dir="ltr">func</code>, effectively executing <code translate="no" dir="ltr">func</code> as a TensorFlow graph.</p> <h4 id="example_usage" data-text="Example usage:">Example usage:</h4> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x, y):
+  return x ** 2 + y
+x = tf.constant([2, 3])
+y = tf.constant([3, -2])
+f(x, y)
+&lt;tf.Tensor: ... numpy=array([7, 7], ...)&gt;
+</pre> <p><em>Features</em></p> <p><code translate="no" dir="ltr">func</code> may use data-dependent control flow, including <code translate="no" dir="ltr">if</code>, <code translate="no" dir="ltr">for</code>, <code translate="no" dir="ltr">while</code> <code translate="no" dir="ltr">break</code>, <code translate="no" dir="ltr">continue</code> and <code translate="no" dir="ltr">return</code> statements:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x):
+  if tf.reduce_sum(x) &gt; 0:
+    return x * x
+  else:
+    return -x // 2
+f(tf.constant(-2))
+&lt;tf.Tensor: ... numpy=1&gt;
+</pre> <p><code translate="no" dir="ltr">func</code>'s closure may include <a href="tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> and <a href="variable"><code translate="no" dir="ltr">tf.Variable</code></a> objects:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f():
+  return x ** 2 + y
+x = tf.constant([-2, -3])
+y = tf.Variable([3, -2])
+f()
+&lt;tf.Tensor: ... numpy=array([7, 7], ...)&gt;
+</pre> <p><code translate="no" dir="ltr">func</code> may also use ops with side effects, such as <a href="print"><code translate="no" dir="ltr">tf.print</code></a>, <a href="variable"><code translate="no" dir="ltr">tf.Variable</code></a> and others:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+v = tf.Variable(1)
+@tf.function
+def f(x):
+  for i in tf.range(x):
+    v.assign_add(i)
+f(3)
+v
+&lt;tf.Variable ... numpy=4&gt;
+</pre> <aside class="key-point"><strong>Key Point:</strong><span> Any Python side-effects (appending to a list, printing with <code translate="no" dir="ltr">print</code>, etc) will only happen once, when <code translate="no" dir="ltr">func</code> is traced. To have side-effects executed into your <a href="function"><code translate="no" dir="ltr">tf.function</code></a> they need to be written as TF ops:</span></aside> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+l = []
+@tf.function
+def f(x):
+  for i in x:
+    l.append(i + 1)    # Caution! Will only happen once when tracing
+f(tf.constant([1, 2, 3]))
+l
+[&lt;tf.Tensor ...&gt;]
+</pre> <p>Instead, use TensorFlow collections like <a href="tensorarray"><code translate="no" dir="ltr">tf.TensorArray</code></a>:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x):
+  ta = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
+  for i in range(len(x)):
+    ta = ta.write(i, x[i] + 1)
+  return ta.stack()
+f(tf.constant([1, 2, 3]))
+&lt;tf.Tensor: ..., numpy=array([2, 3, 4], ...)&gt;
+</pre> <p><em><a href="function"><code translate="no" dir="ltr">tf.function</code></a> is polymorphic</em></p> <p>Internally, <a href="function"><code translate="no" dir="ltr">tf.function</code></a> can build more than one graph, to support arguments with different data types or shapes, since TensorFlow can build more efficient graphs that are specialized on shapes and dtypes. <a href="function"><code translate="no" dir="ltr">tf.function</code></a> also treats any pure Python value as opaque objects, and builds a separate graph for each set of Python arguments that it encounters.</p> <p>To obtain an individual graph, use the <code translate="no" dir="ltr">get_concrete_function</code> method of the callable created by <a href="function"><code translate="no" dir="ltr">tf.function</code></a>. It can be called with the same arguments as <code translate="no" dir="ltr">func</code> and returns a special <a href="graph"><code translate="no" dir="ltr">tf.Graph</code></a> object:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x):
+  return x + 1
+isinstance(f.get_concrete_function(1).graph, tf.Graph)
+True
+</pre> <aside class="caution"><strong>Caution:</strong><span> Passing python scalars or lists as arguments to <a href="function"><code translate="no" dir="ltr">tf.function</code></a> will always build a new graph. To avoid this, pass numeric arguments as Tensors whenever possible:</span></aside> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x):
+  return tf.abs(x)
+f1 = f.get_concrete_function(1)
+f2 = f.get_concrete_function(2)  # Slow - builds new graph
+f1 is f2
+False
+f1 = f.get_concrete_function(tf.constant(1))
+f2 = f.get_concrete_function(tf.constant(2))  # Fast - reuses f1
+f1 is f2
+True
+</pre> <p>Python numerical arguments should only be used when they take few distinct values, such as hyperparameters like the number of layers in a neural network.</p> <p><em>Input signatures</em></p> <p>For Tensor arguments, <a href="function"><code translate="no" dir="ltr">tf.function</code></a> instantiates a separate graph for every unique set of input shapes and datatypes. The example below creates two separate graphs, each specialized to a different shape:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def f(x):
+  return x + 1
+vector = tf.constant([1.0, 1.0])
+matrix = tf.constant([[3.0]])
+f.get_concrete_function(vector) is f.get_concrete_function(matrix)
+False
+</pre> <p>An "input signature" can be optionally provided to <a href="function"><code translate="no" dir="ltr">tf.function</code></a> to control the graphs traced. The input signature specifies the shape and type of each Tensor argument to the function using a <a href="tensorspec"><code translate="no" dir="ltr">tf.TensorSpec</code></a> object. More general shapes can be used. This is useful to avoid creating multiple graphs when Tensors have dynamic shapes. It also restricts the shape and datatype of Tensors that can be used:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function(
+    input_signature=[tf.TensorSpec(shape=None, dtype=tf.float32)])
+def f(x):
+  return x + 1
+vector = tf.constant([1.0, 1.0])
+matrix = tf.constant([[3.0]])
+f.get_concrete_function(vector) is f.get_concrete_function(matrix)
+True
+</pre> <p><em>Variables may only be created once</em></p> <p><a href="function"><code translate="no" dir="ltr">tf.function</code></a> only allows creating new <a href="variable"><code translate="no" dir="ltr">tf.Variable</code></a> objects when it is called for the first time:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+class MyModule(tf.Module):
+  def __init__(self):
+    self.v = None
+
+  @tf.function
+  def __call__(self, x):
+    if self.v is None:
+      self.v = tf.Variable(tf.ones_like(x))
+    return self.v * x
+</pre> <p>In general, it is recommended to create stateful objects like <a href="variable"><code translate="no" dir="ltr">tf.Variable</code></a> outside of <a href="function"><code translate="no" dir="ltr">tf.function</code></a> and passing them as arguments.</p> <p><em>Using type annotations to improve performance</em></p> <p>'experimental_follow_type_hints` can be used along with type annotations to improve performance by reducing the number of expensive graph retracings. For example, an argument annotated with <a href="tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> is converted to Tensor even when the input is a non-Tensor value.</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function(experimental_follow_type_hints=True)
+def f_with_hints(x: tf.Tensor):
+  print('Tracing')
+  return x
+@tf.function(experimental_follow_type_hints=False)
+def f_no_hints(x: tf.Tensor):
+  print('Tracing')
+  return x
+f_no_hints(1)
+Tracing
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=1&gt;
+f_no_hints(2)
+Tracing
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=2&gt;
+f_with_hints(1)
+Tracing
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=1&gt;
+f_with_hints(2)
+&lt;tf.Tensor: shape=(), dtype=int32, numpy=2&gt;
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">func</code> </td> <td> the function to be compiled. If <code translate="no" dir="ltr">func</code> is None, <a href="function"><code translate="no" dir="ltr">tf.function</code></a> returns a decorator that can be invoked with a single argument - <code translate="no" dir="ltr">func</code>. In other words, <code translate="no" dir="ltr">tf.function(input_signature=...)(func)</code> is equivalent to <a href="function"><code translate="no" dir="ltr">tf.function(func, input_signature=...)</code></a>. The former can be used as decorator. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">input_signature</code> </td> <td> A possibly nested sequence of <a href="tensorspec"><code translate="no" dir="ltr">tf.TensorSpec</code></a> objects specifying the shapes and dtypes of the Tensors that will be supplied to this function. If <code translate="no" dir="ltr">None</code>, a separate function is instantiated for each inferred input signature. If input_signature is specified, every input to <code translate="no" dir="ltr">func</code> must be a <code translate="no" dir="ltr">Tensor</code>, and <code translate="no" dir="ltr">func</code> cannot accept <code translate="no" dir="ltr">**kwargs</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">autograph</code> </td> <td> Whether autograph should be applied on <code translate="no" dir="ltr">func</code> before tracing a graph. Data-dependent control flow requires <code translate="no" dir="ltr">autograph=True</code>. For more information, see the <a href="https://www.tensorflow.org/guide/function">tf.function and AutoGraph guide</a>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">experimental_implements</code> </td> <td> If provided, contains a name of a "known" function this implements. For example "mycompany.my_recurrent_cell". This is stored as an attribute in inference function, which can then be detected when processing serialized function. See <a href="https://github.com/tensorflow/community/blob/master/rfcs/20190610-standardizing-composite_ops.md">standardizing composite ops</a><br> for details. For an example of utilizing this attribute see this <a href="https://github.com/tensorflow/tensorflow/blob/master/tensorflow/compiler/mlir/lite/transforms/prepare_composite_functions_tf.cc">example</a> The code above automatically detects and substitutes function that implements "embedded_matmul" and allows TFLite to substitute its own implementations. For instance, a tensorflow user can use this attribute to mark that their function also implements <code translate="no" dir="ltr">embedded_matmul</code> (perhaps more efficiently!) by specifying it using this parameter: <code translate="no" dir="ltr">@tf.function(experimental_implements="embedded_matmul")</code> This can either be specified as just the string name of the function or a NameAttrList corresponding to a list of key-value attributes associated with the function name. The name of the function will be in the 'name' field of the NameAttrList. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">experimental_autograph_options</code> </td> <td> Optional tuple of <a href="autograph/experimental/feature"><code translate="no" dir="ltr">tf.autograph.experimental.Feature</code></a> values. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">experimental_relax_shapes</code> </td> <td> When True, <a href="function"><code translate="no" dir="ltr">tf.function</code></a> may generate fewer, graphs that are less specialized on input shapes. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">experimental_compile</code> </td> <td> If True, the function is always compiled by <a href="https://www.tensorflow.org/xla">XLA</a>. XLA may be more efficient in some cases (e.g. TPU, XLA_GPU, dense tensor computations). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">experimental_follow_type_hints</code> </td> <td> When True, the function may use type annotations from <code translate="no" dir="ltr">func</code> to optimize the tracing performance. For example, arguments annotated with <a href="tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> will automatically be converted to a Tensor. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> If <code translate="no" dir="ltr">func</code> is not None, returns a callable that will execute the compiled function (and return zero or more <a href="tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> objects). If <code translate="no" dir="ltr">func</code> is None, returns a decorator that, when invoked with a single <code translate="no" dir="ltr">func</code> argument, returns a callable equivalent to the case above. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> <tr class="alt"> <td colspan="2"> ValueError when attempting to use experimental_compile, but XLA support is not enabled. </td> </tr> 
+</table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/function" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/function</a>
+  </p>
+</div>

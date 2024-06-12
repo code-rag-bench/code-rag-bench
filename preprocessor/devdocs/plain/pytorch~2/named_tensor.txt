@@ -1,0 +1,474 @@
+# Named Tensors
+
+Named Tensors allow users to give explicit names to tensor dimensions. In most
+cases, operations that take dimension parameters will accept dimension names,
+avoiding the need to track dimensions by position. In addition, named tensors
+use names to automatically check that APIs are being used correctly at
+runtime, providing extra safety. Names can also be used to rearrange
+dimensions, for example, to support “broadcasting by name” rather than
+“broadcasting by position”.
+
+Warning
+
+The named tensor API is a prototype feature and subject to change.
+
+## Creating named tensors
+
+Factory functions now take a new `names` argument that associates a name with
+each dimension.
+
+    
+    >>> torch.zeros(2, 3, names=('N', 'C'))
+    tensor([[0., 0., 0.],
+            [0., 0., 0.]], names=('N', 'C'))
+    
+Named dimensions, like regular Tensor dimensions, are ordered.
+`tensor.names[i]` is the name of dimension `i` of `tensor`.
+
+The following factory functions support named tensors:
+
+  * `torch.empty()`
+  * `torch.rand()`
+  * `torch.randn()`
+  * `torch.ones()`
+  * `torch.tensor()`
+  * `torch.zeros()`
+
+## Named dimensions
+
+See `names` for restrictions on tensor names.
+
+Use `names` to access the dimension names of a tensor and `rename()` to rename
+named dimensions.
+
+    
+    >>> imgs = torch.randn(1, 2, 2, 3 , names=('N', 'C', 'H', 'W'))
+    >>> imgs.names
+    ('N', 'C', 'H', 'W')
+    
+    >>> renamed_imgs = imgs.rename(H='height', W='width')
+    >>> renamed_imgs.names
+    ('N', 'C', 'height', 'width)
+    
+Named tensors can coexist with unnamed tensors; named tensors are instances of
+`torch.Tensor`. Unnamed tensors have `None`-named dimensions. Named tensors do
+not require all dimensions to be named.
+
+    
+    >>> imgs = torch.randn(1, 2, 2, 3 , names=(None, 'C', 'H', 'W'))
+    >>> imgs.names
+    (None, 'C', 'H', 'W')
+    
+## Name propagation semantics
+
+Named tensors use names to automatically check that APIs are being called
+correctly at runtime. This occurs in a process called name inference. More
+formally, name inference consists of the following two steps:
+
+  * Check names: an operator may perform automatic checks at runtime that check that certain dimension names must match.
+  * Propagate names: name inference propagates names to output tensors.
+
+All operations that support named tensors propagate names.
+
+    
+    >>> x = torch.randn(3, 3, names=('N', 'C'))
+    >>> x.abs().names
+    ('N', 'C')
+    
+### match semantics
+
+Two names match if they are equal (string equality) or if at least one is
+`None`. Nones are essentially a special “wildcard” name.
+
+`unify(A, B)` determines which of the names `A` and `B` to propagate to the
+outputs. It returns the more specific of the two names, if they match. If the
+names do not match, then it errors.
+
+Note
+
+In practice, when working with named tensors, one should avoid having unnamed
+dimensions because their handling can be complicated. It is recommended to
+lift all unnamed dimensions to be named dimensions by using `refine_names()`.
+
+### Basic name inference rules
+
+Let’s see how `match` and `unify` are used in name inference in the case of
+adding two one-dim tensors with no broadcasting.
+
+    
+    x = torch.randn(3, names=('X',))
+    y = torch.randn(3)
+    z = torch.randn(3, names=('Z',))
+    
+Check names: check that the names of the two tensors match.
+
+For the following examples:
+
+    
+    >>> # x + y  # match('X', None) is True
+    >>> # x + z  # match('X', 'Z') is False
+    >>> # x + x  # match('X', 'X') is True
+    
+    >>> x + z
+    Error when attempting to broadcast dims ['X'] and dims ['Z']: dim 'X' and dim 'Z' are at the same position from the right but do not match.
+    
+Propagate names: unify the names to select which one to propagate. In the case
+of `x + y`, `unify('X', None) = 'X'` because `'X'` is more specific than
+`None`.
+
+    
+    >>> (x + y).names
+    ('X',)
+    >>> (x + x).names
+    ('X',)
+    
+For a comprehensive list of name inference rules, see Named Tensors operator
+coverage. Here are two common operations that may be useful to go over:
+
+  * Binary arithmetic ops: Unifies names from inputs
+  * Matrix multiplication ops: Contracts away dims
+
+## Explicit alignment by names
+
+Use `align_as()` or `align_to()` to align tensor dimensions by name to a
+specified ordering. This is useful for performing “broadcasting by names”.
+
+    
+    # This function is agnostic to the dimension ordering of `input`,
+    # as long as it has a `C` dimension somewhere.
+    def scale_channels(input, scale):
+        scale = scale.refine_names('C')
+        return input * scale.align_as(input)
+    
+    >>> num_channels = 3
+    >>> scale = torch.randn(num_channels, names=('C',))
+    >>> imgs = torch.rand(3, 3, 3, num_channels, names=('N', 'H', 'W', 'C'))
+    >>> more_imgs = torch.rand(3, num_channels, 3, 3, names=('N', 'C', 'H', 'W'))
+    >>> videos = torch.randn(3, num_channels, 3, 3, 3, names=('N', 'C', 'H', 'W', 'D')
+    
+    >>> scale_channels(imgs, scale)
+    >>> scale_channels(more_imgs, scale)
+    >>> scale_channels(videos, scale)
+    
+## Manipulating dimensions
+
+Use `align_to()` to permute large amounts of dimensions without mentioning all
+of them as in required by `permute()`.
+
+    
+    >>> tensor = torch.randn(2, 2, 2, 2, 2, 2)
+    >>> named_tensor = tensor.refine_names('A', 'B', 'C', 'D', 'E', 'F')
+    
+    # Move the F (dim 5) and E dimension (dim 4) to the front while keeping
+    # the rest in the same order
+    >>> tensor.permute(5, 4, 0, 1, 2, 3)
+    >>> named_tensor.align_to('F', 'E', ...)
+    
+Use `flatten()` and `unflatten()` to flatten and unflatten dimensions,
+respectively. These methods are more verbose than `view()` and `reshape()`,
+but have more semantic meaning to someone reading the code.
+
+    
+    >>> imgs = torch.randn(32, 3, 128, 128)
+    >>> named_imgs = imgs.refine_names('N', 'C', 'H', 'W')
+    
+    >>> flat_imgs = imgs.view(32, -1)
+    >>> named_flat_imgs = named_imgs.flatten(['C', 'H', 'W'], 'features')
+    >>> named_flat_imgs.names
+    ('N', 'features')
+    
+    >>> unflattened_named_imgs = named_flat_imgs.unflatten('features', [('C', 3), ('H', 128), ('W', 128)])
+    >>> unflattened_named_imgs.names
+    ('N', 'C', 'H', 'W')
+    
+## Autograd support
+
+Autograd currently supports named tensors in a limited manner: autograd
+ignores names on all tensors. Gradient computation is still correct but we
+lose the safety that names give us.
+
+    
+    >>> x = torch.randn(3, names=('D',))
+    >>> weight = torch.randn(3, names=('D',), requires_grad=True)
+    >>> loss = (x - weight).abs()
+    >>> grad_loss = torch.randn(3)
+    >>> loss.backward(grad_loss)
+    >>> weight.grad  # Unnamed for now. Will be named in the future
+    tensor([-1.8107, -0.6357,  0.0783])
+    
+    >>> weight.grad.zero_()
+    >>> grad_loss = grad_loss.refine_names('C')
+    >>> loss = (x - weight).abs()
+    # Ideally we'd check that the names of loss and grad_loss match but we don't yet.
+    >>> loss.backward(grad_loss)
+    >>> weight.grad
+    tensor([-1.8107, -0.6357,  0.0783])
+    
+## Currently supported operations and subsystems
+
+### Operators
+
+See Named Tensors operator coverage for a full list of the supported torch and
+tensor operations. We do not yet support the following that is not covered by
+the link:
+
+  * indexing, advanced indexing.
+
+For `torch.nn.functional` operators, we support the following:
+
+  * `torch.nn.functional.relu()`
+  * `torch.nn.functional.softmax()`
+  * `torch.nn.functional.log_softmax()`
+  * `torch.nn.functional.tanh()`
+  * `torch.nn.functional.sigmoid()`
+  * `torch.nn.functional.dropout()`
+
+### Subsystems
+
+Autograd is supported, see Autograd support. Because gradients are currently
+unnamed, optimizers may work but are untested.
+
+NN modules are currently unsupported. This can lead to the following when
+calling modules with named tensor inputs:
+
+  * NN module parameters are unnamed, so outputs may be partially named.
+  * NN module forward passes have code that don’t support named tensors and will error out appropriately.
+
+We also do not support the following subsystems, though some may work out of
+the box:
+
+  * distributions
+  * serialization (`torch.load()`, `torch.save()`)
+  * multiprocessing
+  * JIT
+  * distributed
+  * ONNX
+
+If any of these would help your use case, please search if an issue has
+already been filed and if not, file one.
+
+## Named tensor API reference
+
+In this section please find the documentation for named tensor specific APIs.
+For a comprehensive reference for how names are propagated through other
+PyTorch operators, see Named Tensors operator coverage.
+
+classtorch.Tensor
+
+    
+`names`
+
+    
+Stores names for each of this tensor’s dimensions.
+
+`names[idx]` corresponds to the name of tensor dimension `idx`. Names are
+either a string if the dimension is named or `None` if the dimension is
+unnamed.
+
+Dimension names may contain characters or underscore. Furthermore, a dimension
+name must be a valid Python variable name (i.e., does not start with
+underscore).
+
+Tensors may not have two named dimensions with the same name.
+
+Warning
+
+The named tensor API is experimental and subject to change.
+
+`rename(*names, **rename_map)` [source]
+
+    
+Renames dimension names of `self`.
+
+There are two main usages:
+
+`self.rename(**rename_map)` returns a view on tensor that has dims renamed as
+specified in the mapping `rename_map`.
+
+`self.rename(*names)` returns a view on tensor, renaming all dimensions
+positionally using `names`. Use `self.rename(None)` to drop names on a tensor.
+
+One cannot specify both positional args `names` and keyword args `rename_map`.
+
+Examples:
+
+    
+    >>> imgs = torch.rand(2, 3, 5, 7, names=('N', 'C', 'H', 'W'))
+    >>> renamed_imgs = imgs.rename(N='batch', C='channels')
+    >>> renamed_imgs.names
+    ('batch', 'channels', 'H', 'W')
+    
+    >>> renamed_imgs = imgs.rename(None)
+    >>> renamed_imgs.names
+    (None, None, None, None)
+    
+    >>> renamed_imgs = imgs.rename('batch', 'channel', 'height', 'width')
+    >>> renamed_imgs.names
+    ('batch', 'channel', 'height', 'width')
+    
+Warning
+
+The named tensor API is experimental and subject to change.
+
+`rename_(*names, **rename_map)` [source]
+
+    
+In-place version of `rename()`.
+
+`refine_names(*names)` [source]
+
+    
+Refines the dimension names of `self` according to `names`.
+
+Refining is a special case of renaming that “lifts” unnamed dimensions. A
+`None` dim can be refined to have any name; a named dim can only be refined to
+have the same name.
+
+Because named tensors can coexist with unnamed tensors, refining names gives a
+nice way to write named-tensor-aware code that works with both named and
+unnamed tensors.
+
+`names` may contain up to one Ellipsis (`...`). The Ellipsis is expanded
+greedily; it is expanded in-place to fill `names` to the same length as
+`self.dim()` using names from the corresponding indices of `self.names`.
+
+Python 2 does not support Ellipsis but one may use a string literal instead
+(`'...'`).
+
+Parameters
+
+    
+names (iterable of str) – The desired names of the output tensor. May contain
+up to one Ellipsis.
+
+Examples:
+
+    
+    >>> imgs = torch.randn(32, 3, 128, 128)
+    >>> named_imgs = imgs.refine_names('N', 'C', 'H', 'W')
+    >>> named_imgs.names
+    ('N', 'C', 'H', 'W')
+    
+    >>> tensor = torch.randn(2, 3, 5, 7, 11)
+    >>> tensor = tensor.refine_names('A', ..., 'B', 'C')
+    >>> tensor.names
+    ('A', None, None, 'B', 'C')
+    
+Warning
+
+The named tensor API is experimental and subject to change.
+
+`align_as(other) → Tensor`
+
+    
+Permutes the dimensions of the `self` tensor to match the dimension order in
+the `other` tensor, adding size-one dims for any new names.
+
+This operation is useful for explicit broadcasting by names (see examples).
+
+All of the dims of `self` must be named in order to use this method. The
+resulting tensor is a view on the original tensor.
+
+All dimension names of `self` must be present in `other.names`. `other` may
+contain named dimensions that are not in `self.names`; the output tensor has a
+size-one dimension for each of those new names.
+
+To align a tensor to a specific order, use `align_to()`.
+
+Examples:
+
+    
+    # Example 1: Applying a mask
+    >>> mask = torch.randint(2, [127, 128], dtype=torch.bool).refine_names('W', 'H')
+    >>> imgs = torch.randn(32, 128, 127, 3, names=('N', 'H', 'W', 'C'))
+    >>> imgs.masked_fill_(mask.align_as(imgs), 0)
+    
+    
+    # Example 2: Applying a per-channel-scale
+    >>> def scale_channels(input, scale):
+    >>>    scale = scale.refine_names('C')
+    >>>    return input * scale.align_as(input)
+    
+    >>> num_channels = 3
+    >>> scale = torch.randn(num_channels, names=('C',))
+    >>> imgs = torch.rand(32, 128, 128, num_channels, names=('N', 'H', 'W', 'C'))
+    >>> more_imgs = torch.rand(32, num_channels, 128, 128, names=('N', 'C', 'H', 'W'))
+    >>> videos = torch.randn(3, num_channels, 128, 128, 128, names=('N', 'C', 'H', 'W', 'D'))
+    
+    # scale_channels is agnostic to the dimension order of the input
+    >>> scale_channels(imgs, scale)
+    >>> scale_channels(more_imgs, scale)
+    >>> scale_channels(videos, scale)
+    
+Warning
+
+The named tensor API is experimental and subject to change.
+
+`align_to(*names)` [source]
+
+    
+Permutes the dimensions of the `self` tensor to match the order specified in
+`names`, adding size-one dims for any new names.
+
+All of the dims of `self` must be named in order to use this method. The
+resulting tensor is a view on the original tensor.
+
+All dimension names of `self` must be present in `names`. `names` may contain
+additional names that are not in `self.names`; the output tensor has a size-
+one dimension for each of those new names.
+
+`names` may contain up to one Ellipsis (`...`). The Ellipsis is expanded to be
+equal to all dimension names of `self` that are not mentioned in `names`, in
+the order that they appear in `self`.
+
+Python 2 does not support Ellipsis but one may use a string literal instead
+(`'...'`).
+
+Parameters
+
+    
+names (iterable of str) – The desired dimension ordering of the output tensor.
+May contain up to one Ellipsis that is expanded to all unmentioned dim names
+of `self`.
+
+Examples:
+
+    
+    >>> tensor = torch.randn(2, 2, 2, 2, 2, 2)
+    >>> named_tensor = tensor.refine_names('A', 'B', 'C', 'D', 'E', 'F')
+    
+    # Move the F and E dims to the front while keeping the rest in order
+    >>> named_tensor.align_to('F', 'E', ...)
+    
+Warning
+
+The named tensor API is experimental and subject to change.
+
+flatten(dims, out_dim) → Tensor
+
+    
+Flattens `dims` into a single dimension with name `out_dim`.
+
+All of `dims` must be consecutive in order in the `self` tensor, but not
+necessary contiguous in memory.
+
+Examples:
+
+    
+    >>> imgs = torch.randn(32, 3, 128, 128, names=('N', 'C', 'H', 'W'))
+    >>> flat_imgs = imgs.flatten(['C', 'H', 'W'], 'features')
+    >>> flat_imgs.names, flat_imgs.shape
+    (('N', 'features'), torch.Size([32, 49152]))
+    
+Warning
+
+The named tensor API is experimental and subject to change.
+
+© 2024, PyTorch Contributors  
+PyTorch has a BSD-style license, as found in the LICENSE file.  
+https://pytorch.org/docs/2.1/named_tensor.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

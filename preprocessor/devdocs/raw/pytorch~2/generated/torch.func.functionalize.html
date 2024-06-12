@@ -1,0 +1,96 @@
+<h1 id="torch-func-functionalize">torch.func.functionalize</h1> <dl class="py function"> <dt class="sig sig-object py" id="torch.func.functionalize">
+<code>torch.func.functionalize(func, *, remove='mutations')</code> </dt> <dd>
+<p>functionalize is a transform that can be used to remove (intermediate) mutations and aliasing from a function, while preserving the function’s semantics.</p> <p><code>functionalize(func)</code> returns a new function with the same semantics as <code>func</code>, but with all intermediate mutations removed. Every inplace operation performed on an intermediate tensor: <code>intermediate.foo_()</code> gets replaced by its out-of-place equivalent: <code>intermediate_updated = intermediate.foo()</code>.</p> <p>functionalize is useful for shipping a pytorch program off to backends or compilers that aren’t able to easily represent mutations or aliasing operators.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>func</strong> (<em>Callable</em>) – A Python function that takes one or more arguments.</li> <li>
+<strong>remove</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – An optional string argument, that takes on either the value ‘mutations’ or ‘mutations_and_views’. If ‘mutations’ is passed in then all mutating operators will be replaced with their non-mutating equivalents. If ‘mutations_and_views’ is passed in, then additionally, all aliasing operators will be replaced with their non-aliasing equivalents. Default: ‘mutations’.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a new “functionalized” function. It takes the same inputs as <code>func</code>, and has the same behavior, but any mutations (and optionally aliasing) performed on intermeidate tensors in the function will be removed.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a></p> </dd> </dl> <p>functionalize will also remove mutations (and views) that were performed on function inputs. However to preserve semantics, functionalize will “fix up” the mutations after the transform has finished running, by detecting if any tensor inputs “should have” been mutated, and copying the new data back to the inputs if necessary.</p> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import torch
+&gt;&gt;&gt; from torch.fx.experimental.proxy_tensor import make_fx
+&gt;&gt;&gt; from torch.func import functionalize
+&gt;&gt;&gt;
+&gt;&gt;&gt; # A function that uses mutations and views, but only on intermediate tensors.
+&gt;&gt;&gt; def f(a):
+...     b = a + 1
+...     c = b.view(-1)
+...     c.add_(1)
+...     return b
+...
+&gt;&gt;&gt; inpt = torch.randn(2)
+&gt;&gt;&gt;
+&gt;&gt;&gt; out1 = f(inpt)
+&gt;&gt;&gt; out2 = functionalize(f)(inpt)
+&gt;&gt;&gt;
+&gt;&gt;&gt; # semantics are the same (outputs are equivalent)
+&gt;&gt;&gt; print(torch.allclose(out1, out2))
+True
+&gt;&gt;&gt;
+&gt;&gt;&gt; f_traced = make_fx(f)(inpt)
+&gt;&gt;&gt; f_no_mutations_traced = make_fx(functionalize(f))(inpt)
+&gt;&gt;&gt; f_no_mutations_and_views_traced = make_fx(functionalize(f, remove='mutations_and_views'))(inpt)
+&gt;&gt;&gt;
+&gt;&gt;&gt; print(f_traced.code)
+
+
+
+def forward(self, a_1):
+    add = torch.ops.aten.add(a_1, 1);  a_1 = None
+    view = torch.ops.aten.view(add, [-1])
+    add_ = torch.ops.aten.add_(view, 1);  view = None
+    return add
+
+&gt;&gt;&gt; print(f_no_mutations_traced.code)
+
+
+
+def forward(self, a_1):
+    add = torch.ops.aten.add(a_1, 1);  a_1 = None
+    view = torch.ops.aten.view(add, [-1]);  add = None
+    add_1 = torch.ops.aten.add(view, 1);  view = None
+    view_1 = torch.ops.aten.view(add_1, [2]);  add_1 = None
+    return view_1
+
+&gt;&gt;&gt; print(f_no_mutations_and_views_traced.code)
+
+
+
+def forward(self, a_1):
+    add = torch.ops.aten.add(a_1, 1);  a_1 = None
+    view_copy = torch.ops.aten.view_copy(add, [-1]);  add = None
+    add_1 = torch.ops.aten.add(view_copy, 1);  view_copy = None
+    view_copy_1 = torch.ops.aten.view_copy(add_1, [2]);  add_1 = None
+    return view_copy_1
+
+
+&gt;&gt;&gt; # A function that mutates its input tensor
+&gt;&gt;&gt; def f(a):
+...     b = a.view(-1)
+...     b.add_(1)
+...     return a
+...
+&gt;&gt;&gt; f_no_mutations_and_views_traced = make_fx(functionalize(f, remove='mutations_and_views'))(inpt)
+&gt;&gt;&gt; #
+&gt;&gt;&gt; # All mutations and views have been removed,
+&gt;&gt;&gt; # but there is an extra copy_ in the graph to correctly apply the mutation to the input
+&gt;&gt;&gt; # after the function has completed.
+&gt;&gt;&gt; print(f_no_mutations_and_views_traced.code)
+
+
+
+def forward(self, a_1):
+    view_copy = torch.ops.aten.view_copy(a_1, [-1])
+    add = torch.ops.aten.add(view_copy, 1);  view_copy = None
+    view_copy_1 = torch.ops.aten.view_copy(add, [2]);  add = None
+    copy_ = torch.ops.aten.copy_(a_1, view_copy_1);  a_1 = None
+    return view_copy_1
+</pre> <dl class="simple"> <dt>There are a few “failure modes” for functionalize that are worth calling out:</dt>
+<dd>
+<ol class="arabic simple"> <li>Like other torch.func transforms, <code>functionalize()</code> doesn’t work with functions that directly use <code>.backward()</code>. The same is true for torch.autograd.grad. If you want to use autograd, you can compute gradients directly with <code>functionalize(grad(f))</code>.</li> <li>Like other torch.func transforms, <code>functionalize()</code> doesn’t work with global state. If you call <code>functionalize(f)</code> on a function that takes views / mutations of non-local state, functionalization will simply no-op and pass the view/mutation calls directly to the backend. One way to work around this is is to ensure that any non-local state creation is wrapped into a larger function, which you then call functionalize on.</li> <li>
+<code>resize_()</code> has some limitations: functionalize will only work on programs that use resize_()` as long as the tensor being resized is not a view.</li> <li>
+<code>as_strided()</code> has some limitations: functionalize will not work on <code>as_strided()</code> calls that result in tensors with overlapping memory.</li> </ol> </dd> </dl> <p>Finally, a helpful mental model for understanding functionalization is that most user pytorch programs are writting with the public torch API. When executed, torch operators are generally decomposed into our internal C++ “ATen” API. The logic for functionalization happens entirely at the level of ATen. Functionalization knows how to take every aliasing operator in ATen, and map it to its non-aliasing equivalent (e.g. <code>tensor.view({-1})</code> -&gt; <code>at::view_copy(tensor, {-1})</code>), and how to take every mutating operator in ATen, and map it to its non-mutating equivalent (e.g. <code>tensor.add_(1)</code> -&gt; <code>at::add(tensor, -1)</code>), while tracking aliases and mutations out-of-line to know when to fix things up. Information about which ATen operators are aliasing or mutating all comes from <a class="reference external" href="https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/native_functions.yaml">https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/native/native_functions.yaml</a>.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/generated/torch.func.functionalize.html" class="_attribution-link">https://pytorch.org/docs/2.1/generated/torch.func.functionalize.html</a>
+  </p>
+</div>

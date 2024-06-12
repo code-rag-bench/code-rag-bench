@@ -1,0 +1,319 @@
+# torch.hub
+
+Pytorch Hub is a pre-trained model repository designed to facilitate research
+reproducibility.
+
+## Publishing models
+
+Pytorch Hub supports publishing pre-trained models(model definitions and pre-
+trained weights) to a GitHub repository by adding a simple `hubconf.py` file;
+
+`hubconf.py` can have multiple entrypoints. Each entrypoint is defined as a
+python function (example: a pre-trained model you want to publish).
+
+    
+    def entrypoint_name(*args, **kwargs):
+        # args & kwargs are optional, for models which take positional/keyword arguments.
+        ...
+    
+### How to implement an entrypoint?
+
+Here is a code snippet specifies an entrypoint for `resnet18` model if we
+expand the implementation in `pytorch/vision/hubconf.py`. In most case
+importing the right function in `hubconf.py` is sufficient. Here we just want
+to use the expanded version as an example to show how it works. You can see
+the full script in pytorch/vision repo
+
+    
+    dependencies = ['torch']
+    from torchvision.models.resnet import resnet18 as _resnet18
+    
+    # resnet18 is the name of entrypoint
+    def resnet18(pretrained=False, **kwargs):
+        """ # This docstring shows up in hub.help()
+        Resnet18 model
+        pretrained (bool): kwargs, load pretrained weights into the model
+        """
+        # Call the model, load pretrained weights
+        model = _resnet18(pretrained=pretrained, **kwargs)
+        return model
+    
+  * `dependencies` variable is a list of package names required to load the model. Note this might be slightly different from dependencies required for training a model.
+  * `args` and `kwargs` are passed along to the real callable function.
+  * Docstring of the function works as a help message. It explains what does the model do and what are the allowed positional/keyword arguments. It’s highly recommended to add a few examples here.
+  * Entrypoint function can either return a model(nn.module), or auxiliary tools to make the user workflow smoother, e.g. tokenizers.
+  * Callables prefixed with underscore are considered as helper functions which won’t show up in `torch.hub.list()`.
+  * Pretrained weights can either be stored locally in the GitHub repo, or loadable by `torch.hub.load_state_dict_from_url()`. If less than 2GB, it’s recommended to attach it to a project release and use the url from the release. In the example above `torchvision.models.resnet.resnet18` handles `pretrained`, alternatively you can put the following logic in the entrypoint definition.
+
+    
+    if pretrained:
+        # For checkpoint saved in local GitHub repo, e.g. <RELATIVE_PATH_TO_CHECKPOINT>=weights/save.pth
+        dirname = os.path.dirname(__file__)
+        checkpoint = os.path.join(dirname, <RELATIVE_PATH_TO_CHECKPOINT>)
+        state_dict = torch.load(checkpoint)
+        model.load_state_dict(state_dict)
+    
+        # For checkpoint saved elsewhere
+        checkpoint = 'https://download.pytorch.org/models/resnet18-5c106cde.pth'
+        model.load_state_dict(torch.hub.load_state_dict_from_url(checkpoint, progress=False))
+    
+### Important Notice
+
+  * The published models should be at least in a branch/tag. It can’t be a random commit.
+
+## Loading models from Hub
+
+Pytorch Hub provides convenient APIs to explore all available models in hub
+through `torch.hub.list()`, show docstring and examples through
+`torch.hub.help()` and load the pre-trained models using `torch.hub.load()`.
+
+`torch.hub.list(github, force_reload=False, skip_validation=False,
+trust_repo=None)` [source]
+
+    
+List all callable entrypoints available in the repo specified by `github`.
+
+Parameters
+
+    
+  * github (str) – a string with format “repo_owner/repo_name[:ref]” with an optional ref (tag or branch). If `ref` is not specified, the default branch is assumed to be `main` if it exists, and otherwise `master`. Example: ‘pytorch/vision:0.10’
+  * force_reload (bool, optional) – whether to discard the existing cache and force a fresh download. Default is `False`.
+  * skip_validation (bool, optional) – if `False`, torchhub will check that the branch or commit specified by the `github` argument properly belongs to the repo owner. This will make requests to the GitHub API; you can specify a non-default GitHub token by setting the `GITHUB_TOKEN` environment variable. Default is `False`.
+  * trust_repo (bool, str or None) – 
+`"check"`, `True`, `False` or `None`. This parameter was introduced in v1.12
+and helps ensuring that users only run code from repos that they trust.
+
+    * If `False`, a prompt will ask the user whether the repo should be trusted.
+    * If `True`, the repo will be added to the trusted list and loaded without requiring explicit confirmation.
+    * If `"check"`, the repo will be checked against the list of trusted repos in the cache. If it is not present in that list, the behaviour will fall back onto the `trust_repo=False` option.
+    * If `None`: this will raise a warning, inviting the user to set `trust_repo` to either `False`, `True` or `"check"`. This is only present for backward compatibility and will be removed in v2.0.
+Default is `None` and will eventually change to `"check"` in v2.0.
+
+Returns
+
+    
+The available callables entrypoint
+
+Return type
+
+    
+list
+
+#### Example
+
+    
+    >>> entrypoints = torch.hub.list('pytorch/vision', force_reload=True)
+    
+`torch.hub.help(github, model, force_reload=False, skip_validation=False,
+trust_repo=None)` [source]
+
+    
+Show the docstring of entrypoint `model`.
+
+Parameters
+
+    
+  * github (str) – a string with format <repo_owner/repo_name[:ref]> with an optional ref (a tag or a branch). If `ref` is not specified, the default branch is assumed to be `main` if it exists, and otherwise `master`. Example: ‘pytorch/vision:0.10’
+  * model (str) – a string of entrypoint name defined in repo’s `hubconf.py`
+  * force_reload (bool, optional) – whether to discard the existing cache and force a fresh download. Default is `False`.
+  * skip_validation (bool, optional) – if `False`, torchhub will check that the ref specified by the `github` argument properly belongs to the repo owner. This will make requests to the GitHub API; you can specify a non-default GitHub token by setting the `GITHUB_TOKEN` environment variable. Default is `False`.
+  * trust_repo (bool, str or None) – 
+`"check"`, `True`, `False` or `None`. This parameter was introduced in v1.12
+and helps ensuring that users only run code from repos that they trust.
+
+    * If `False`, a prompt will ask the user whether the repo should be trusted.
+    * If `True`, the repo will be added to the trusted list and loaded without requiring explicit confirmation.
+    * If `"check"`, the repo will be checked against the list of trusted repos in the cache. If it is not present in that list, the behaviour will fall back onto the `trust_repo=False` option.
+    * If `None`: this will raise a warning, inviting the user to set `trust_repo` to either `False`, `True` or `"check"`. This is only present for backward compatibility and will be removed in v2.0.
+Default is `None` and will eventually change to `"check"` in v2.0.
+
+#### Example
+
+    
+    >>> print(torch.hub.help('pytorch/vision', 'resnet18', force_reload=True))
+    
+`torch.hub.load(repo_or_dir, model, *args, source='github', trust_repo=None,
+force_reload=False, verbose=True, skip_validation=False, **kwargs)` [source]
+
+    
+Load a model from a github repo or a local directory.
+
+Note: Loading a model is the typical use case, but this can also be used to
+for loading other objects such as tokenizers, loss functions, etc.
+
+If `source` is ‘github’, `repo_or_dir` is expected to be of the form
+`repo_owner/repo_name[:ref]` with an optional ref (a tag or a branch).
+
+If `source` is ‘local’, `repo_or_dir` is expected to be a path to a local
+directory.
+
+Parameters
+
+    
+  * repo_or_dir (str) – If `source` is ‘github’, this should correspond to a github repo with format `repo_owner/repo_name[:ref]` with an optional ref (tag or branch), for example ‘pytorch/vision:0.10’. If `ref` is not specified, the default branch is assumed to be `main` if it exists, and otherwise `master`. If `source` is ‘local’ then it should be a path to a local directory.
+  * model (str) – the name of a callable (entrypoint) defined in the repo/dir’s `hubconf.py`.
+  * *args (optional) – the corresponding args for callable `model`.
+  * source (str, optional) – ‘github’ or ‘local’. Specifies how `repo_or_dir` is to be interpreted. Default is ‘github’.
+  * trust_repo (bool, str or None) – 
+`"check"`, `True`, `False` or `None`. This parameter was introduced in v1.12
+and helps ensuring that users only run code from repos that they trust.
+
+    * If `False`, a prompt will ask the user whether the repo should be trusted.
+    * If `True`, the repo will be added to the trusted list and loaded without requiring explicit confirmation.
+    * If `"check"`, the repo will be checked against the list of trusted repos in the cache. If it is not present in that list, the behaviour will fall back onto the `trust_repo=False` option.
+    * If `None`: this will raise a warning, inviting the user to set `trust_repo` to either `False`, `True` or `"check"`. This is only present for backward compatibility and will be removed in v2.0.
+Default is `None` and will eventually change to `"check"` in v2.0.
+
+  * force_reload (bool, optional) – whether to force a fresh download of the github repo unconditionally. Does not have any effect if `source = 'local'`. Default is `False`.
+  * verbose (bool, optional) – If `False`, mute messages about hitting local caches. Note that the message about first download cannot be muted. Does not have any effect if `source = 'local'`. Default is `True`.
+  * skip_validation (bool, optional) – if `False`, torchhub will check that the branch or commit specified by the `github` argument properly belongs to the repo owner. This will make requests to the GitHub API; you can specify a non-default GitHub token by setting the `GITHUB_TOKEN` environment variable. Default is `False`.
+  * **kwargs (optional) – the corresponding kwargs for callable `model`.
+
+Returns
+
+    
+The output of the `model` callable when called with the given `*args` and
+`**kwargs`.
+
+#### Example
+
+    
+    >>> # from a github repo
+    >>> repo = 'pytorch/vision'
+    >>> model = torch.hub.load(repo, 'resnet50', weights='ResNet50_Weights.IMAGENET1K_V1')
+    >>> # from a local directory
+    >>> path = '/some/local/path/pytorch/vision'
+    >>> model = torch.hub.load(path, 'resnet50', weights='ResNet50_Weights.DEFAULT')
+    
+`torch.hub.download_url_to_file(url, dst, hash_prefix=None, progress=True)`
+[source]
+
+    
+Download object at the given URL to a local path.
+
+Parameters
+
+    
+  * url (str) – URL of the object to download
+  * dst (str) – Full path where object will be saved, e.g. `/tmp/temporary_file`
+  * hash_prefix (str, optional) – If not None, the SHA256 downloaded file should start with `hash_prefix`. Default: None
+  * progress (bool, optional) – whether or not to display a progress bar to stderr Default: True
+
+#### Example
+
+    
+    >>> torch.hub.download_url_to_file('https://s3.amazonaws.com/pytorch/models/resnet18-5c106cde.pth', '/tmp/temporary_file')
+    
+`torch.hub.load_state_dict_from_url(url, model_dir=None, map_location=None,
+progress=True, check_hash=False, file_name=None, weights_only=False)` [source]
+
+    
+Loads the Torch serialized object at the given URL.
+
+If downloaded file is a zip file, it will be automatically decompressed.
+
+If the object is already present in `model_dir`, it’s deserialized and
+returned. The default value of `model_dir` is `<hub_dir>/checkpoints` where
+`hub_dir` is the directory returned by `get_dir()`.
+
+Parameters
+
+    
+  * url (str) – URL of the object to download
+  * model_dir (str, optional) – directory in which to save the object
+  * map_location (optional) – a function or a dict specifying how to remap storage locations (see torch.load)
+  * progress (bool, optional) – whether or not to display a progress bar to stderr. Default: True
+  * check_hash (bool, optional) – If True, the filename part of the URL should follow the naming convention `filename-<sha256>.ext` where `<sha256>` is the first eight or more digits of the SHA256 hash of the contents of the file. The hash is used to ensure unique names and to verify the contents of the file. Default: False
+  * file_name (str, optional) – name for the downloaded file. Filename from `url` will be used if not set.
+  * weights_only (bool, optional) – If True, only weights will be loaded and no complex pickled objects. Recommended for untrusted sources. See `load()` for more details.
+
+Return type
+
+    
+Dict[str, Any]
+
+#### Example
+
+    
+    >>> state_dict = torch.hub.load_state_dict_from_url('https://s3.amazonaws.com/pytorch/models/resnet18-5c106cde.pth')
+    
+### Running a loaded model:
+
+Note that `*args` and `**kwargs` in `torch.hub.load()` are used to instantiate
+a model. After you have loaded a model, how can you find out what you can do
+with the model? A suggested workflow is
+
+  * `dir(model)` to see all available methods of the model.
+  * `help(model.foo)` to check what arguments `model.foo` takes to run
+
+To help users explore without referring to documentation back and forth, we
+strongly recommend repo owners make function help messages clear and succinct.
+It’s also helpful to include a minimal working example.
+
+### Where are my downloaded models saved?
+
+The locations are used in the order of
+
+  * Calling `hub.set_dir(<PATH_TO_HUB_DIR>)`
+  * `$TORCH_HOME/hub`, if environment variable `TORCH_HOME` is set.
+  * `$XDG_CACHE_HOME/torch/hub`, if environment variable `XDG_CACHE_HOME` is set.
+  * `~/.cache/torch/hub`
+
+`torch.hub.get_dir()` [source]
+
+    
+Get the Torch Hub cache directory used for storing downloaded models &
+weights.
+
+If `set_dir()` is not called, default path is `$TORCH_HOME/hub` where
+environment variable `$TORCH_HOME` defaults to `$XDG_CACHE_HOME/torch`.
+`$XDG_CACHE_HOME` follows the X Design Group specification of the Linux
+filesystem layout, with a default value `~/.cache` if the environment variable
+is not set.
+
+`torch.hub.set_dir(d)` [source]
+
+    
+Optionally set the Torch Hub directory used to save downloaded models &
+weights.
+
+Parameters
+
+    
+d (str) – path to a local folder to save downloaded models & weights.
+
+### Caching logic
+
+By default, we don’t clean up files after loading it. Hub uses the cache by
+default if it already exists in the directory returned by `get_dir()`.
+
+Users can force a reload by calling `hub.load(..., force_reload=True)`. This
+will delete the existing GitHub folder and downloaded weights, reinitialize a
+fresh download. This is useful when updates are published to the same branch,
+users can keep up with the latest release.
+
+### Known limitations:
+
+Torch hub works by importing the package as if it was installed. There are
+some side effects introduced by importing in Python. For example, you can see
+new items in Python caches `sys.modules` and `sys.path_importer_cache` which
+is normal Python behavior. This also means that you may have import errors
+when importing different models from different repos, if the repos have the
+same sub-package names (typically, a `model` subpackage). A workaround for
+these kinds of import errors is to remove the offending sub-package from the
+`sys.modules` dict; more details can be found in this GitHub issue.
+
+A known limitation that is worth mentioning here: users CANNOT load two
+different branches of the same repo in the same python process. It’s just like
+installing two packages with the same name in Python, which is not good. Cache
+might join the party and give you surprises if you actually try that. Of
+course it’s totally fine to load them in separate processes.
+
+© 2024, PyTorch Contributors  
+PyTorch has a BSD-style license, as found in the LICENSE file.  
+https://pytorch.org/docs/2.1/hub.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

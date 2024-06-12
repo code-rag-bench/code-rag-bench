@@ -1,0 +1,719 @@
+<h1 id="id1">Structured arrays</h1> <section id="introduction"> <h2>Introduction</h2> <p>Structured arrays are ndarrays whose datatype is a composition of simpler datatypes organized as a sequence of named <a class="reference internal" href="../glossary#term-field"><span class="xref std std-term">fields</span></a>. For example,</p> <pre data-language="python">&gt;&gt;&gt; x = np.array([('Rex', 9, 81.0), ('Fido', 3, 27.0)],
+...              dtype=[('name', 'U10'), ('age', 'i4'), ('weight', 'f4')])
+&gt;&gt;&gt; x
+array([('Rex', 9, 81.), ('Fido', 3, 27.)],
+      dtype=[('name', 'U10'), ('age', '&lt;i4'), ('weight', '&lt;f4')])
+</pre> <p>Here <code>x</code> is a one-dimensional array of length two whose datatype is a structure with three fields: 1. A string of length 10 or less named ‘name’, 2. a 32-bit integer named ‘age’, and 3. a 32-bit float named ‘weight’.</p> <p>If you index <code>x</code> at position 1 you get a structure:</p> <pre data-language="python">&gt;&gt;&gt; x[1]
+('Fido', 3, 27.0)
+</pre> <p>You can access and modify individual fields of a structured array by indexing with the field name:</p> <pre data-language="python">&gt;&gt;&gt; x['age']
+array([9, 3], dtype=int32)
+&gt;&gt;&gt; x['age'] = 5
+&gt;&gt;&gt; x
+array([('Rex', 5, 81.), ('Fido', 5, 27.)],
+      dtype=[('name', 'U10'), ('age', '&lt;i4'), ('weight', '&lt;f4')])
+</pre> <p>Structured datatypes are designed to be able to mimic ‘structs’ in the C language, and share a similar memory layout. They are meant for interfacing with C code and for low-level manipulation of structured buffers, for example for interpreting binary blobs. For these purposes they support specialized features such as subarrays, nested datatypes, and unions, and allow control over the memory layout of the structure.</p> <p>Users looking to manipulate tabular data, such as stored in csv files, may find other pydata projects more suitable, such as xarray, pandas, or DataArray. These provide a high-level interface for tabular data analysis and are better optimized for that use. For instance, the C-struct-like memory layout of structured arrays in numpy can lead to poor cache behavior in comparison.</p> </section> <section id="structured-datatypes"> <h2 id="defining-structured-types">Structured Datatypes</h2> <p>A structured datatype can be thought of as a sequence of bytes of a certain length (the structure’s <a class="reference internal" href="../glossary#term-itemsize"><span class="xref std std-term">itemsize</span></a>) which is interpreted as a collection of fields. Each field has a name, a datatype, and a byte offset within the structure. The datatype of a field may be any numpy datatype including other structured datatypes, and it may also be a <a class="reference internal" href="../glossary#term-subarray-data-type"><span class="xref std std-term">subarray data type</span></a> which behaves like an ndarray of a specified shape. The offsets of the fields are arbitrary, and fields may even overlap. These offsets are usually determined automatically by numpy, but can also be specified.</p> <section id="structured-datatype-creation"> <h3>Structured Datatype Creation</h3> <p>Structured datatypes may be created using the function <a class="reference internal" href="../reference/generated/numpy.dtype#numpy.dtype" title="numpy.dtype"><code>numpy.dtype</code></a>. There are 4 alternative forms of specification which vary in flexibility and conciseness. These are further documented in the <a class="reference internal" href="../reference/arrays.dtypes#arrays-dtypes-constructing"><span class="std std-ref">Data Type Objects</span></a> reference page, and in summary they are:</p> <ol class="arabic"> <li>
+<p>A list of tuples, one tuple per field</p> <p>Each tuple has the form <code>(fieldname, datatype, shape)</code> where shape is optional. <code>fieldname</code> is a string (or tuple if titles are used, see <a class="reference internal" href="#titles"><span class="std std-ref">Field Titles</span></a> below), <code>datatype</code> may be any object convertible to a datatype, and <code>shape</code> is a tuple of integers specifying subarray shape.</p> <pre data-language="python">&gt;&gt;&gt; np.dtype([('x', 'f4'), ('y', np.float32), ('z', 'f4', (2, 2))])
+dtype([('x', '&lt;f4'), ('y', '&lt;f4'), ('z', '&lt;f4', (2, 2))])
+</pre> <p>If <code>fieldname</code> is the empty string <code>''</code>, the field will be given a default name of the form <code>f#</code>, where <code>#</code> is the integer index of the field, counting from 0 from the left:</p> <pre data-language="python">&gt;&gt;&gt; np.dtype([('x', 'f4'), ('', 'i4'), ('z', 'i8')])
+dtype([('x', '&lt;f4'), ('f1', '&lt;i4'), ('z', '&lt;i8')])
+</pre> <p>The byte offsets of the fields within the structure and the total structure itemsize are determined automatically.</p> </li> <li>
+<p>A string of comma-separated dtype specifications</p> <p>In this shorthand notation any of the <a class="reference internal" href="../reference/arrays.dtypes#arrays-dtypes-constructing"><span class="std std-ref">string dtype specifications</span></a> may be used in a string and separated by commas. The itemsize and byte offsets of the fields are determined automatically, and the field names are given the default names <code>f0</code>, <code>f1</code>, etc.</p> <pre data-language="python">&gt;&gt;&gt; np.dtype('i8, f4, S3')
+dtype([('f0', '&lt;i8'), ('f1', '&lt;f4'), ('f2', 'S3')])
+&gt;&gt;&gt; np.dtype('3int8, float32, (2, 3)float64')
+dtype([('f0', 'i1', (3,)), ('f1', '&lt;f4'), ('f2', '&lt;f8', (2, 3))])
+</pre> </li> <li>
+<p>A dictionary of field parameter arrays</p> <p>This is the most flexible form of specification since it allows control over the byte-offsets of the fields and the itemsize of the structure.</p> <p>The dictionary has two required keys, ‘names’ and ‘formats’, and four optional keys, ‘offsets’, ‘itemsize’, ‘aligned’ and ‘titles’. The values for ‘names’ and ‘formats’ should respectively be a list of field names and a list of dtype specifications, of the same length. The optional ‘offsets’ value should be a list of integer byte-offsets, one for each field within the structure. If ‘offsets’ is not given the offsets are determined automatically. The optional ‘itemsize’ value should be an integer describing the total size in bytes of the dtype, which must be large enough to contain all the fields.</p> <pre data-language="python">&gt;&gt;&gt; np.dtype({'names': ['col1', 'col2'], 'formats': ['i4', 'f4']})
+dtype([('col1', '&lt;i4'), ('col2', '&lt;f4')])
+&gt;&gt;&gt; np.dtype({'names': ['col1', 'col2'],
+...           'formats': ['i4', 'f4'],
+...           'offsets': [0, 4],
+...           'itemsize': 12})
+dtype({'names': ['col1', 'col2'], 'formats': ['&lt;i4', '&lt;f4'], 'offsets': [0, 4], 'itemsize': 12})
+</pre> <p>Offsets may be chosen such that the fields overlap, though this will mean that assigning to one field may clobber any overlapping field’s data. As an exception, fields of <a class="reference internal" href="../reference/arrays.scalars#numpy.object_" title="numpy.object_"><code>numpy.object_</code></a> type cannot overlap with other fields, because of the risk of clobbering the internal object pointer and then dereferencing it.</p> <p>The optional ‘aligned’ value can be set to <code>True</code> to make the automatic offset computation use aligned offsets (see <a class="reference internal" href="#offsets-and-alignment"><span class="std std-ref">Automatic Byte Offsets and Alignment</span></a>), as if the ‘align’ keyword argument of <a class="reference internal" href="../reference/generated/numpy.dtype#numpy.dtype" title="numpy.dtype"><code>numpy.dtype</code></a> had been set to True.</p> <p>The optional ‘titles’ value should be a list of titles of the same length as ‘names’, see <a class="reference internal" href="#titles"><span class="std std-ref">Field Titles</span></a> below.</p> </li> <li>
+<p>A dictionary of field names</p> <p>The use of this form of specification is discouraged, but documented here because older numpy code may use it. The keys of the dictionary are the field names and the values are tuples specifying type and offset:</p> <pre data-language="python">&gt;&gt;&gt; np.dtype({'col1': ('i1', 0), 'col2': ('f4', 1)})
+dtype([('col1', 'i1'), ('col2', '&lt;f4')])
+</pre> <p>This form is discouraged because Python dictionaries do not preserve order in Python versions before Python 3.6, and the order of the fields in a structured dtype has meaning. <a class="reference internal" href="#titles"><span class="std std-ref">Field Titles</span></a> may be specified by using a 3-tuple, see below.</p> </li> </ol> </section> <section id="manipulating-and-displaying-structured-datatypes"> <h3>Manipulating and Displaying Structured Datatypes</h3> <p>The list of field names of a structured datatype can be found in the <code>names</code> attribute of the dtype object:</p> <pre data-language="python">&gt;&gt;&gt; d = np.dtype([('x', 'i8'), ('y', 'f4')])
+&gt;&gt;&gt; d.names
+('x', 'y')
+</pre> <p>The field names may be modified by assigning to the <code>names</code> attribute using a sequence of strings of the same length.</p> <p>The dtype object also has a dictionary-like attribute, <code>fields</code>, whose keys are the field names (and <a class="reference internal" href="#titles"><span class="std std-ref">Field Titles</span></a>, see below) and whose values are tuples containing the dtype and byte offset of each field.</p> <pre data-language="python">&gt;&gt;&gt; d.fields
+mappingproxy({'x': (dtype('int64'), 0), 'y': (dtype('float32'), 8)})
+</pre> <p>Both the <code>names</code> and <code>fields</code> attributes will equal <code>None</code> for unstructured arrays. The recommended way to test if a dtype is structured is with <code>if dt.names is not None</code> rather than <code>if dt.names</code>, to account for dtypes with 0 fields.</p> <p>The string representation of a structured datatype is shown in the “list of tuples” form if possible, otherwise numpy falls back to using the more general dictionary form.</p> </section> <section id="automatic-byte-offsets-and-alignment"> <h3 id="offsets-and-alignment">Automatic Byte Offsets and Alignment</h3> <p>Numpy uses one of two methods to automatically determine the field byte offsets and the overall itemsize of a structured datatype, depending on whether <code>align=True</code> was specified as a keyword argument to <a class="reference internal" href="../reference/generated/numpy.dtype#numpy.dtype" title="numpy.dtype"><code>numpy.dtype</code></a>.</p> <p>By default (<code>align=False</code>), numpy will pack the fields together such that each field starts at the byte offset the previous field ended, and the fields are contiguous in memory.</p> <pre data-language="python">&gt;&gt;&gt; def print_offsets(d):
+...     print("offsets:", [d.fields[name][1] for name in d.names])
+...     print("itemsize:", d.itemsize)
+&gt;&gt;&gt; print_offsets(np.dtype('u1, u1, i4, u1, i8, u2'))
+offsets: [0, 1, 2, 6, 7, 15]
+itemsize: 17
+</pre> <p>If <code>align=True</code> is set, numpy will pad the structure in the same way many C compilers would pad a C-struct. Aligned structures can give a performance improvement in some cases, at the cost of increased datatype size. Padding bytes are inserted between fields such that each field’s byte offset will be a multiple of that field’s alignment, which is usually equal to the field’s size in bytes for simple datatypes, see <code>PyArray_Descr.alignment</code>. The structure will also have trailing padding added so that its itemsize is a multiple of the largest field’s alignment.</p> <pre data-language="python">&gt;&gt;&gt; print_offsets(np.dtype('u1, u1, i4, u1, i8, u2', align=True))
+offsets: [0, 1, 4, 8, 16, 24]
+itemsize: 32
+</pre> <p>Note that although almost all modern C compilers pad in this way by default, padding in C structs is C-implementation-dependent so this memory layout is not guaranteed to exactly match that of a corresponding struct in a C program. Some work may be needed, either on the numpy side or the C side, to obtain exact correspondence.</p> <p>If offsets were specified using the optional <code>offsets</code> key in the dictionary-based dtype specification, setting <code>align=True</code> will check that each field’s offset is a multiple of its size and that the itemsize is a multiple of the largest field size, and raise an exception if not.</p> <p>If the offsets of the fields and itemsize of a structured array satisfy the alignment conditions, the array will have the <code>ALIGNED</code> <a class="reference internal" href="../reference/generated/numpy.ndarray.flags#numpy.ndarray.flags" title="numpy.ndarray.flags"><code>flag</code></a> set.</p> <p>A convenience function <a class="reference internal" href="#numpy.lib.recfunctions.repack_fields" title="numpy.lib.recfunctions.repack_fields"><code>numpy.lib.recfunctions.repack_fields</code></a> converts an aligned dtype or array to a packed one and vice versa. It takes either a dtype or structured ndarray as an argument, and returns a copy with fields re-packed, with or without padding bytes.</p> </section> <section id="field-titles"> <h3 id="titles">Field Titles</h3> <p>In addition to field names, fields may also have an associated <a class="reference internal" href="../glossary#term-title"><span class="xref std std-term">title</span></a>, an alternate name, which is sometimes used as an additional description or alias for the field. The title may be used to index an array, just like a field name.</p> <p>To add titles when using the list-of-tuples form of dtype specification, the field name may be specified as a tuple of two strings instead of a single string, which will be the field’s title and field name respectively. For example:</p> <pre data-language="python">&gt;&gt;&gt; np.dtype([(('my title', 'name'), 'f4')])
+dtype([(('my title', 'name'), '&lt;f4')])
+</pre> <p>When using the first form of dictionary-based specification, the titles may be supplied as an extra <code>'titles'</code> key as described above. When using the second (discouraged) dictionary-based specification, the title can be supplied by providing a 3-element tuple <code>(datatype, offset, title)</code> instead of the usual 2-element tuple:</p> <pre data-language="python">&gt;&gt;&gt; np.dtype({'name': ('i4', 0, 'my title')})
+dtype([(('my title', 'name'), '&lt;i4')])
+</pre> <p>The <code>dtype.fields</code> dictionary will contain titles as keys, if any titles are used. This means effectively that a field with a title will be represented twice in the fields dictionary. The tuple values for these fields will also have a third element, the field title. Because of this, and because the <code>names</code> attribute preserves the field order while the <code>fields</code> attribute may not, it is recommended to iterate through the fields of a dtype using the <code>names</code> attribute of the dtype, which will not list titles, as in:</p> <pre data-language="python">&gt;&gt;&gt; for name in d.names:
+...     print(d.fields[name][:2])
+(dtype('int64'), 0)
+(dtype('float32'), 8)
+</pre> </section> <section id="union-types"> <h3>Union types</h3> <p>Structured datatypes are implemented in numpy to have base type <a class="reference internal" href="../reference/arrays.scalars#numpy.void" title="numpy.void"><code>numpy.void</code></a> by default, but it is possible to interpret other numpy types as structured types using the <code>(base_dtype, dtype)</code> form of dtype specification described in <a class="reference internal" href="../reference/arrays.dtypes#arrays-dtypes-constructing"><span class="std std-ref">Data Type Objects</span></a>. Here, <code>base_dtype</code> is the desired underlying dtype, and fields and flags will be copied from <code>dtype</code>. This dtype is similar to a ‘union’ in C.</p> </section> </section> <section id="indexing-and-assignment-to-structured-arrays"> <h2>Indexing and Assignment to Structured arrays</h2> <section id="assigning-data-to-a-structured-array"> <h3>Assigning data to a Structured Array</h3> <p>There are a number of ways to assign values to a structured array: Using python tuples, using scalar values, or using other structured arrays.</p> <section id="assignment-from-python-native-types-tuples"> <h4>Assignment from Python Native Types (Tuples)</h4> <p>The simplest way to assign values to a structured array is using python tuples. Each assigned value should be a tuple of length equal to the number of fields in the array, and not a list or array as these will trigger numpy’s broadcasting rules. The tuple’s elements are assigned to the successive fields of the array, from left to right:</p> <pre data-language="python">&gt;&gt;&gt; x = np.array([(1, 2, 3), (4, 5, 6)], dtype='i8, f4, f8')
+&gt;&gt;&gt; x[1] = (7, 8, 9)
+&gt;&gt;&gt; x
+array([(1, 2., 3.), (7, 8., 9.)],
+     dtype=[('f0', '&lt;i8'), ('f1', '&lt;f4'), ('f2', '&lt;f8')])
+</pre> </section> <section id="assignment-from-scalars"> <h4>Assignment from Scalars</h4> <p>A scalar assigned to a structured element will be assigned to all fields. This happens when a scalar is assigned to a structured array, or when an unstructured array is assigned to a structured array:</p> <pre data-language="python">&gt;&gt;&gt; x = np.zeros(2, dtype='i8, f4, ?, S1')
+&gt;&gt;&gt; x[:] = 3
+&gt;&gt;&gt; x
+array([(3, 3., True, b'3'), (3, 3., True, b'3')],
+      dtype=[('f0', '&lt;i8'), ('f1', '&lt;f4'), ('f2', '?'), ('f3', 'S1')])
+&gt;&gt;&gt; x[:] = np.arange(2)
+&gt;&gt;&gt; x
+array([(0, 0., False, b'0'), (1, 1., True, b'1')],
+      dtype=[('f0', '&lt;i8'), ('f1', '&lt;f4'), ('f2', '?'), ('f3', 'S1')])
+</pre> <p>Structured arrays can also be assigned to unstructured arrays, but only if the structured datatype has just a single field:</p> <pre data-language="python">&gt;&gt;&gt; twofield = np.zeros(2, dtype=[('A', 'i4'), ('B', 'i4')])
+&gt;&gt;&gt; onefield = np.zeros(2, dtype=[('A', 'i4')])
+&gt;&gt;&gt; nostruct = np.zeros(2, dtype='i4')
+&gt;&gt;&gt; nostruct[:] = twofield
+Traceback (most recent call last):
+...
+TypeError: Cannot cast array data from dtype([('A', '&lt;i4'), ('B', '&lt;i4')]) to dtype('int32') according to the rule 'unsafe'
+</pre> </section> <section id="assignment-from-other-structured-arrays"> <h4>Assignment from other Structured Arrays</h4> <p>Assignment between two structured arrays occurs as if the source elements had been converted to tuples and then assigned to the destination elements. That is, the first field of the source array is assigned to the first field of the destination array, and the second field likewise, and so on, regardless of field names. Structured arrays with a different number of fields cannot be assigned to each other. Bytes of the destination structure which are not included in any of the fields are unaffected.</p> <pre data-language="python">&gt;&gt;&gt; a = np.zeros(3, dtype=[('a', 'i8'), ('b', 'f4'), ('c', 'S3')])
+&gt;&gt;&gt; b = np.ones(3, dtype=[('x', 'f4'), ('y', 'S3'), ('z', 'O')])
+&gt;&gt;&gt; b[:] = a
+&gt;&gt;&gt; b
+array([(0., b'0.0', b''), (0., b'0.0', b''), (0., b'0.0', b'')],
+      dtype=[('x', '&lt;f4'), ('y', 'S3'), ('z', 'O')])
+</pre> </section> <section id="assignment-involving-subarrays"> <h4>Assignment involving subarrays</h4> <p>When assigning to fields which are subarrays, the assigned value will first be broadcast to the shape of the subarray.</p> </section> </section> <section id="indexing-structured-arrays"> <h3>Indexing Structured Arrays</h3> <section id="accessing-individual-fields"> <h4>Accessing Individual Fields</h4> <p>Individual fields of a structured array may be accessed and modified by indexing the array with the field name.</p> <pre data-language="python">&gt;&gt;&gt; x = np.array([(1, 2), (3, 4)], dtype=[('foo', 'i8'), ('bar', 'f4')])
+&gt;&gt;&gt; x['foo']
+array([1, 3])
+&gt;&gt;&gt; x['foo'] = 10
+&gt;&gt;&gt; x
+array([(10, 2.), (10, 4.)],
+      dtype=[('foo', '&lt;i8'), ('bar', '&lt;f4')])
+</pre> <p>The resulting array is a view into the original array. It shares the same memory locations and writing to the view will modify the original array.</p> <pre data-language="python">&gt;&gt;&gt; y = x['bar']
+&gt;&gt;&gt; y[:] = 11
+&gt;&gt;&gt; x
+array([(10, 11.), (10, 11.)],
+      dtype=[('foo', '&lt;i8'), ('bar', '&lt;f4')])
+</pre> <p>This view has the same dtype and itemsize as the indexed field, so it is typically a non-structured array, except in the case of nested structures.</p> <pre data-language="python">&gt;&gt;&gt; y.dtype, y.shape, y.strides
+(dtype('float32'), (2,), (12,))
+</pre> <p>If the accessed field is a subarray, the dimensions of the subarray are appended to the shape of the result:</p> <pre data-language="python">&gt;&gt;&gt; x = np.zeros((2, 2), dtype=[('a', np.int32), ('b', np.float64, (3, 3))])
+&gt;&gt;&gt; x['a'].shape
+(2, 2)
+&gt;&gt;&gt; x['b'].shape
+(2, 2, 3, 3)
+</pre> </section> <section id="accessing-multiple-fields"> <h4>Accessing Multiple Fields</h4> <p>One can index and assign to a structured array with a multi-field index, where the index is a list of field names.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The behavior of multi-field indexes changed from Numpy 1.15 to Numpy 1.16.</p> </div> <p>The result of indexing with a multi-field index is a view into the original array, as follows:</p> <pre data-language="python">&gt;&gt;&gt; a = np.zeros(3, dtype=[('a', 'i4'), ('b', 'i4'), ('c', 'f4')])
+&gt;&gt;&gt; a[['a', 'c']]
+array([(0, 0.), (0, 0.), (0, 0.)],
+     dtype={'names':['a','c'], 'formats':['&lt;i4','&lt;f4'], 'offsets':[0,8], 'itemsize':12})
+</pre> <p>Assignment to the view modifies the original array. The view’s fields will be in the order they were indexed. Note that unlike for single-field indexing, the dtype of the view has the same itemsize as the original array, and has fields at the same offsets as in the original array, and unindexed fields are merely missing.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>In Numpy 1.15, indexing an array with a multi-field index returned a copy of the result above, but with fields packed together in memory as if passed through <a class="reference internal" href="#numpy.lib.recfunctions.repack_fields" title="numpy.lib.recfunctions.repack_fields"><code>numpy.lib.recfunctions.repack_fields</code></a>.</p> <p>The new behavior as of Numpy 1.16 leads to extra “padding” bytes at the location of unindexed fields compared to 1.15. You will need to update any code which depends on the data having a “packed” layout. For instance code such as:</p> <pre data-language="python">&gt;&gt;&gt; a[['a', 'c']].view('i8')  # Fails in Numpy 1.16
+Traceback (most recent call last):
+   File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+ValueError: When changing to a smaller dtype, its size must be a divisor of the size of original dtype
+</pre> <p>will need to be changed. This code has raised a <code>FutureWarning</code> since Numpy 1.12, and similar code has raised <code>FutureWarning</code> since 1.7.</p> <p>In 1.16 a number of functions have been introduced in the <a class="reference internal" href="#module-numpy.lib.recfunctions" title="numpy.lib.recfunctions"><code>numpy.lib.recfunctions</code></a> module to help users account for this change. These are <a class="reference internal" href="#numpy.lib.recfunctions.repack_fields" title="numpy.lib.recfunctions.repack_fields"><code>numpy.lib.recfunctions.repack_fields</code></a>. <a class="reference internal" href="#numpy.lib.recfunctions.structured_to_unstructured" title="numpy.lib.recfunctions.structured_to_unstructured"><code>numpy.lib.recfunctions.structured_to_unstructured</code></a>, <a class="reference internal" href="#numpy.lib.recfunctions.unstructured_to_structured" title="numpy.lib.recfunctions.unstructured_to_structured"><code>numpy.lib.recfunctions.unstructured_to_structured</code></a>, <a class="reference internal" href="#numpy.lib.recfunctions.apply_along_fields" title="numpy.lib.recfunctions.apply_along_fields"><code>numpy.lib.recfunctions.apply_along_fields</code></a>, <a class="reference internal" href="#numpy.lib.recfunctions.assign_fields_by_name" title="numpy.lib.recfunctions.assign_fields_by_name"><code>numpy.lib.recfunctions.assign_fields_by_name</code></a>, and <a class="reference internal" href="#numpy.lib.recfunctions.require_fields" title="numpy.lib.recfunctions.require_fields"><code>numpy.lib.recfunctions.require_fields</code></a>.</p> <p>The function <a class="reference internal" href="#numpy.lib.recfunctions.repack_fields" title="numpy.lib.recfunctions.repack_fields"><code>numpy.lib.recfunctions.repack_fields</code></a> can always be used to reproduce the old behavior, as it will return a packed copy of the structured array. The code above, for example, can be replaced with:</p> <pre data-language="python">&gt;&gt;&gt; from numpy.lib.recfunctions import repack_fields
+&gt;&gt;&gt; repack_fields(a[['a', 'c']]).view('i8')  # supported in 1.16
+array([0, 0, 0])
+</pre> <p>Furthermore, numpy now provides a new function <a class="reference internal" href="#numpy.lib.recfunctions.structured_to_unstructured" title="numpy.lib.recfunctions.structured_to_unstructured"><code>numpy.lib.recfunctions.structured_to_unstructured</code></a> which is a safer and more efficient alternative for users who wish to convert structured arrays to unstructured arrays, as the view above is often indeded to do. This function allows safe conversion to an unstructured type taking into account padding, often avoids a copy, and also casts the datatypes as needed, unlike the view. Code such as:</p> <pre data-language="python">&gt;&gt;&gt; b = np.zeros(3, dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4')])
+&gt;&gt;&gt; b[['x', 'z']].view('f4')
+array([0., 0., 0., 0., 0., 0., 0., 0., 0.], dtype=float32)
+</pre> <p>can be made safer by replacing with:</p> <pre data-language="python">&gt;&gt;&gt; from numpy.lib.recfunctions import structured_to_unstructured
+&gt;&gt;&gt; structured_to_unstructured(b[['x', 'z']])
+array([0, 0, 0])
+</pre> </div> <p>Assignment to an array with a multi-field index modifies the original array:</p> <pre data-language="python">&gt;&gt;&gt; a[['a', 'c']] = (2, 3)
+&gt;&gt;&gt; a
+array([(2, 0, 3.), (2, 0, 3.), (2, 0, 3.)],
+      dtype=[('a', '&lt;i4'), ('b', '&lt;i4'), ('c', '&lt;f4')])
+</pre> <p>This obeys the structured array assignment rules described above. For example, this means that one can swap the values of two fields using appropriate multi-field indexes:</p> <pre data-language="python">&gt;&gt;&gt; a[['a', 'c']] = a[['c', 'a']]
+</pre> </section> <section id="indexing-with-an-integer-to-get-a-structured-scalar"> <h4>Indexing with an Integer to get a Structured Scalar</h4> <p>Indexing a single element of a structured array (with an integer index) returns a structured scalar:</p> <pre data-language="python">&gt;&gt;&gt; x = np.array([(1, 2., 3.)], dtype='i, f, f')
+&gt;&gt;&gt; scalar = x[0]
+&gt;&gt;&gt; scalar
+(1, 2., 3.)
+&gt;&gt;&gt; type(scalar)
+&lt;class 'numpy.void'&gt;
+</pre> <p>Unlike other numpy scalars, structured scalars are mutable and act like views into the original array, such that modifying the scalar will modify the original array. Structured scalars also support access and assignment by field name:</p> <pre data-language="python">&gt;&gt;&gt; x = np.array([(1, 2), (3, 4)], dtype=[('foo', 'i8'), ('bar', 'f4')])
+&gt;&gt;&gt; s = x[0]
+&gt;&gt;&gt; s['bar'] = 100
+&gt;&gt;&gt; x
+array([(1, 100.), (3, 4.)],
+      dtype=[('foo', '&lt;i8'), ('bar', '&lt;f4')])
+</pre> <p>Similarly to tuples, structured scalars can also be indexed with an integer:</p> <pre data-language="python">&gt;&gt;&gt; scalar = np.array([(1, 2., 3.)], dtype='i, f, f')[0]
+&gt;&gt;&gt; scalar[0]
+1
+&gt;&gt;&gt; scalar[1] = 4
+</pre> <p>Thus, tuples might be thought of as the native Python equivalent to numpy’s structured types, much like native python integers are the equivalent to numpy’s integer types. Structured scalars may be converted to a tuple by calling <a class="reference internal" href="../reference/generated/numpy.ndarray.item#numpy.ndarray.item" title="numpy.ndarray.item"><code>numpy.ndarray.item</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; scalar.item(), type(scalar.item())
+((1, 4.0, 3.0), &lt;class 'tuple'&gt;)
+</pre> </section> </section> <section id="viewing-structured-arrays-containing-objects"> <h3>Viewing Structured Arrays Containing Objects</h3> <p>In order to prevent clobbering object pointers in fields of <a class="reference external" href="https://docs.python.org/dev/library/functions.html#object" title="(in Python v3.11)"><code>object</code></a> type, numpy currently does not allow views of structured arrays containing objects.</p> </section> <section id="structure-comparison"> <h3>Structure Comparison</h3> <p>If the dtypes of two void structured arrays are equal, testing the equality of the arrays will result in a boolean array with the dimensions of the original arrays, with elements set to <code>True</code> where all fields of the corresponding structures are equal. Structured dtypes are equal if the field names, dtypes and titles are the same, ignoring endianness, and the fields are in the same order:</p> <pre data-language="python">&gt;&gt;&gt; a = np.zeros(2, dtype=[('a', 'i4'), ('b', 'i4')])
+&gt;&gt;&gt; b = np.ones(2, dtype=[('a', 'i4'), ('b', 'i4')])
+&gt;&gt;&gt; a == b
+array([False, False])
+</pre> <p>Currently, if the dtypes of two void structured arrays are not equivalent the comparison fails, returning the scalar value <code>False</code>. This behavior is deprecated as of numpy 1.10 and will raise an error or perform elementwise comparison in the future.</p> <p>The <code>&lt;</code> and <code>&gt;</code> operators always return <code>False</code> when comparing void structured arrays, and arithmetic and bitwise operations are not supported.</p> </section> </section> <section id="record-arrays"> <h2>Record Arrays</h2> <p>As an optional convenience numpy provides an ndarray subclass, <a class="reference internal" href="../reference/generated/numpy.recarray#numpy.recarray" title="numpy.recarray"><code>numpy.recarray</code></a> that allows access to fields of structured arrays by attribute instead of only by index. Record arrays use a special datatype, <a class="reference internal" href="../reference/generated/numpy.record#numpy.record" title="numpy.record"><code>numpy.record</code></a>, that allows field access by attribute on the structured scalars obtained from the array. The <code>numpy.rec</code> module provides functions for creating recarrays from various objects. Additional helper functions for creating and manipulating structured arrays can be found in <a class="reference internal" href="#module-numpy.lib.recfunctions" title="numpy.lib.recfunctions"><code>numpy.lib.recfunctions</code></a>.</p> <p>The simplest way to create a record array is with <code>numpy.rec.array</code>:</p> <pre data-language="python">&gt;&gt;&gt; recordarr = np.rec.array([(1, 2., 'Hello'), (2, 3., "World")],
+...                    dtype=[('foo', 'i4'),('bar', 'f4'), ('baz', 'S10')])
+&gt;&gt;&gt; recordarr.bar
+array([ 2.,  3.], dtype=float32)
+&gt;&gt;&gt; recordarr[1:2]
+rec.array([(2, 3., b'World')],
+      dtype=[('foo', '&lt;i4'), ('bar', '&lt;f4'), ('baz', 'S10')])
+&gt;&gt;&gt; recordarr[1:2].foo
+array([2], dtype=int32)
+&gt;&gt;&gt; recordarr.foo[1:2]
+array([2], dtype=int32)
+&gt;&gt;&gt; recordarr[1].baz
+b'World'
+</pre> <p><code>numpy.rec.array</code> can convert a wide variety of arguments into record arrays, including structured arrays:</p> <pre data-language="python">&gt;&gt;&gt; arr = np.array([(1, 2., 'Hello'), (2, 3., "World")],
+...             dtype=[('foo', 'i4'), ('bar', 'f4'), ('baz', 'S10')])
+&gt;&gt;&gt; recordarr = np.rec.array(arr)
+</pre> <p>The <code>numpy.rec</code> module provides a number of other convenience functions for creating record arrays, see <a class="reference internal" href="../reference/routines.array-creation#routines-array-creation-rec"><span class="std std-ref">record array creation routines</span></a>.</p> <p>A record array representation of a structured array can be obtained using the appropriate <a class="reference external" href="https://numpy.org/doc/1.22/user/numpy-ndarray-view">view</a>:</p> <pre data-language="python">&gt;&gt;&gt; arr = np.array([(1, 2., 'Hello'), (2, 3., "World")],
+...                dtype=[('foo', 'i4'),('bar', 'f4'), ('baz', 'a10')])
+&gt;&gt;&gt; recordarr = arr.view(dtype=np.dtype((np.record, arr.dtype)),
+...                      type=np.recarray)
+</pre> <p>For convenience, viewing an ndarray as type <a class="reference internal" href="../reference/generated/numpy.recarray#numpy.recarray" title="numpy.recarray"><code>numpy.recarray</code></a> will automatically convert to <a class="reference internal" href="../reference/generated/numpy.record#numpy.record" title="numpy.record"><code>numpy.record</code></a> datatype, so the dtype can be left out of the view:</p> <pre data-language="python">&gt;&gt;&gt; recordarr = arr.view(np.recarray)
+&gt;&gt;&gt; recordarr.dtype
+dtype((numpy.record, [('foo', '&lt;i4'), ('bar', '&lt;f4'), ('baz', 'S10')]))
+</pre> <p>To get back to a plain ndarray both the dtype and type must be reset. The following view does so, taking into account the unusual case that the recordarr was not a structured type:</p> <pre data-language="python">&gt;&gt;&gt; arr2 = recordarr.view(recordarr.dtype.fields or recordarr.dtype, np.ndarray)
+</pre> <p>Record array fields accessed by index or by attribute are returned as a record array if the field has a structured type but as a plain ndarray otherwise.</p> <pre data-language="python">&gt;&gt;&gt; recordarr = np.rec.array([('Hello', (1, 2)), ("World", (3, 4))],
+...                 dtype=[('foo', 'S6'),('bar', [('A', int), ('B', int)])])
+&gt;&gt;&gt; type(recordarr.foo)
+&lt;class 'numpy.ndarray'&gt;
+&gt;&gt;&gt; type(recordarr.bar)
+&lt;class 'numpy.recarray'&gt;
+</pre> <p>Note that if a field has the same name as an ndarray attribute, the ndarray attribute takes precedence. Such fields will be inaccessible by attribute but will still be accessible by index.</p> <section id="module-numpy.lib.recfunctions"> <h3 id="recarray-helper-functions">Recarray Helper Functions</h3> <p>Collection of utilities to manipulate structured arrays.</p> <p>Most of these functions were initially implemented by John Hunter for matplotlib. They have been rewritten and extended for convenience.</p> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.append_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">append_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">base</span></em>, <em class="sig-param"><span class="n">names</span></em>, <em class="sig-param"><span class="n">data</span></em>, <em class="sig-param"><span class="n">dtypes</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">fill_value</span><span class="o">=</span><span class="default_value">- 1</span></em>, <em class="sig-param"><span class="n">usemask</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">asrecarray</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L661-L729"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Add new fields to an existing array.</p> <p>The names of the fields are given with the <code>names</code> arguments, the corresponding values with the <code>data</code> arguments. If a single field is appended, <code>names</code>, <code>data</code> and <code>dtypes</code> do not have to be lists but just values.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>base</strong><span class="classifier">array</span>
+</dt>
+<dd>
+<p>Input array to extend.</p> </dd> <dt>
+<strong>names</strong><span class="classifier">string, sequence</span>
+</dt>
+<dd>
+<p>String or sequence of strings corresponding to the names of the new fields.</p> </dd> <dt>
+<strong>data</strong><span class="classifier">array or sequence of arrays</span>
+</dt>
+<dd>
+<p>Array or sequence of arrays storing the fields to add to the base.</p> </dd> <dt>
+<strong>dtypes</strong><span class="classifier">sequence of datatypes, optional</span>
+</dt>
+<dd>
+<p>Datatype or sequence of datatypes. If None, the datatypes are estimated from the <code>data</code>.</p> </dd> <dt>
+<strong>fill_value</strong><span class="classifier">{float}, optional</span>
+</dt>
+<dd>
+<p>Filling value used to pad missing data on the shorter arrays.</p> </dd> <dt>
+<strong>usemask</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a masked array or not.</p> </dd> <dt>
+<strong>asrecarray</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a recarray (MaskedRecords) or not.</p> </dd> </dl> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.apply_along_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">apply_along_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">func</span></em>, <em class="sig-param"><span class="n">arr</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1103-L1144"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Apply function ‘func’ as a reduction across fields of a structured array.</p> <p>This is similar to <code>apply_along_axis</code>, but treats the fields of a structured array as an extra axis. The fields are all first cast to a common type following the type-promotion rules from <a class="reference internal" href="../reference/generated/numpy.result_type#numpy.result_type" title="numpy.result_type"><code>numpy.result_type</code></a> applied to the field’s dtypes.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>func</strong><span class="classifier">function</span>
+</dt>
+<dd>
+<p>Function to apply on the “field” dimension. This function must support an <code>axis</code> argument, like np.mean, np.sum, etc.</p> </dd> <dt>
+<strong>arr</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Structured array for which to apply func.</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>out</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Result of the recution operation</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; b = np.array([(1, 2, 5), (4, 5, 7), (7, 8 ,11), (10, 11, 12)],
+...              dtype=[('x', 'i4'), ('y', 'f4'), ('z', 'f8')])
+&gt;&gt;&gt; rfn.apply_along_fields(np.mean, b)
+array([ 2.66666667,  5.33333333,  8.66666667, 11.        ])
+&gt;&gt;&gt; rfn.apply_along_fields(np.mean, b[['x', 'z']])
+array([ 3. ,  5.5,  9. , 11. ])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.assign_fields_by_name"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">assign_fields_by_name</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">dst</span></em>, <em class="sig-param"><span class="n">src</span></em>, <em class="sig-param"><span class="n">zero_unassigned</span><span class="o">=</span><span class="default_value">True</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1149-L1185"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Assigns values from one structured array to another by field name.</p> <p>Normally in numpy &gt;= 1.14, assignment of one structured array to another copies fields “by position”, meaning that the first field from the src is copied to the first field of the dst, and so on, regardless of field name.</p> <p>This function instead copies “by field name”, such that fields in the dst are assigned from the identically named field in the src. This applies recursively for nested structures. This is how structure assignment worked in numpy &gt;= 1.6 to &lt;= 1.13.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>dst</strong><span class="classifier">ndarray</span>
+</dt>
+ <dt>
+<strong>src</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>The source and destination arrays during assignment.</p> </dd> <dt>
+<strong>zero_unassigned</strong><span class="classifier">bool, optional</span>
+</dt>
+<dd>
+<p>If True, fields in the dst for which there was no matching field in the src are filled with the value 0 (zero). This was the behavior of numpy &lt;= 1.13. If False, those fields are not modified.</p> </dd> </dl> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.drop_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">drop_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">base</span></em>, <em class="sig-param"><span class="n">drop_names</span></em>, <em class="sig-param"><span class="n">usemask</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">asrecarray</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L509-L571"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return a new array with fields in <code>drop_names</code> dropped.</p> <p>Nested fields are supported.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.18.0: </span><a class="reference internal" href="#numpy.lib.recfunctions.drop_fields" title="numpy.lib.recfunctions.drop_fields"><code>drop_fields</code></a> returns an array with 0 fields if all fields are dropped, rather than returning <code>None</code> as it did previously.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>base</strong><span class="classifier">array</span>
+</dt>
+<dd>
+<p>Input array</p> </dd> <dt>
+<strong>drop_names</strong><span class="classifier">string or sequence</span>
+</dt>
+<dd>
+<p>String or sequence of strings corresponding to the names of the fields to drop.</p> </dd> <dt>
+<strong>usemask</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a masked array or not.</p> </dd> <dt>
+<strong>asrecarray</strong><span class="classifier">string or sequence, optional</span>
+</dt>
+<dd>
+<p>Whether to return a recarray or a mrecarray (<code>asrecarray=True</code>) or a plain ndarray or masked array with flexible dtype. The default is False.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; a = np.array([(1, (2, 3.0)), (4, (5, 6.0))],
+...   dtype=[('a', np.int64), ('b', [('ba', np.double), ('bb', np.int64)])])
+&gt;&gt;&gt; rfn.drop_fields(a, 'a')
+array([((2., 3),), ((5., 6),)],
+      dtype=[('b', [('ba', '&lt;f8'), ('bb', '&lt;i8')])])
+&gt;&gt;&gt; rfn.drop_fields(a, 'ba')
+array([(1, (3,)), (4, (6,))], dtype=[('a', '&lt;i8'), ('b', [('bb', '&lt;i8')])])
+&gt;&gt;&gt; rfn.drop_fields(a, ['ba', 'bb'])
+array([(1,), (4,)], dtype=[('a', '&lt;i8')])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.find_duplicates"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">find_duplicates</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">a</span></em>, <em class="sig-param"><span class="n">key</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">ignoremask</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">return_index</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1332-L1387"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Find the duplicates in a structured array along a given key</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>a</strong><span class="classifier">array-like</span>
+</dt>
+<dd>
+<p>Input array</p> </dd> <dt>
+<strong>key</strong><span class="classifier">{string, None}, optional</span>
+</dt>
+<dd>
+<p>Name of the fields along which to check the duplicates. If None, the search is performed by records</p> </dd> <dt>
+<strong>ignoremask</strong><span class="classifier">{True, False}, optional</span>
+</dt>
+<dd>
+<p>Whether masked data should be discarded or considered as duplicates.</p> </dd> <dt>
+<strong>return_index</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return the indices of the duplicated values.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; ndtype = [('a', int)]
+&gt;&gt;&gt; a = np.ma.array([1, 1, 1, 2, 2, 3, 3],
+...         mask=[0, 0, 1, 0, 0, 0, 1]).view(ndtype)
+&gt;&gt;&gt; rfn.find_duplicates(a, ignoremask=True, return_index=True)
+(masked_array(data=[(1,), (1,), (2,), (2,)],
+             mask=[(False,), (False,), (False,), (False,)],
+       fill_value=(999999,),
+            dtype=[('a', '&lt;i8')]), array([0, 1, 3, 4]))
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.flatten_descr"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">flatten_descr</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">ndtype</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L177-L200"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Flatten a structured data-type description.</p> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; ndtype = np.dtype([('a', '&lt;i4'), ('b', [('ba', '&lt;f8'), ('bb', '&lt;i4')])])
+&gt;&gt;&gt; rfn.flatten_descr(ndtype)
+(('a', dtype('int32')), ('ba', dtype('float64')), ('bb', dtype('int32')))
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.get_fieldstructure"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">get_fieldstructure</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">adtype</span></em>, <em class="sig-param"><span class="n">lastname</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">parents</span><span class="o">=</span><span class="default_value">None</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L233-L277"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a dictionary with fields indexing lists of their parent fields.</p> <p>This function is used to simplify access to fields nested in other fields.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>adtype</strong><span class="classifier">np.dtype</span>
+</dt>
+<dd>
+<p>Input datatype</p> </dd> <dt>
+<strong>lastname</strong><span class="classifier">optional</span>
+</dt>
+<dd>
+<p>Last processed field name (used internally during recursion).</p> </dd> <dt>
+<strong>parents</strong><span class="classifier">dictionary</span>
+</dt>
+<dd>
+<p>Dictionary of parent fields (used interbally during recursion).</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; ndtype =  np.dtype([('A', int),
+...                     ('B', [('BA', int),
+...                            ('BB', [('BBA', int), ('BBB', int)])])])
+&gt;&gt;&gt; rfn.get_fieldstructure(ndtype)
+... # XXX: possible regression, order of BBA and BBB is swapped
+{'A': [], 'B': [], 'BA': ['B'], 'BB': ['B'], 'BBA': ['B', 'BB'], 'BBB': ['B', 'BB']}
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.get_names"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">get_names</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">adtype</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L106-L139"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the field names of the input datatype as a tuple.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>adtype</strong><span class="classifier">dtype</span>
+</dt>
+<dd>
+<p>Input datatype</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; rfn.get_names(np.empty((1,), dtype=int))
+Traceback (most recent call last):
+    ...
+AttributeError: 'numpy.ndarray' object has no attribute 'names'
+</pre> <pre data-language="python">&gt;&gt;&gt; rfn.get_names(np.empty((1,), dtype=[('A',int), ('B', float)]))
+Traceback (most recent call last):
+    ...
+AttributeError: 'numpy.ndarray' object has no attribute 'names'
+&gt;&gt;&gt; adtype = np.dtype([('a', int), ('b', [('ba', int), ('bb', int)])])
+&gt;&gt;&gt; rfn.get_names(adtype)
+('a', ('b', ('ba', 'bb')))
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.get_names_flat"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">get_names_flat</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">adtype</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L142-L174"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the field names of the input datatype as a tuple. Nested structure are flattened beforehand.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>adtype</strong><span class="classifier">dtype</span>
+</dt>
+<dd>
+<p>Input datatype</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; rfn.get_names_flat(np.empty((1,), dtype=int)) is None
+Traceback (most recent call last):
+    ...
+AttributeError: 'numpy.ndarray' object has no attribute 'names'
+&gt;&gt;&gt; rfn.get_names_flat(np.empty((1,), dtype=[('A',int), ('B', float)]))
+Traceback (most recent call last):
+    ...
+AttributeError: 'numpy.ndarray' object has no attribute 'names'
+&gt;&gt;&gt; adtype = np.dtype([('a', int), ('b', [('ba', int), ('bb', int)])])
+&gt;&gt;&gt; rfn.get_names_flat(adtype)
+('a', 'b', 'ba', 'bb')
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.join_by"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">join_by</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">key</span></em>, <em class="sig-param"><span class="n">r1</span></em>, <em class="sig-param"><span class="n">r2</span></em>, <em class="sig-param"><span class="n">jointype</span><span class="o">=</span><span class="default_value">'inner'</span></em>, <em class="sig-param"><span class="n">r1postfix</span><span class="o">=</span><span class="default_value">'1'</span></em>, <em class="sig-param"><span class="n">r2postfix</span><span class="o">=</span><span class="default_value">'2'</span></em>, <em class="sig-param"><span class="n">defaults</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">usemask</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">asrecarray</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1396-L1573"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Join arrays <code>r1</code> and <code>r2</code> on key <code>key</code>.</p> <p>The key should be either a string or a sequence of string corresponding to the fields used to join the array. An exception is raised if the <code>key</code> field cannot be found in the two input arrays. Neither <code>r1</code> nor <code>r2</code> should have any duplicates along <code>key</code>: the presence of duplicates will make the output quite unreliable. Note that duplicates are not looked for by the algorithm.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>key</strong><span class="classifier">{string, sequence}</span>
+</dt>
+<dd>
+<p>A string or a sequence of strings corresponding to the fields used for comparison.</p> </dd> <dt>
+<strong>r1, r2</strong><span class="classifier">arrays</span>
+</dt>
+<dd>
+<p>Structured arrays.</p> </dd> <dt>
+<strong>jointype</strong><span class="classifier">{‘inner’, ‘outer’, ‘leftouter’}, optional</span>
+</dt>
+<dd>
+<p>If ‘inner’, returns the elements common to both r1 and r2. If ‘outer’, returns the common elements as well as the elements of r1 not in r2 and the elements of not in r2. If ‘leftouter’, returns the common elements and the elements of r1 not in r2.</p> </dd> <dt>
+<strong>r1postfix</strong><span class="classifier">string, optional</span>
+</dt>
+<dd>
+<p>String appended to the names of the fields of r1 that are present in r2 but absent of the key.</p> </dd> <dt>
+<strong>r2postfix</strong><span class="classifier">string, optional</span>
+</dt>
+<dd>
+<p>String appended to the names of the fields of r2 that are present in r1 but absent of the key.</p> </dd> <dt>
+<strong>defaults</strong><span class="classifier">{dictionary}, optional</span>
+</dt>
+<dd>
+<p>Dictionary mapping field names to the corresponding default values.</p> </dd> <dt>
+<strong>usemask</strong><span class="classifier">{True, False}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a MaskedArray (or MaskedRecords is <code>asrecarray==True</code>) or a ndarray.</p> </dd> <dt>
+<strong>asrecarray</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a recarray (or MaskedRecords if <code>usemask==True</code>) or just a flexible-type ndarray.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Notes</h4> <ul class="simple"> <li>The output is sorted along the key.</li> <li>A temporary array is formed by dropping the fields not in the key for the two arrays and concatenating the result. This array is then sorted, and the common entries selected. The output is constructed by filling the fields with the selected entries. Matching is not preserved if there are some duplicates…</li> </ul> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.merge_arrays"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">merge_arrays</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">seqarrays</span></em>, <em class="sig-param"><span class="n">fill_value</span><span class="o">=</span><span class="default_value">- 1</span></em>, <em class="sig-param"><span class="n">flatten</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">usemask</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">asrecarray</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L369-L502"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Merge arrays field by field.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>seqarrays</strong><span class="classifier">sequence of ndarrays</span>
+</dt>
+<dd>
+<p>Sequence of arrays</p> </dd> <dt>
+<strong>fill_value</strong><span class="classifier">{float}, optional</span>
+</dt>
+<dd>
+<p>Filling value used to pad missing data on the shorter arrays.</p> </dd> <dt>
+<strong>flatten</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to collapse nested fields.</p> </dd> <dt>
+<strong>usemask</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a masked array or not.</p> </dd> <dt>
+<strong>asrecarray</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a recarray (MaskedRecords) or not.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Notes</h4> <ul class="simple"> <li>
+<p>Without a mask, the missing value will be filled with something, depending on what its corresponding type:</p> <ul> <li>
+<code>-1</code> for integers</li> <li>
+<code>-1.0</code> for floating point numbers</li> <li>
+<code>'-'</code> for characters</li> <li>
+<code>'-1'</code> for strings</li> <li>
+<code>True</code> for boolean values</li> </ul> </li> <li>XXX: I just obtained these values empirically</li> </ul> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; rfn.merge_arrays((np.array([1, 2]), np.array([10., 20., 30.])))
+array([( 1, 10.), ( 2, 20.), (-1, 30.)],
+      dtype=[('f0', '&lt;i8'), ('f1', '&lt;f8')])
+</pre> <pre data-language="python">&gt;&gt;&gt; rfn.merge_arrays((np.array([1, 2], dtype=np.int64),
+...         np.array([10., 20., 30.])), usemask=False)
+ array([(1, 10.0), (2, 20.0), (-1, 30.0)],
+         dtype=[('f0', '&lt;i8'), ('f1', '&lt;f8')])
+&gt;&gt;&gt; rfn.merge_arrays((np.array([1, 2]).view([('a', np.int64)]),
+...               np.array([10., 20., 30.])),
+...              usemask=False, asrecarray=True)
+rec.array([( 1, 10.), ( 2, 20.), (-1, 30.)],
+          dtype=[('a', '&lt;i8'), ('f1', '&lt;f8')])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.rec_append_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">rec_append_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">base</span></em>, <em class="sig-param"><span class="n">names</span></em>, <em class="sig-param"><span class="n">data</span></em>, <em class="sig-param"><span class="n">dtypes</span><span class="o">=</span><span class="default_value">None</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L737-L769"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Add new fields to an existing array.</p> <p>The names of the fields are given with the <code>names</code> arguments, the corresponding values with the <code>data</code> arguments. If a single field is appended, <code>names</code>, <code>data</code> and <code>dtypes</code> do not have to be lists but just values.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>base</strong><span class="classifier">array</span>
+</dt>
+<dd>
+<p>Input array to extend.</p> </dd> <dt>
+<strong>names</strong><span class="classifier">string, sequence</span>
+</dt>
+<dd>
+<p>String or sequence of strings corresponding to the names of the new fields.</p> </dd> <dt>
+<strong>data</strong><span class="classifier">array or sequence of arrays</span>
+</dt>
+<dd>
+<p>Array or sequence of arrays storing the fields to add to the base.</p> </dd> <dt>
+<strong>dtypes</strong><span class="classifier">sequence of datatypes, optional</span>
+</dt>
+<dd>
+<p>Datatype or sequence of datatypes. If None, the datatypes are estimated from the <code>data</code>.</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>appended_array</strong><span class="classifier">np.recarray</span>
+</dt>
+ </dl> </dd> </dl> <div class="admonition seealso"> <p class="admonition-title">See also</p> <dl class="simple"> <dt><a class="reference internal" href="#numpy.lib.recfunctions.append_fields" title="numpy.lib.recfunctions.append_fields"><code>append_fields</code></a></dt>
+ </dl> </div> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.rec_drop_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">rec_drop_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">base</span></em>, <em class="sig-param"><span class="n">drop_names</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L603-L608"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a new numpy.recarray with fields in <code>drop_names</code> dropped.</p> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.rec_join"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">rec_join</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">key</span></em>, <em class="sig-param"><span class="n">r1</span></em>, <em class="sig-param"><span class="n">r2</span></em>, <em class="sig-param"><span class="n">jointype</span><span class="o">=</span><span class="default_value">'inner'</span></em>, <em class="sig-param"><span class="n">r1postfix</span><span class="o">=</span><span class="default_value">'1'</span></em>, <em class="sig-param"><span class="n">r2postfix</span><span class="o">=</span><span class="default_value">'2'</span></em>, <em class="sig-param"><span class="n">defaults</span><span class="o">=</span><span class="default_value">None</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1582-L1595"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Join arrays <code>r1</code> and <code>r2</code> on keys. Alternative to join_by, that always returns a np.recarray.</p> <div class="admonition seealso"> <p class="admonition-title">See also</p> <dl class="simple"> <dt><a class="reference internal" href="#numpy.lib.recfunctions.join_by" title="numpy.lib.recfunctions.join_by"><code>join_by</code></a></dt>
+<dd>
+<p>equivalent function</p> </dd> </dl> </div> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.recursive_fill_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">recursive_fill_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">input</span></em>, <em class="sig-param"><span class="n">output</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L36-L72"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Fills fields from output with fields from input, with support for nested structures.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>input</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Input array.</p> </dd> <dt>
+<strong>output</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Output array.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Notes</h4> <ul class="simple"> <li>
+<code>output</code> should be at least the same size as <code>input</code>
+</li> </ul> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; a = np.array([(1, 10.), (2, 20.)], dtype=[('A', np.int64), ('B', np.float64)])
+&gt;&gt;&gt; b = np.zeros((3,), dtype=a.dtype)
+&gt;&gt;&gt; rfn.recursive_fill_fields(a, b)
+array([(1, 10.), (2, 20.), (0,  0.)], dtype=[('A', '&lt;i8'), ('B', '&lt;f8')])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.rename_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">rename_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">base</span></em>, <em class="sig-param"><span class="n">namemapper</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L615-L652"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Rename the fields from a flexible-datatype ndarray or recarray.</p> <p>Nested fields are supported.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>base</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Input array whose fields must be modified.</p> </dd> <dt>
+<strong>namemapper</strong><span class="classifier">dictionary</span>
+</dt>
+<dd>
+<p>Dictionary mapping old field names to their new version.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; a = np.array([(1, (2, [3.0, 30.])), (4, (5, [6.0, 60.]))],
+...   dtype=[('a', int),('b', [('ba', float), ('bb', (float, 2))])])
+&gt;&gt;&gt; rfn.rename_fields(a, {'a':'A', 'bb':'BB'})
+array([(1, (2., [ 3., 30.])), (4, (5., [ 6., 60.]))],
+      dtype=[('A', '&lt;i8'), ('b', [('ba', '&lt;f8'), ('BB', '&lt;f8', (2,))])])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.repack_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">repack_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">a</span></em>, <em class="sig-param"><span class="n">align</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">recurse</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L776-L856"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Re-pack the fields of a structured array or dtype in memory.</p> <p>The memory layout of structured datatypes allows fields at arbitrary byte offsets. This means the fields can be separated by padding bytes, their offsets can be non-monotonically increasing, and they can overlap.</p> <p>This method removes any overlaps and reorders the fields in memory so they have increasing byte offsets, and adds or removes padding bytes depending on the <code>align</code> option, which behaves like the <code>align</code> option to <code>np.dtype</code>.</p> <p>If <code>align=False</code>, this method produces a “packed” memory layout in which each field starts at the byte the previous field ended, and any padding bytes are removed.</p> <p>If <code>align=True</code>, this methods produces an “aligned” memory layout in which each field’s offset is a multiple of its alignment, and the total itemsize is a multiple of the largest alignment, by adding padding bytes as needed.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>a</strong><span class="classifier">ndarray or dtype</span>
+</dt>
+<dd>
+<p>array or dtype for which to repack the fields.</p> </dd> <dt>
+<strong>align</strong><span class="classifier">boolean</span>
+</dt>
+<dd>
+<p>If true, use an “aligned” memory layout, otherwise use a “packed” layout.</p> </dd> <dt>
+<strong>recurse</strong><span class="classifier">boolean</span>
+</dt>
+<dd>
+<p>If True, also repack nested structures.</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>repacked</strong><span class="classifier">ndarray or dtype</span>
+</dt>
+<dd>
+<p>Copy of <code>a</code> with fields repacked, or <code>a</code> itself if no repacking was needed.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; def print_offsets(d):
+...     print("offsets:", [d.fields[name][1] for name in d.names])
+...     print("itemsize:", d.itemsize)
+...
+&gt;&gt;&gt; dt = np.dtype('u1, &lt;i8, &lt;f8', align=True)
+&gt;&gt;&gt; dt
+dtype({'names': ['f0', 'f1', 'f2'], 'formats': ['u1', '&lt;i8', '&lt;f8'], 'offsets': [0, 8, 16], 'itemsize': 24}, align=True)
+&gt;&gt;&gt; print_offsets(dt)
+offsets: [0, 8, 16]
+itemsize: 24
+&gt;&gt;&gt; packed_dt = rfn.repack_fields(dt)
+&gt;&gt;&gt; packed_dt
+dtype([('f0', 'u1'), ('f1', '&lt;i8'), ('f2', '&lt;f8')])
+&gt;&gt;&gt; print_offsets(packed_dt)
+offsets: [0, 1, 9]
+itemsize: 17
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.require_fields"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">require_fields</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">array</span></em>, <em class="sig-param"><span class="n">required_dtype</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1190-L1231"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Casts a structured array to a new dtype using assignment by field-name.</p> <p>This function assigns from the old to the new array by name, so the value of a field in the output array is the value of the field with the same name in the source array. This has the effect of creating a new ndarray containing only the fields “required” by the required_dtype.</p> <p>If a field name in the required_dtype does not exist in the input array, that field is created and set to 0 in the output array.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>a</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>array to cast</p> </dd> <dt>
+<strong>required_dtype</strong><span class="classifier">dtype</span>
+</dt>
+<dd>
+<p>datatype for output array</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>out</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>array with the new dtype, with field values copied from the fields in the input array with the same name</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; a = np.ones(4, dtype=[('a', 'i4'), ('b', 'f8'), ('c', 'u1')])
+&gt;&gt;&gt; rfn.require_fields(a, [('b', 'f4'), ('c', 'u1')])
+array([(1., 1), (1., 1), (1., 1), (1., 1)],
+  dtype=[('b', '&lt;f4'), ('c', 'u1')])
+&gt;&gt;&gt; rfn.require_fields(a, [('b', 'f4'), ('newf', 'u1')])
+array([(1., 0), (1., 0), (1., 0), (1., 0)],
+  dtype=[('b', '&lt;f4'), ('newf', 'u1')])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.stack_arrays"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">stack_arrays</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">arrays</span></em>, <em class="sig-param"><span class="n">defaults</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">usemask</span><span class="o">=</span><span class="default_value">True</span></em>, <em class="sig-param"><span class="n">asrecarray</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">autoconvert</span><span class="o">=</span><span class="default_value">False</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L1239-L1324"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Superposes arrays fields by fields</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>arrays</strong><span class="classifier">array or sequence</span>
+</dt>
+<dd>
+<p>Sequence of input arrays.</p> </dd> <dt>
+<strong>defaults</strong><span class="classifier">dictionary, optional</span>
+</dt>
+<dd>
+<p>Dictionary mapping field names to the corresponding default values.</p> </dd> <dt>
+<strong>usemask</strong><span class="classifier">{True, False}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a MaskedArray (or MaskedRecords is <code>asrecarray==True</code>) or a ndarray.</p> </dd> <dt>
+<strong>asrecarray</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether to return a recarray (or MaskedRecords if <code>usemask==True</code>) or just a flexible-type ndarray.</p> </dd> <dt>
+<strong>autoconvert</strong><span class="classifier">{False, True}, optional</span>
+</dt>
+<dd>
+<p>Whether automatically cast the type of the field to the maximum.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; x = np.array([1, 2,])
+&gt;&gt;&gt; rfn.stack_arrays(x) is x
+True
+&gt;&gt;&gt; z = np.array([('A', 1), ('B', 2)], dtype=[('A', '|S3'), ('B', float)])
+&gt;&gt;&gt; zz = np.array([('a', 10., 100.), ('b', 20., 200.), ('c', 30., 300.)],
+...   dtype=[('A', '|S3'), ('B', np.double), ('C', np.double)])
+&gt;&gt;&gt; test = rfn.stack_arrays((z,zz))
+&gt;&gt;&gt; test
+masked_array(data=[(b'A', 1.0, --), (b'B', 2.0, --), (b'a', 10.0, 100.0),
+                   (b'b', 20.0, 200.0), (b'c', 30.0, 300.0)],
+             mask=[(False, False,  True), (False, False,  True),
+                   (False, False, False), (False, False, False),
+                   (False, False, False)],
+       fill_value=(b'N/A', 1.e+20, 1.e+20),
+            dtype=[('A', 'S3'), ('B', '&lt;f8'), ('C', '&lt;f8')])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.structured_to_unstructured"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">structured_to_unstructured</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">arr</span></em>, <em class="sig-param"><span class="n">dtype</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">copy</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">casting</span><span class="o">=</span><span class="default_value">'unsafe'</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L900-L989"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Converts an n-D structured array into an (n+1)-D unstructured array.</p> <p>The new array will have a new last dimension equal in size to the number of field-elements of the input array. If not supplied, the output datatype is determined from the numpy type promotion rules applied to all the field datatypes.</p> <p>Nested fields, as well as each element of any subarray fields, all count as a single field-elements.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>arr</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Structured array or dtype to convert. Cannot contain object datatype.</p> </dd> <dt>
+<strong>dtype</strong><span class="classifier">dtype, optional</span>
+</dt>
+<dd>
+<p>The dtype of the output unstructured array.</p> </dd> <dt>
+<strong>copy</strong><span class="classifier">bool, optional</span>
+</dt>
+<dd>
+<p>See copy argument to <code>ndarray.astype</code>. If true, always return a copy. If false, and <code>dtype</code> requirements are satisfied, a view is returned.</p> </dd> <dt>
+<strong>casting</strong><span class="classifier">{‘no’, ‘equiv’, ‘safe’, ‘same_kind’, ‘unsafe’}, optional</span>
+</dt>
+<dd>
+<p>See casting argument of <code>ndarray.astype</code>. Controls what kind of data casting may occur.</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>unstructured</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Unstructured array with one more dimension.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; a = np.zeros(4, dtype=[('a', 'i4'), ('b', 'f4,u2'), ('c', 'f4', 2)])
+&gt;&gt;&gt; a
+array([(0, (0., 0), [0., 0.]), (0, (0., 0), [0., 0.]),
+       (0, (0., 0), [0., 0.]), (0, (0., 0), [0., 0.])],
+      dtype=[('a', '&lt;i4'), ('b', [('f0', '&lt;f4'), ('f1', '&lt;u2')]), ('c', '&lt;f4', (2,))])
+&gt;&gt;&gt; rfn.structured_to_unstructured(a)
+array([[0., 0., 0., 0., 0.],
+       [0., 0., 0., 0., 0.],
+       [0., 0., 0., 0., 0.],
+       [0., 0., 0., 0., 0.]])
+</pre> <pre data-language="python">&gt;&gt;&gt; b = np.array([(1, 2, 5), (4, 5, 7), (7, 8 ,11), (10, 11, 12)],
+...              dtype=[('x', 'i4'), ('y', 'f4'), ('z', 'f8')])
+&gt;&gt;&gt; np.mean(rfn.structured_to_unstructured(b[['x', 'z']]), axis=-1)
+array([ 3. ,  5.5,  9. , 11. ])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="numpy.lib.recfunctions.unstructured_to_structured"> <span class="sig-prename descclassname">numpy.lib.recfunctions.</span><span class="sig-name descname">unstructured_to_structured</span><span class="sig-paren">(</span><em class="sig-param"><span class="n">arr</span></em>, <em class="sig-param"><span class="n">dtype</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">names</span><span class="o">=</span><span class="default_value">None</span></em>, <em class="sig-param"><span class="n">align</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">copy</span><span class="o">=</span><span class="default_value">False</span></em>, <em class="sig-param"><span class="n">casting</span><span class="o">=</span><span class="default_value">'unsafe'</span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/numpy/numpy/blob/v1.22.0/numpy/lib/recfunctions.py#L996-L1098"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Converts an n-D unstructured array into an (n-1)-D structured array.</p> <p>The last dimension of the input array is converted into a structure, with number of field-elements equal to the size of the last dimension of the input array. By default all output fields have the input array’s dtype, but an output structured dtype with an equal number of fields-elements can be supplied instead.</p> <p>Nested fields, as well as each element of any subarray fields, all count towards the number of field-elements.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<dl class="simple"> <dt>
+<strong>arr</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Unstructured array or dtype to convert.</p> </dd> <dt>
+<strong>dtype</strong><span class="classifier">dtype, optional</span>
+</dt>
+<dd>
+<p>The structured dtype of the output array</p> </dd> <dt>
+<strong>names</strong><span class="classifier">list of strings, optional</span>
+</dt>
+<dd>
+<p>If dtype is not supplied, this specifies the field names for the output dtype, in order. The field dtypes will be the same as the input array.</p> </dd> <dt>
+<strong>align</strong><span class="classifier">boolean, optional</span>
+</dt>
+<dd>
+<p>Whether to create an aligned memory layout.</p> </dd> <dt>
+<strong>copy</strong><span class="classifier">bool, optional</span>
+</dt>
+<dd>
+<p>See copy argument to <code>ndarray.astype</code>. If true, always return a copy. If false, and <code>dtype</code> requirements are satisfied, a view is returned.</p> </dd> <dt>
+<strong>casting</strong><span class="classifier">{‘no’, ‘equiv’, ‘safe’, ‘same_kind’, ‘unsafe’}, optional</span>
+</dt>
+<dd>
+<p>See casting argument of <code>ndarray.astype</code>. Controls what kind of data casting may occur.</p> </dd> </dl> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<dl class="simple"> <dt>
+<strong>structured</strong><span class="classifier">ndarray</span>
+</dt>
+<dd>
+<p>Structured array with fewer dimensions.</p> </dd> </dl> </dd> </dl> <h4 class="rubric">Examples</h4> <pre data-language="python">&gt;&gt;&gt; from numpy.lib import recfunctions as rfn
+&gt;&gt;&gt; dt = np.dtype([('a', 'i4'), ('b', 'f4,u2'), ('c', 'f4', 2)])
+&gt;&gt;&gt; a = np.arange(20).reshape((4,5))
+&gt;&gt;&gt; a
+array([[ 0,  1,  2,  3,  4],
+       [ 5,  6,  7,  8,  9],
+       [10, 11, 12, 13, 14],
+       [15, 16, 17, 18, 19]])
+&gt;&gt;&gt; rfn.unstructured_to_structured(a, dt)
+array([( 0, ( 1.,  2), [ 3.,  4.]), ( 5, ( 6.,  7), [ 8.,  9.]),
+       (10, (11., 12), [13., 14.]), (15, (16., 17), [18., 19.])],
+      dtype=[('a', '&lt;i4'), ('b', [('f0', '&lt;f4'), ('f1', '&lt;u2')]), ('c', '&lt;f4', (2,))])
+</pre> </dd>
+</dl> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/user/basics.rec.html" class="_attribution-link">https://numpy.org/doc/1.22/user/basics.rec.html</a>
+  </p>
+</div>

@@ -1,0 +1,315 @@
+<h1 id="serializer-relations">Serializer relations</h1> <blockquote> <p>Data structures, not algorithms, are central to programming.</p> <p>— <a href="http://users.ece.utexas.edu/~adnan/pike.html">Rob Pike</a></p> </blockquote> <p>Relational fields are used to represent model relationships. They can be applied to <code>ForeignKey</code>, <code>ManyToManyField</code> and <code>OneToOneField</code> relationships, as well as to reverse relationships, and custom relationships such as <code>GenericForeignKey</code>.</p>  <p><strong>Note:</strong> The relational fields are declared in <code>relations.py</code>, but by convention you should import them from the <code>serializers</code> module, using <code>from rest_framework import serializers</code> and refer to fields as <code>serializers.&lt;FieldName&gt;</code>.</p>  <h4 id="inspecting-relationships">Inspecting relationships.</h4> <p>When using the <code>ModelSerializer</code> class, serializer fields and relationships will be automatically generated for you. Inspecting these automatically generated fields can be a useful tool for determining how to customize the relationship style.</p> <p>To do so, open the Django shell, using <code>python manage.py shell</code>, then import the serializer class, instantiate it, and print the object representation…</p> <pre data-language="python">&gt;&gt;&gt; from myapp.serializers import AccountSerializer
+&gt;&gt;&gt; serializer = AccountSerializer()
+&gt;&gt;&gt; print(repr(serializer))
+AccountSerializer():
+    id = IntegerField(label='ID', read_only=True)
+    name = CharField(allow_blank=True, max_length=100, required=False)
+    owner = PrimaryKeyRelatedField(queryset=User.objects.all())
+</pre> <h1 id="api-reference">API Reference</h1> <p>In order to explain the various types of relational fields, we'll use a couple of simple models for our examples. Our models will be for music albums, and the tracks listed on each album.</p> <pre data-language="python">class Album(models.Model):
+    album_name = models.CharField(max_length=100)
+    artist = models.CharField(max_length=100)
+
+class Track(models.Model):
+    album = models.ForeignKey(Album, related_name='tracks', on_delete=models.CASCADE)
+    order = models.IntegerField()
+    title = models.CharField(max_length=100)
+    duration = models.IntegerField()
+
+    class Meta:
+        unique_together = ['album', 'order']
+        ordering = ['order']
+
+    def __str__(self):
+        return '%d: %s' % (self.order, self.title)
+</pre> <h2 id="stringrelatedfield">StringRelatedField</h2> <p><code>StringRelatedField</code> may be used to represent the target of the relationship using its <code>__str__</code> method.</p> <p>For example, the following serializer:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    tracks = serializers.StringRelatedField(many=True)
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>Would serialize to the following representation:</p> <pre data-language="python">{
+    'album_name': 'Things We Lost In The Fire',
+    'artist': 'Low',
+    'tracks': [
+        '1: Sunflower',
+        '2: Whitetail',
+        '3: Dinosaur Act',
+        ...
+    ]
+}
+</pre> <p>This field is read only.</p> <p><strong>Arguments</strong>:</p> <ul> <li>
+<code>many</code> - If applied to a to-many relationship, you should set this argument to <code>True</code>.</li> </ul> <h2 id="primarykeyrelatedfield">PrimaryKeyRelatedField</h2> <p><code>PrimaryKeyRelatedField</code> may be used to represent the target of the relationship using its primary key.</p> <p>For example, the following serializer:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    tracks = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>Would serialize to a representation like this:</p> <pre data-language="python">{
+    'album_name': 'Undun',
+    'artist': 'The Roots',
+    'tracks': [
+        89,
+        90,
+        91,
+        ...
+    ]
+}
+</pre> <p>By default this field is read-write, although you can change this behavior using the <code>read_only</code> flag.</p> <p><strong>Arguments</strong>:</p> <ul> <li>
+<code>queryset</code> - The queryset used for model instance lookups when validating the field input. Relationships must either set a queryset explicitly, or set <code>read_only=True</code>.</li> <li>
+<code>many</code> - If applied to a to-many relationship, you should set this argument to <code>True</code>.</li> <li>
+<code>allow_null</code> - If set to <code>True</code>, the field will accept values of <code>None</code> or the empty string for nullable relationships. Defaults to <code>False</code>.</li> <li>
+<code>pk_field</code> - Set to a field to control serialization/deserialization of the primary key's value. For example, <code>pk_field=UUIDField(format='hex')</code> would serialize a UUID primary key into its compact hex representation.</li> </ul> <h2 id="hyperlinkedrelatedfield">HyperlinkedRelatedField</h2> <p><code>HyperlinkedRelatedField</code> may be used to represent the target of the relationship using a hyperlink.</p> <p>For example, the following serializer:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    tracks = serializers.HyperlinkedRelatedField(
+        many=True,
+        read_only=True,
+        view_name='track-detail'
+    )
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>Would serialize to a representation like this:</p> <pre data-language="python">{
+    'album_name': 'Graceland',
+    'artist': 'Paul Simon',
+    'tracks': [
+        'http://www.example.com/api/tracks/45/',
+        'http://www.example.com/api/tracks/46/',
+        'http://www.example.com/api/tracks/47/',
+        ...
+    ]
+}
+</pre> <p>By default this field is read-write, although you can change this behavior using the <code>read_only</code> flag.</p>  <p><strong>Note</strong>: This field is designed for objects that map to a URL that accepts a single URL keyword argument, as set using the <code>lookup_field</code> and <code>lookup_url_kwarg</code> arguments.</p> <p>This is suitable for URLs that contain a single primary key or slug argument as part of the URL.</p> <p>If you require more complex hyperlinked representation you'll need to customize the field, as described in the <a href="#custom-hyperlinked-fields">custom hyperlinked fields</a> section, below.</p>  <p><strong>Arguments</strong>:</p> <ul> <li>
+<code>view_name</code> - The view name that should be used as the target of the relationship. If you're using <a href="../routers#defaultrouter">the standard router classes</a> this will be a string with the format <code>&lt;modelname&gt;-detail</code>. <strong>required</strong>.</li> <li>
+<code>queryset</code> - The queryset used for model instance lookups when validating the field input. Relationships must either set a queryset explicitly, or set <code>read_only=True</code>.</li> <li>
+<code>many</code> - If applied to a to-many relationship, you should set this argument to <code>True</code>.</li> <li>
+<code>allow_null</code> - If set to <code>True</code>, the field will accept values of <code>None</code> or the empty string for nullable relationships. Defaults to <code>False</code>.</li> <li>
+<code>lookup_field</code> - The field on the target that should be used for the lookup. Should correspond to a URL keyword argument on the referenced view. Default is <code>'pk'</code>.</li> <li>
+<code>lookup_url_kwarg</code> - The name of the keyword argument defined in the URL conf that corresponds to the lookup field. Defaults to using the same value as <code>lookup_field</code>.</li> <li>
+<code>format</code> - If using format suffixes, hyperlinked fields will use the same format suffix for the target unless overridden by using the <code>format</code> argument.</li> </ul> <h2 id="slugrelatedfield">SlugRelatedField</h2> <p><code>SlugRelatedField</code> may be used to represent the target of the relationship using a field on the target.</p> <p>For example, the following serializer:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    tracks = serializers.SlugRelatedField(
+        many=True,
+        read_only=True,
+        slug_field='title'
+     )
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>Would serialize to a representation like this:</p> <pre data-language="python">{
+    'album_name': 'Dear John',
+    'artist': 'Loney Dear',
+    'tracks': [
+        'Airport Surroundings',
+        'Everything Turns to You',
+        'I Was Only Going Out',
+        ...
+    ]
+}
+</pre> <p>By default this field is read-write, although you can change this behavior using the <code>read_only</code> flag.</p> <p>When using <code>SlugRelatedField</code> as a read-write field, you will normally want to ensure that the slug field corresponds to a model field with <code>unique=True</code>.</p> <p><strong>Arguments</strong>:</p> <ul> <li>
+<code>slug_field</code> - The field on the target that should be used to represent it. This should be a field that uniquely identifies any given instance. For example, <code>username</code>. <strong>required</strong>
+</li> <li>
+<code>queryset</code> - The queryset used for model instance lookups when validating the field input. Relationships must either set a queryset explicitly, or set <code>read_only=True</code>.</li> <li>
+<code>many</code> - If applied to a to-many relationship, you should set this argument to <code>True</code>.</li> <li>
+<code>allow_null</code> - If set to <code>True</code>, the field will accept values of <code>None</code> or the empty string for nullable relationships. Defaults to <code>False</code>.</li> </ul> <h2 id="hyperlinkedidentityfield">HyperlinkedIdentityField</h2> <p>This field can be applied as an identity relationship, such as the <code>'url'</code> field on a HyperlinkedModelSerializer. It can also be used for an attribute on the object. For example, the following serializer:</p> <pre data-language="python">class AlbumSerializer(serializers.HyperlinkedModelSerializer):
+    track_listing = serializers.HyperlinkedIdentityField(view_name='track-list')
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'track_listing']
+</pre> <p>Would serialize to a representation like this:</p> <pre data-language="python">{
+    'album_name': 'The Eraser',
+    'artist': 'Thom Yorke',
+    'track_listing': 'http://www.example.com/api/track_list/12/',
+}
+</pre> <p>This field is always read-only.</p> <p><strong>Arguments</strong>:</p> <ul> <li>
+<code>view_name</code> - The view name that should be used as the target of the relationship. If you're using <a href="../routers#defaultrouter">the standard router classes</a> this will be a string with the format <code>&lt;model_name&gt;-detail</code>. <strong>required</strong>.</li> <li>
+<code>lookup_field</code> - The field on the target that should be used for the lookup. Should correspond to a URL keyword argument on the referenced view. Default is <code>'pk'</code>.</li> <li>
+<code>lookup_url_kwarg</code> - The name of the keyword argument defined in the URL conf that corresponds to the lookup field. Defaults to using the same value as <code>lookup_field</code>.</li> <li>
+<code>format</code> - If using format suffixes, hyperlinked fields will use the same format suffix for the target unless overridden by using the <code>format</code> argument.</li> </ul>  <h1 id="nested-relationships">Nested relationships</h1> <p>As opposed to previously discussed <em>references</em> to another entity, the referred entity can instead also be embedded or <em>nested</em> in the representation of the object that refers to it. Such nested relationships can be expressed by using serializers as fields. </p> <p>If the field is used to represent a to-many relationship, you should add the <code>many=True</code> flag to the serializer field.</p> <h2 id="example">Example</h2> <p>For example, the following serializer:</p> <pre data-language="python">class TrackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Track
+        fields = ['order', 'title', 'duration']
+
+class AlbumSerializer(serializers.ModelSerializer):
+    tracks = TrackSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>Would serialize to a nested representation like this:</p> <pre data-language="python">&gt;&gt;&gt; album = Album.objects.create(album_name="The Grey Album", artist='Danger Mouse')
+&gt;&gt;&gt; Track.objects.create(album=album, order=1, title='Public Service Announcement', duration=245)
+&lt;Track: Track object&gt;
+&gt;&gt;&gt; Track.objects.create(album=album, order=2, title='What More Can I Say', duration=264)
+&lt;Track: Track object&gt;
+&gt;&gt;&gt; Track.objects.create(album=album, order=3, title='Encore', duration=159)
+&lt;Track: Track object&gt;
+&gt;&gt;&gt; serializer = AlbumSerializer(instance=album)
+&gt;&gt;&gt; serializer.data
+{
+    'album_name': 'The Grey Album',
+    'artist': 'Danger Mouse',
+    'tracks': [
+        {'order': 1, 'title': 'Public Service Announcement', 'duration': 245},
+        {'order': 2, 'title': 'What More Can I Say', 'duration': 264},
+        {'order': 3, 'title': 'Encore', 'duration': 159},
+        ...
+    ],
+}
+</pre> <h2 id="writable-nested-serializers">Writable nested serializers</h2> <p>By default nested serializers are read-only. If you want to support write-operations to a nested serializer field you'll need to create <code>create()</code> and/or <code>update()</code> methods in order to explicitly specify how the child relationships should be saved:</p> <pre data-language="python">class TrackSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Track
+        fields = ['order', 'title', 'duration']
+
+class AlbumSerializer(serializers.ModelSerializer):
+    tracks = TrackSerializer(many=True)
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+
+    def create(self, validated_data):
+        tracks_data = validated_data.pop('tracks')
+        album = Album.objects.create(**validated_data)
+        for track_data in tracks_data:
+            Track.objects.create(album=album, **track_data)
+        return album
+
+&gt;&gt;&gt; data = {
+    'album_name': 'The Grey Album',
+    'artist': 'Danger Mouse',
+    'tracks': [
+        {'order': 1, 'title': 'Public Service Announcement', 'duration': 245},
+        {'order': 2, 'title': 'What More Can I Say', 'duration': 264},
+        {'order': 3, 'title': 'Encore', 'duration': 159},
+    ],
+}
+&gt;&gt;&gt; serializer = AlbumSerializer(data=data)
+&gt;&gt;&gt; serializer.is_valid()
+True
+&gt;&gt;&gt; serializer.save()
+&lt;Album: Album object&gt;
+</pre>  <h1 id="custom-relational-fields">Custom relational fields</h1> <p>In rare cases where none of the existing relational styles fit the representation you need, you can implement a completely custom relational field, that describes exactly how the output representation should be generated from the model instance.</p> <p>To implement a custom relational field, you should override <code>RelatedField</code>, and implement the <code>.to_representation(self, value)</code> method. This method takes the target of the field as the <code>value</code> argument, and should return the representation that should be used to serialize the target. The <code>value</code> argument will typically be a model instance.</p> <p>If you want to implement a read-write relational field, you must also implement the <a href="../serializers/index#to_internal_valueself-data"><code>.to_internal_value(self, data)</code> method</a>.</p> <p>To provide a dynamic queryset based on the <code>context</code>, you can also override <code>.get_queryset(self)</code> instead of specifying <code>.queryset</code> on the class or when initializing the field.</p> <h2 id="example_1">Example</h2> <p>For example, we could define a relational field to serialize a track to a custom string representation, using its ordering, title, and duration:</p> <pre data-language="python">import time
+
+class TrackListingField(serializers.RelatedField):
+    def to_representation(self, value):
+        duration = time.strftime('%M:%S', time.gmtime(value.duration))
+        return 'Track %d: %s (%s)' % (value.order, value.name, duration)
+
+class AlbumSerializer(serializers.ModelSerializer):
+    tracks = TrackListingField(many=True)
+
+    class Meta:
+        model = Album
+        fields = ['album_name', 'artist', 'tracks']
+</pre> <p>This custom field would then serialize to the following representation:</p> <pre data-language="python">{
+    'album_name': 'Sometimes I Wish We Were an Eagle',
+    'artist': 'Bill Callahan',
+    'tracks': [
+        'Track 1: Jim Cain (04:39)',
+        'Track 2: Eid Ma Clack Shaw (04:19)',
+        'Track 3: The Wind and the Dove (04:34)',
+        ...
+    ]
+}
+</pre>  <h1 id="custom-hyperlinked-fields">Custom hyperlinked fields</h1> <p>In some cases you may need to customize the behavior of a hyperlinked field, in order to represent URLs that require more than a single lookup field.</p> <p>You can achieve this by overriding <code>HyperlinkedRelatedField</code>. There are two methods that may be overridden:</p> <p><strong>get_url(self, obj, view_name, request, format)</strong></p> <p>The <code>get_url</code> method is used to map the object instance to its URL representation.</p> <p>May raise a <code>NoReverseMatch</code> if the <code>view_name</code> and <code>lookup_field</code> attributes are not configured to correctly match the URL conf.</p> <p><strong>get_object(self, view_name, view_args, view_kwargs)</strong></p> <p>If you want to support a writable hyperlinked field then you'll also want to override <code>get_object</code>, in order to map incoming URLs back to the object they represent. For read-only hyperlinked fields there is no need to override this method.</p> <p>The return value of this method should the object that corresponds to the matched URL conf arguments.</p> <p>May raise an <code>ObjectDoesNotExist</code> exception.</p> <h2 id="example_2">Example</h2> <p>Say we have a URL for a customer object that takes two keyword arguments, like so:</p> <pre data-language="python">/api/&lt;organization_slug&gt;/customers/&lt;customer_pk&gt;/
+</pre> <p>This cannot be represented with the default implementation, which accepts only a single lookup field.</p> <p>In this case we'd need to override <code>HyperlinkedRelatedField</code> to get the behavior we want:</p> <pre data-language="python">from rest_framework import serializers
+from rest_framework.reverse import reverse
+
+class CustomerHyperlink(serializers.HyperlinkedRelatedField):
+    # We define these as class attributes, so we don't need to pass them as arguments.
+    view_name = 'customer-detail'
+    queryset = Customer.objects.all()
+
+    def get_url(self, obj, view_name, request, format):
+        url_kwargs = {
+            'organization_slug': obj.organization.slug,
+            'customer_pk': obj.pk
+        }
+        return reverse(view_name, kwargs=url_kwargs, request=request, format=format)
+
+    def get_object(self, view_name, view_args, view_kwargs):
+        lookup_kwargs = {
+           'organization__slug': view_kwargs['organization_slug'],
+           'pk': view_kwargs['customer_pk']
+        }
+        return self.get_queryset().get(**lookup_kwargs)
+</pre> <p>Note that if you wanted to use this style together with the generic views then you'd also need to override <code>.get_object</code> on the view in order to get the correct lookup behavior.</p> <p>Generally we recommend a flat style for API representations where possible, but the nested URL style can also be reasonable when used in moderation.</p>  <h1 id="further-notes">Further notes</h1> <h2 id="the-queryset-argument">The queryset argument</h2> <p>The <code>queryset</code> argument is only ever required for <em>writable</em> relationship field, in which case it is used for performing the model instance lookup, that maps from the primitive user input, into a model instance.</p> <p>In version 2.x a serializer class could <em>sometimes</em> automatically determine the <code>queryset</code> argument <em>if</em> a <code>ModelSerializer</code> class was being used.</p> <p>This behavior is now replaced with <em>always</em> using an explicit <code>queryset</code> argument for writable relational fields.</p> <p>Doing so reduces the amount of hidden 'magic' that <code>ModelSerializer</code> provides, makes the behavior of the field more clear, and ensures that it is trivial to move between using the <code>ModelSerializer</code> shortcut, or using fully explicit <code>Serializer</code> classes.</p> <h2 id="customizing-the-html-display">Customizing the HTML display</h2> <p>The built-in <code>__str__</code> method of the model will be used to generate string representations of the objects used to populate the <code>choices</code> property. These choices are used to populate select HTML inputs in the browsable API.</p> <p>To provide customized representations for such inputs, override <code>display_value()</code> of a <code>RelatedField</code> subclass. This method will receive a model object, and should return a string suitable for representing it. For example:</p> <pre data-language="python">class TrackPrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
+    def display_value(self, instance):
+        return 'Track: %s' % (instance.title)
+</pre> <h2 id="select-field-cutoffs">Select field cutoffs</h2> <p>When rendered in the browsable API relational fields will default to only displaying a maximum of 1000 selectable items. If more items are present then a disabled option with "More than 1000 items…" will be displayed.</p> <p>This behavior is intended to prevent a template from being unable to render in an acceptable timespan due to a very large number of relationships being displayed.</p> <p>There are two keyword arguments you can use to control this behavior:</p> <ul> <li>
+<code>html_cutoff</code> - If set this will be the maximum number of choices that will be displayed by a HTML select drop down. Set to <code>None</code> to disable any limiting. Defaults to <code>1000</code>.</li> <li>
+<code>html_cutoff_text</code> - If set this will display a textual indicator if the maximum number of items have been cutoff in an HTML select drop down. Defaults to <code>"More than {count} items…"</code>
+</li> </ul> <p>You can also control these globally using the settings <code>HTML_SELECT_CUTOFF</code> and <code>HTML_SELECT_CUTOFF_TEXT</code>.</p> <p>In cases where the cutoff is being enforced you may want to instead use a plain input field in the HTML form. You can do so using the <code>style</code> keyword argument. For example:</p> <pre data-language="python">assigned_to = serializers.SlugRelatedField(
+   queryset=User.objects.all(),
+   slug_field='username',
+   style={'base_template': 'input.html'}
+)
+</pre> <h2 id="reverse-relations">Reverse relations</h2> <p>Note that reverse relationships are not automatically included by the <code>ModelSerializer</code> and <code>HyperlinkedModelSerializer</code> classes. To include a reverse relationship, you must explicitly add it to the fields list. For example:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    class Meta:
+        fields = ['tracks', ...]
+</pre> <p>You'll normally want to ensure that you've set an appropriate <code>related_name</code> argument on the relationship, that you can use as the field name. For example:</p> <pre data-language="python">class Track(models.Model):
+    album = models.ForeignKey(Album, related_name='tracks', on_delete=models.CASCADE)
+    ...
+</pre> <p>If you have not set a related name for the reverse relationship, you'll need to use the automatically generated related name in the <code>fields</code> argument. For example:</p> <pre data-language="python">class AlbumSerializer(serializers.ModelSerializer):
+    class Meta:
+        fields = ['track_set', ...]
+</pre> <p>See the Django documentation on <a href="https://docs.djangoproject.com/en/stable/topics/db/queries/#following-relationships-backward">reverse relationships</a> for more details.</p> <h2 id="generic-relationships">Generic relationships</h2> <p>If you want to serialize a generic foreign key, you need to define a custom field, to determine explicitly how you want to serialize the targets of the relationship.</p> <p>For example, given the following model for a tag, which has a generic relationship with other arbitrary models:</p> <pre data-language="python">class TaggedItem(models.Model):
+    """
+    Tags arbitrary model instances using a generic relation.
+
+    See: https://docs.djangoproject.com/en/stable/ref/contrib/contenttypes/
+    """
+    tag_name = models.SlugField()
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    tagged_object = GenericForeignKey('content_type', 'object_id')
+
+    def __str__(self):
+        return self.tag_name
+</pre> <p>And the following two models, which may have associated tags:</p> <pre data-language="python">class Bookmark(models.Model):
+    """
+    A bookmark consists of a URL, and 0 or more descriptive tags.
+    """
+    url = models.URLField()
+    tags = GenericRelation(TaggedItem)
+
+
+class Note(models.Model):
+    """
+    A note consists of some text, and 0 or more descriptive tags.
+    """
+    text = models.CharField(max_length=1000)
+    tags = GenericRelation(TaggedItem)
+</pre> <p>We could define a custom field that could be used to serialize tagged instances, using the type of each instance to determine how it should be serialized:</p> <pre data-language="python">class TaggedObjectRelatedField(serializers.RelatedField):
+    """
+    A custom field to use for the `tagged_object` generic relationship.
+    """
+
+    def to_representation(self, value):
+        """
+        Serialize tagged objects to a simple textual representation.
+        """
+        if isinstance(value, Bookmark):
+            return 'Bookmark: ' + value.url
+        elif isinstance(value, Note):
+            return 'Note: ' + value.text
+        raise Exception('Unexpected type of tagged object')
+</pre> <p>If you need the target of the relationship to have a nested representation, you can use the required serializers inside the <code>.to_representation()</code> method:</p> <pre data-language="python">    def to_representation(self, value):
+        """
+        Serialize bookmark instances using a bookmark serializer,
+        and note instances using a note serializer.
+        """
+        if isinstance(value, Bookmark):
+            serializer = BookmarkSerializer(value)
+        elif isinstance(value, Note):
+            serializer = NoteSerializer(value)
+        else:
+            raise Exception('Unexpected type of tagged object')
+
+        return serializer.data
+</pre> <p>Note that reverse generic keys, expressed using the <code>GenericRelation</code> field, can be serialized using the regular relational field types, since the type of the target in the relationship is always known.</p> <p>For more information see <a href="https://docs.djangoproject.com/en/stable/ref/contrib/contenttypes/#id1">the Django documentation on generic relations</a>.</p> <h2 id="manytomanyfields-with-a-through-model">ManyToManyFields with a Through Model</h2> <p>By default, relational fields that target a <code>ManyToManyField</code> with a <code>through</code> model specified are set to read-only.</p> <p>If you explicitly specify a relational field pointing to a <code>ManyToManyField</code> with a through model, be sure to set <code>read_only</code> to <code>True</code>.</p> <p>If you wish to represent <a href="https://docs.djangoproject.com/en/stable/topics/db/models/#intermediary-manytomany">extra fields on a through model</a> then you may serialize the through model as <a href="../serializers/index#dealing-with-nested-objects">a nested object</a>.</p>  <h1 id="third-party-packages">Third Party Packages</h1> <p>The following third party packages are also available.</p> <h2 id="drf-nested-routers">DRF Nested Routers</h2> <p>The <a href="https://github.com/alanjds/drf-nested-routers">drf-nested-routers package</a> provides routers and relationship fields for working with nested resources.</p> <h2 id="rest-framework-generic-relations">Rest Framework Generic Relations</h2> <p>The <a href="https://github.com/Ian-Foote/rest-framework-generic-relations">rest-framework-generic-relations</a> library provides read/write serialization for generic foreign keys.</p> <p class="_links"><a class="_links-link" href="https://github.com/encode/django-rest-framework/tree/master/rest_framework/relations.py">relations.py</a></p><div class="_attribution">
+  <p class="_attribution-p">
+    Copyright &copy; 2011&ndash;present Encode OSS Ltd.<br>Licensed under the BSD License.<br>
+    <a href="https://www.django-rest-framework.org/api-guide/relations/" class="_attribution-link">https://www.django-rest-framework.org/api-guide/relations/</a>
+  </p>
+</div>

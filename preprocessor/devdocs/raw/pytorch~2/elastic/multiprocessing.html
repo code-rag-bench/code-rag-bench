@@ -1,0 +1,113 @@
+<h1 id="multiprocessing">Multiprocessing</h1> <p id="module-torch.distributed.elastic.multiprocessing">Library that launches and manages <code>n</code> copies of worker subprocesses either specified by a function or a binary.</p> <p>For functions, it uses <code>torch.multiprocessing</code> (and therefore python <code>multiprocessing</code>) to spawn/fork worker processes. For binaries it uses python <code>subprocessing.Popen</code> to create worker processes.</p> <p>Usage 1: Launching two trainers as a function</p> <pre data-language="python">from torch.distributed.elastic.multiprocessing import Std, start_processes
+
+def trainer(a, b, c):
+    pass # train
+
+
+# runs two trainers
+# LOCAL_RANK=0 trainer(1,2,3)
+# LOCAL_RANK=1 trainer(4,5,6)
+ctx = start_processes(
+        name="trainer",
+        entrypoint=trainer,
+        args={0: (1,2,3), 1: (4,5,6)},
+        envs={0: {"LOCAL_RANK": 0}, 1: {"LOCAL_RANK": 1}},
+        log_dir="/tmp/foobar",
+        redirects=Std.ALL, # write all worker stdout/stderr to a log file
+        tee={0: Std.ERR}, # tee only local rank 0's stderr to console
+      )
+
+# waits for all copies of trainer to finish
+ctx.wait()
+</pre> <p>Usage 2: Launching 2 echo workers as a binary</p> <pre data-language="python"># same as invoking
+# echo hello
+# echo world &gt; stdout.log
+ctx = start_processes(
+        name="echo"
+        entrypoint="echo",
+        log_dir="/tmp/foobar",
+        args={0: "hello", 1: "world"},
+        redirects={1: Std.OUT},
+       )
+</pre> <p>Just like <code>torch.multiprocessing</code>, the return value of the function <a class="reference internal" href="#torch.distributed.elastic.multiprocessing.start_processes" title="torch.distributed.elastic.multiprocessing.start_processes"><code>start_processes()</code></a> is a process context (<a class="reference internal" href="#torch.distributed.elastic.multiprocessing.api.PContext" title="torch.distributed.elastic.multiprocessing.api.PContext"><code>api.PContext</code></a>). If a function was launched, a <a class="reference internal" href="#torch.distributed.elastic.multiprocessing.api.MultiprocessContext" title="torch.distributed.elastic.multiprocessing.api.MultiprocessContext"><code>api.MultiprocessContext</code></a> is returned and if a binary was launched a <a class="reference internal" href="#torch.distributed.elastic.multiprocessing.api.SubprocessContext" title="torch.distributed.elastic.multiprocessing.api.SubprocessContext"><code>api.SubprocessContext</code></a> is returned. Both are specific implementations of the parent <a class="reference internal" href="#torch.distributed.elastic.multiprocessing.api.PContext" title="torch.distributed.elastic.multiprocessing.api.PContext"><code>api.PContext</code></a> class.</p>  <h2 id="starting-multiple-workers">Starting Multiple Workers</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.start_processes">
+<code>torch.distributed.elastic.multiprocessing.start_processes(name, entrypoint, args, envs, log_dir, start_method='spawn', redirects=Std.NONE, tee=Std.NONE)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing.html#start_processes"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Starts <code>n</code> copies of <code>entrypoint</code> processes with the provided options. <code>entrypoint</code> is either a <code>Callable</code> (function) or a <code>str</code> (binary). The number of copies is determined by the number of entries for <code>args</code> and <code>envs</code> arguments, which need to have the same key set.</p> <p><code>args</code> and <code>env</code> parameters are the arguments and environment variables to pass down to the entrypoint mapped by the replica index (local rank). All local ranks must be accounted for. That is, the keyset should be <code>{0,1,...,(nprocs-1)}</code>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>When the <code>entrypoint</code> is a binary (<code>str</code>), <code>args</code> can only be strings. If any other type is given, then it is casted to a string representation (e.g. <code>str(arg1)</code>). Furthermore, a binary failure will only write an <code>error.json</code> error file if the main function is annotated with <code>torch.distributed.elastic.multiprocessing.errors.record</code>. For function launches, this is done by default and there is no need to manually annotate with the <code>@record</code> annotation.</p> </div> <p><code>redirects</code> and <code>tee</code> are bitmasks specifying which std stream(s) to redirect to a log file in the <code>log_dir</code>. Valid mask values are defined in <code>Std</code>. To redirect/tee only certain local ranks, pass <code>redirects</code> as a map with the key as the local rank to specify the redirect behavior for. Any missing local ranks will default to <code>Std.NONE</code>.</p> <p><code>tee</code> acts like the unix “tee” command in that it redirects + prints to console. To avoid worker stdout/stderr from printing to console, use the <code>redirects</code> parameter.</p> <p>For each process, the <code>log_dir</code> will contain:</p> <ol class="arabic simple"> <li>
+<code>{local_rank}/error.json</code>: if the process failed, a file with the error info</li> <li>
+<code>{local_rank}/stdout.json</code>: if <code>redirect &amp; STDOUT == STDOUT</code>
+</li> <li>
+<code>{local_rank}/stderr.json</code>: if <code>redirect &amp; STDERR == STDERR</code>
+</li> </ol> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is expected that the <code>log_dir</code> exists, is empty, and is a directory.</p> </div> <p>Example:</p> <pre data-language="python">log_dir = "/tmp/test"
+
+# ok; two copies of foo: foo("bar0"), foo("bar1")
+start_processes(
+   name="trainer",
+   entrypoint=foo,
+   args:{0:("bar0",), 1:("bar1",),
+   envs:{0:{}, 1:{}},
+   log_dir=log_dir
+)
+
+# invalid; envs missing for local rank 1
+start_processes(
+   name="trainer",
+   entrypoint=foo,
+   args:{0:("bar0",), 1:("bar1",),
+   envs:{0:{}},
+   log_dir=log_dir
+)
+
+# ok; two copies of /usr/bin/touch: touch file1, touch file2
+start_processes(
+   name="trainer",
+   entrypoint="/usr/bin/touch",
+   args:{0:("file1",), 1:("file2",),
+   envs:{0:{}, 1:{}},
+   log_dir=log_dir
+ )
+
+# caution; arguments casted to string, runs:
+# echo "1" "2" "3" and echo "[1, 2, 3]"
+start_processes(
+   name="trainer",
+   entrypoint="/usr/bin/echo",
+   args:{0:(1,2,3), 1:([1,2,3],),
+   envs:{0:{}, 1:{}},
+   log_dir=log_dir
+ )
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – a human readable short name that describes what the processes are (used as header when tee’ing stdout/stderr outputs)</li> <li>
+<strong>entrypoint</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – either a <code>Callable</code> (function) or <code>cmd</code> (binary)</li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a><em>]</em>) – arguments to each replica</li> <li>
+<strong>envs</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em>) – env vars to each replica</li> <li>
+<strong>log_dir</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – directory used to write log files</li> <li>
+<strong>start_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – multiprocessing start method (spawn, fork, forkserver) ignored for binaries</li> <li>
+<strong>redirects</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><em>Std</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><em>Std</em><em>]</em><em>]</em>) – which std streams to redirect to a log file</li> <li>
+<strong>tee</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><em>Std</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><em>Std</em><em>]</em><em>]</em>) – which std streams to redirect + print to console</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.distributed.elastic.multiprocessing.api.PContext" title="torch.distributed.elastic.multiprocessing.api.PContext">PContext</a></p> </dd> </dl> </dd>
+</dl>   <h2 id="process-context">Process Context</h2> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.api.PContext">
+<code>class torch.distributed.elastic.multiprocessing.api.PContext(name, entrypoint, args, envs, stdouts, stderrs, tee_stdouts, tee_stderrs, error_files)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/api.html#PContext"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>The base class that standardizes operations over a set of processes that are launched via different mechanisms. The name <code>PContext</code> is intentional to disambiguate with <code>torch.multiprocessing.ProcessContext</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>stdouts and stderrs should ALWAYS be a superset of tee_stdouts and tee_stderrs (respectively) this is b/c tee is implemented as a redirect + tail -f &lt;stdout/stderr.log&gt;</p> </div>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.api.MultiprocessContext">
+<code>class torch.distributed.elastic.multiprocessing.api.MultiprocessContext(name, entrypoint, args, envs, stdouts, stderrs, tee_stdouts, tee_stderrs, error_files, start_method)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/api.html#MultiprocessContext"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>PContext</code> holding worker processes invoked as a function.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.api.SubprocessContext">
+<code>class torch.distributed.elastic.multiprocessing.api.SubprocessContext(name, entrypoint, args, envs, stdouts, stderrs, tee_stdouts, tee_stderrs, error_files)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/api.html#SubprocessContext"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>PContext</code> holding worker processes invoked as a binary.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.api.RunProcsResult">
+<code>class torch.distributed.elastic.multiprocessing.api.RunProcsResult(return_values=&lt;factory&gt;, failures=&lt;factory&gt;, stdouts=&lt;factory&gt;, stderrs=&lt;factory&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/api.html#RunProcsResult"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Results of a completed run of processes started with <code>start_processes()</code>. Returned by <code>PContext</code>.</p> <p>Note the following:</p> <ol class="arabic simple"> <li>All fields are mapped by local rank</li> <li>
+<code>return_values</code> - only populated for functions (not the binaries).</li> <li>
+<code>stdouts</code> - path to stdout.log (empty string if no redirect)</li> <li>
+<code>stderrs</code> - path to stderr.log (empty string if no redirect)</li> </ol>  </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/elastic/multiprocessing.html" class="_attribution-link">https://pytorch.org/docs/2.1/elastic/multiprocessing.html</a>
+  </p>
+</div>

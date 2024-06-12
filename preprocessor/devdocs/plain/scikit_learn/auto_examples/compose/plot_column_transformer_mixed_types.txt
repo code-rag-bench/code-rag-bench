@@ -1,0 +1,381 @@
+# Column Transformer with Mixed Types
+
+This example illustrates how to apply different preprocessing and feature
+extraction pipelines to different subsets of features, using
+`ColumnTransformer`. This is particularly handy for the case of datasets that
+contain heterogeneous data types, since we may want to scale the numeric
+features and one-hot encode the categorical ones.
+
+In this example, the numeric data is standard-scaled after mean-imputation,
+while the categorical data is one-hot encoded after imputing missing values
+with a new category (`'missing'`).
+
+In addition, we show two different ways to dispatch the columns to the
+particular pre-processor: by column names and by column data types.
+
+Finally, the preprocessing pipeline is integrated in a full prediction
+pipeline using `Pipeline`, together with a simple classification model.
+
+    
+    # Author: Pedro Morales <part.morales@gmail.com>
+    #
+    # License: BSD 3 clause
+    
+    import numpy as np
+    
+    from sklearn.compose import ColumnTransformer
+    from sklearn.datasets import fetch_openml
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split, GridSearchCV
+    
+    np.random.seed(0)
+    
+    # Load data from https://www.openml.org/d/40945
+    X, y = fetch_openml("titanic", version=1, as_frame=True, return_X_y=True)
+    
+    # Alternatively X and y can be obtained directly from the frame attribute:
+    # X = titanic.frame.drop('survived', axis=1)
+    # y = titanic.frame['survived']
+    
+## Use `ColumnTransformer` by selecting column by names
+
+We will train our classifier with the following features:
+
+Numeric Features:
+
+  * `age`: float;
+  * `fare`: float.
+
+Categorical Features:
+
+  * `embarked`: categories encoded as strings `{'C', 'S', 'Q'}`;
+  * `sex`: categories encoded as strings `{'female', 'male'}`;
+  * `pclass`: ordinal integers `{1, 2, 3}`.
+
+We create the preprocessing pipelines for both numeric and categorical data.
+Note that `pclass` could either be treated as a categorical or numeric
+feature.
+
+    
+    numeric_features = ['age', 'fare']
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())])
+    
+    categorical_features = ['embarked', 'sex', 'pclass']
+    categorical_transformer = OneHotEncoder(handle_unknown='ignore')
+    
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features)])
+    
+    # Append classifier to preprocessing pipeline.
+    # Now we have a full prediction pipeline.
+    clf = Pipeline(steps=[('preprocessor', preprocessor),
+                          ('classifier', LogisticRegression())])
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2,
+                                                        random_state=0)
+    
+    clf.fit(X_train, y_train)
+    print("model score: %.3f" % clf.score(X_test, y_test))
+    
+Out:
+
+    
+    model score: 0.790
+    
+## HTML representation of `Pipeline`
+
+When the `Pipeline` is printed out in a jupyter notebook an HTML
+representation of the estimator is displayed as follows:
+
+    
+    from sklearn import set_config
+    
+    set_config(display='diagram')
+    clf
+    
+Pipeline
+
+    
+    Pipeline(steps=[('preprocessor',
+                     ColumnTransformer(transformers=[('num',
+                                                      Pipeline(steps=[('imputer',
+                                                                       SimpleImputer(strategy='median')),
+                                                                      ('scaler',
+                                                                       StandardScaler())]),
+                                                      ['age', 'fare']),
+                                                     ('cat',
+                                                      OneHotEncoder(handle_unknown='ignore'),
+                                                      ['embarked', 'sex',
+                                                       'pclass'])])),
+                    ('classifier', LogisticRegression())])
+preprocessor: ColumnTransformer
+
+    
+    ColumnTransformer(transformers=[('num',
+                                     Pipeline(steps=[('imputer',
+                                                      SimpleImputer(strategy='median')),
+                                                     ('scaler', StandardScaler())]),
+                                     ['age', 'fare']),
+                                    ('cat', OneHotEncoder(handle_unknown='ignore'),
+                                     ['embarked', 'sex', 'pclass'])])
+num
+
+    
+    ['age', 'fare']
+SimpleImputer
+
+    
+    SimpleImputer(strategy='median')
+StandardScaler
+
+    
+    StandardScaler()
+cat
+
+    
+    ['embarked', 'sex', 'pclass']
+OneHotEncoder
+
+    
+    OneHotEncoder(handle_unknown='ignore')
+LogisticRegression
+
+    
+    LogisticRegression()
+  
+  
+
+## Use `ColumnTransformer` by selecting column by data types
+
+When dealing with a cleaned dataset, the preprocessing can be automatic by
+using the data types of the column to decide whether to treat a column as a
+numerical or categorical feature. `sklearn.compose.make_column_selector` gives
+this possibility. First, let’s only select a subset of columns to simplify our
+example.
+
+    
+    subset_feature = ['embarked', 'sex', 'pclass', 'age', 'fare']
+    X_train, X_test = X_train[subset_feature], X_test[subset_feature]
+    
+Then, we introspect the information regarding each column data type.
+
+    
+    X_train.info()
+    
+Out:
+
+    
+    <class 'pandas.core.frame.DataFrame'>
+    Int64Index: 1047 entries, 1118 to 684
+    Data columns (total 5 columns):
+     #   Column    Non-Null Count  Dtype
+    ---  ------    --------------  -----
+     0   embarked  1045 non-null   category
+     1   sex       1047 non-null   category
+     2   pclass    1047 non-null   float64
+     3   age       841 non-null    float64
+     4   fare      1046 non-null   float64
+    dtypes: category(2), float64(3)
+    memory usage: 35.0 KB
+    
+We can observe that the `embarked` and `sex` columns were tagged as `category`
+columns when loading the data with `fetch_openml`. Therefore, we can use this
+information to dispatch the categorical columns to the
+`categorical_transformer` and the remaining columns to the
+`numerical_transformer`.
+
+Note
+
+In practice, you will have to handle yourself the column data type. If you
+want some columns to be considered as `category`, you will have to convert
+them into categorical columns. If you are using pandas, you can refer to their
+documentation regarding Categorical data.
+
+    
+    from sklearn.compose import make_column_selector as selector
+    
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', numeric_transformer, selector(dtype_exclude="category")),
+        ('cat', categorical_transformer, selector(dtype_include="category"))
+    ])
+    clf = Pipeline(steps=[('preprocessor', preprocessor),
+                          ('classifier', LogisticRegression())])
+    
+    
+    clf.fit(X_train, y_train)
+    print("model score: %.3f" % clf.score(X_test, y_test))
+    
+Out:
+
+    
+    model score: 0.794
+    
+The resulting score is not exactly the same as the one from the previous
+pipeline becase the dtype-based selector treats the `pclass` columns as a
+numeric features instead of a categorical feature as previously:
+
+    
+    selector(dtype_exclude="category")(X_train)
+    
+Out:
+
+    
+    ['pclass', 'age', 'fare']
+    
+    
+    selector(dtype_include="category")(X_train)
+    
+Out:
+
+    
+    ['embarked', 'sex']
+    
+## Using the prediction pipeline in a grid search
+
+Grid search can also be performed on the different preprocessing steps defined
+in the `ColumnTransformer` object, together with the classifier’s
+hyperparameters as part of the `Pipeline`. We will search for both the imputer
+strategy of the numeric preprocessing and the regularization parameter of the
+logistic regression using `GridSearchCV`.
+
+    
+    param_grid = {
+        'preprocessor__num__imputer__strategy': ['mean', 'median'],
+        'classifier__C': [0.1, 1.0, 10, 100],
+    }
+    
+    grid_search = GridSearchCV(clf, param_grid, cv=10)
+    grid_search
+    
+GridSearchCV
+
+    
+    GridSearchCV(cv=10,
+                 estimator=Pipeline(steps=[('preprocessor',
+                                            ColumnTransformer(transformers=[('num',
+                                                                             Pipeline(steps=[('imputer',
+                                                                                              SimpleImputer(strategy='median')),
+                                                                                             ('scaler',
+                                                                                              StandardScaler())]),
+                                                                             ),
+                                                                            ('cat',
+                                                                             OneHotEncoder(handle_unknown='ignore'),
+                                                                             )])),
+                                           ('classifier', LogisticRegression())]),
+                 param_grid={'classifier__C': [0.1, 1.0, 10, 100],
+                             'preprocessor__num__imputer__strategy': ['mean',
+                                                                      'median']})
+preprocessor: ColumnTransformer
+
+    
+    ColumnTransformer(transformers=[('num',
+                                     Pipeline(steps=[('imputer',
+                                                      SimpleImputer(strategy='median')),
+                                                     ('scaler', StandardScaler())]),
+                                     ),
+                                    ('cat', OneHotEncoder(handle_unknown='ignore'),
+                                     )])
+num
+
+SimpleImputer
+
+    
+    SimpleImputer(strategy='median')
+StandardScaler
+
+    
+    StandardScaler()
+cat
+
+OneHotEncoder
+
+    
+    OneHotEncoder(handle_unknown='ignore')
+LogisticRegression
+
+    
+    LogisticRegression()
+  
+  
+
+Calling ‘fit’ triggers the cross-validated search for the best hyper-
+parameters combination:
+
+    
+    grid_search.fit(X_train, y_train)
+    
+    print(f"Best params:")
+    print(grid_search.best_params_)
+    
+Out:
+
+    
+    Best params:
+    {'classifier__C': 0.1, 'preprocessor__num__imputer__strategy': 'mean'}
+    
+The internal cross-validation scores obtained by those parameters is:
+
+    
+    print(f"Internal CV score: {grid_search.best_score_:.3f}")
+    
+Out:
+
+    
+    Internal CV score: 0.784
+    
+We can also introspect the top grid search results as a pandas dataframe:
+
+    
+    import pandas as pd
+    
+    cv_results = pd.DataFrame(grid_search.cv_results_)
+    cv_results = cv_results.sort_values("mean_test_score", ascending=False)
+    cv_results[["mean_test_score", "std_test_score",
+                "param_preprocessor__num__imputer__strategy",
+                "param_classifier__C"
+                ]].head(5)
+    
+| mean_test_score | std_test_score | param_preprocessor__num__imputer__strategy | param_classifier__C  
+---|---|---|---|---  
+0 | 0.784167 | 0.035824 | mean | 0.1  
+2 | 0.780366 | 0.032722 | mean | 1.0  
+1 | 0.780348 | 0.037245 | median | 0.1  
+4 | 0.779414 | 0.033105 | mean | 10  
+6 | 0.779414 | 0.033105 | mean | 100  
+  
+  
+
+The best hyper-parameters have be used to re-fit a final model on the full
+training set. We can evaluate that final model on held out test data that was
+not used for hyparameter tuning.
+
+    
+    print(("best logistic regression from grid search: %.3f"
+           % grid_search.score(X_test, y_test)))
+    
+Out:
+
+    
+    best logistic regression from grid search: 0.794
+    
+Total running time of the script: ( 0 minutes 3.793 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_column_transformer_mixed_types.py`
+
+`Download Jupyter notebook: plot_column_transformer_mixed_types.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-
+learn.org/0.24/auto_examples/compose/plot_column_transformer_mixed_types.html
+

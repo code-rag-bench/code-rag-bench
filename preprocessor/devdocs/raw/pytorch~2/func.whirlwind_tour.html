@@ -1,0 +1,89 @@
+<h1 id="torch-func-whirlwind-tour">torch.func Whirlwind Tour</h1>  <h2 id="what-is-torch-func">What is torch.func?</h2> <p>torch.func, previously known as functorch, is a library for <a class="reference external" href="https://github.com/google/jax">JAX</a>-like composable function transforms in PyTorch.</p> <ul class="simple"> <li>A “function transform” is a higher-order function that accepts a numerical function and returns a new function that computes a different quantity.</li> <li>torch.func has auto-differentiation transforms (<code>grad(f)</code> returns a function that computes the gradient of <code>f</code>), a vectorization/batching transform (<code>vmap(f)</code> returns a function that computes <code>f</code> over batches of inputs), and others.</li> <li>These function transforms can compose with each other arbitrarily. For example, composing <code>vmap(grad(f))</code> computes a quantity called per-sample-gradients that stock PyTorch cannot efficiently compute today.</li> </ul>   <h2 id="why-composable-function-transforms">Why composable function transforms?</h2> <p>There are a number of use cases that are tricky to do in PyTorch today: - computing per-sample-gradients (or other per-sample quantities)</p> <ul class="simple"> <li>running ensembles of models on a single machine</li> <li>efficiently batching together tasks in the inner-loop of MAML</li> <li>efficiently computing Jacobians and Hessians</li> <li>efficiently computing batched Jacobians and Hessians</li> </ul> <p>Composing <a class="reference internal" href="generated/torch.func.vmap#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a>, <a class="reference internal" href="generated/torch.func.grad#torch.func.grad" title="torch.func.grad"><code>grad()</code></a>, <a class="reference internal" href="generated/torch.func.vjp#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a>, and <a class="reference internal" href="generated/torch.func.jvp#torch.func.jvp" title="torch.func.jvp"><code>jvp()</code></a> transforms allows us to express the above without designing a separate subsystem for each.</p>   <h2 id="what-are-the-transforms">What are the transforms?</h2>  <h3 id="grad-gradient-computation">
+<a class="reference internal" href="generated/torch.func.grad#torch.func.grad" title="torch.func.grad"><code>grad()</code></a> (gradient computation)</h3> <p><code>grad(func)</code> is our gradient computation transform. It returns a new function that computes the gradients of <code>func</code>. It assumes <code>func</code> returns a single-element Tensor and by default it computes the gradients of the output of <code>func</code> w.r.t. to the first input.</p> <pre data-language="python">import torch
+from torch.func import grad
+x = torch.randn([])
+cos_x = grad(lambda x: torch.sin(x))(x)
+assert torch.allclose(cos_x, x.cos())
+
+# Second-order gradients
+neg_sin_x = grad(grad(lambda x: torch.sin(x)))(x)
+assert torch.allclose(neg_sin_x, -x.sin())
+</pre>   <h3 id="vmap-auto-vectorization">
+<a class="reference internal" href="generated/torch.func.vmap#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> (auto-vectorization)</h3> <p>Note: <a class="reference internal" href="generated/torch.func.vmap#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> imposes restrictions on the code that it can be used on. For more details, please see <a class="reference internal" href="func.ux_limitations#ux-limitations"><span class="std std-ref">UX Limitations</span></a>.</p> <p><code>vmap(func)(*inputs)</code> is a transform that adds a dimension to all Tensor operations in <code>func</code>. <code>vmap(func)</code> returns a new function that maps <code>func</code> over some dimension (default: 0) of each Tensor in inputs.</p> <p>vmap is useful for hiding batch dimensions: one can write a function func that runs on examples and then lift it to a function that can take batches of examples with <code>vmap(func)</code>, leading to a simpler modeling experience:</p> <pre data-language="python">import torch
+from torch.func import vmap
+batch_size, feature_size = 3, 5
+weights = torch.randn(feature_size, requires_grad=True)
+
+def model(feature_vec):
+    # Very simple linear model with activation
+    assert feature_vec.dim() == 1
+    return feature_vec.dot(weights).relu()
+
+examples = torch.randn(batch_size, feature_size)
+result = vmap(model)(examples)
+</pre> <p>When composed with <a class="reference internal" href="generated/torch.func.grad#torch.func.grad" title="torch.func.grad"><code>grad()</code></a>, <a class="reference internal" href="generated/torch.func.vmap#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> can be used to compute per-sample-gradients:</p> <pre data-language="python">from torch.func import vmap
+batch_size, feature_size = 3, 5
+
+def model(weights,feature_vec):
+    # Very simple linear model with activation
+    assert feature_vec.dim() == 1
+    return feature_vec.dot(weights).relu()
+
+def compute_loss(weights, example, target):
+    y = model(weights, example)
+    return ((y - target) ** 2).mean()  # MSELoss
+
+weights = torch.randn(feature_size, requires_grad=True)
+examples = torch.randn(batch_size, feature_size)
+targets = torch.randn(batch_size)
+inputs = (weights,examples, targets)
+grad_weight_per_example = vmap(grad(compute_loss), in_dims=(None, 0, 0))(*inputs)
+</pre>   <h3 id="vjp-vector-jacobian-product">
+<a class="reference internal" href="generated/torch.func.vjp#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> (vector-Jacobian product)</h3> <p>The <a class="reference internal" href="generated/torch.func.vjp#torch.func.vjp" title="torch.func.vjp"><code>vjp()</code></a> transform applies <code>func</code> to <code>inputs</code> and returns a new function that computes the vector-Jacobian product (vjp) given some <code>cotangents</code> Tensors.</p> <pre data-language="python">from torch.func import vjp
+
+inputs = torch.randn(3)
+func = torch.sin
+cotangents = (torch.randn(3),)
+
+outputs, vjp_fn = vjp(func, inputs); vjps = vjp_fn(*cotangents)
+</pre>   <h3 id="jvp-jacobian-vector-product">
+<a class="reference internal" href="generated/torch.func.jvp#torch.func.jvp" title="torch.func.jvp"><code>jvp()</code></a> (Jacobian-vector product)</h3> <p>The <a class="reference internal" href="generated/torch.func.jvp#torch.func.jvp" title="torch.func.jvp"><code>jvp()</code></a> transforms computes Jacobian-vector-products and is also known as “forward-mode AD”. It is not a higher-order function unlike most other transforms, but it returns the outputs of <code>func(inputs)</code> as well as the jvps.</p> <pre data-language="python">from torch.func import jvp
+x = torch.randn(5)
+y = torch.randn(5)
+f = lambda x, y: (x * y)
+_, out_tangent = jvp(f, (x, y), (torch.ones(5), torch.ones(5)))
+assert torch.allclose(out_tangent, x + y)
+</pre>   <h3 id="jacrev-jacfwd-and-hessian">
+<a class="reference internal" href="generated/torch.func.jacrev#torch.func.jacrev" title="torch.func.jacrev"><code>jacrev()</code></a>, <a class="reference internal" href="generated/torch.func.jacfwd#torch.func.jacfwd" title="torch.func.jacfwd"><code>jacfwd()</code></a>, and <a class="reference internal" href="generated/torch.func.hessian#torch.func.hessian" title="torch.func.hessian"><code>hessian()</code></a>
+</h3> <p>The <a class="reference internal" href="generated/torch.func.jacrev#torch.func.jacrev" title="torch.func.jacrev"><code>jacrev()</code></a> transform returns a new function that takes in <code>x</code> and returns the Jacobian of the function with respect to <code>x</code> using reverse-mode AD.</p> <pre data-language="python">from torch.func import jacrev
+x = torch.randn(5)
+jacobian = jacrev(torch.sin)(x)
+expected = torch.diag(torch.cos(x))
+assert torch.allclose(jacobian, expected)
+</pre> <p><a class="reference internal" href="generated/torch.func.jacrev#torch.func.jacrev" title="torch.func.jacrev"><code>jacrev()</code></a> can be composed with <a class="reference internal" href="generated/torch.func.vmap#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> to produce batched jacobians:</p> <pre data-language="python">x = torch.randn(64, 5)
+jacobian = vmap(jacrev(torch.sin))(x)
+assert jacobian.shape == (64, 5, 5)
+</pre> <p><a class="reference internal" href="generated/torch.func.jacfwd#torch.func.jacfwd" title="torch.func.jacfwd"><code>jacfwd()</code></a> is a drop-in replacement for jacrev that computes Jacobians using forward-mode AD:</p> <pre data-language="python">from torch.func import jacfwd
+x = torch.randn(5)
+jacobian = jacfwd(torch.sin)(x)
+expected = torch.diag(torch.cos(x))
+assert torch.allclose(jacobian, expected)
+</pre> <p>Composing <a class="reference internal" href="generated/torch.func.jacrev#torch.func.jacrev" title="torch.func.jacrev"><code>jacrev()</code></a> with itself or <a class="reference internal" href="generated/torch.func.jacfwd#torch.func.jacfwd" title="torch.func.jacfwd"><code>jacfwd()</code></a> can produce hessians:</p> <pre data-language="python">def f(x):
+    return x.sin().sum()
+
+x = torch.randn(5)
+hessian0 = jacrev(jacrev(f))(x)
+hessian1 = jacfwd(jacrev(f))(x)
+</pre> <p><a class="reference internal" href="generated/torch.func.hessian#torch.func.hessian" title="torch.func.hessian"><code>hessian()</code></a> is a convenience function that combines jacfwd and jacrev:</p> <pre data-language="python">from torch.func import hessian
+
+def f(x):
+    return x.sin().sum()
+
+x = torch.randn(5)
+hess = hessian(f)(x)
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/func.whirlwind_tour.html" class="_attribution-link">https://pytorch.org/docs/2.1/func.whirlwind_tour.html</a>
+  </p>
+</div>

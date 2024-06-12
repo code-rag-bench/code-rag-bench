@@ -1,0 +1,731 @@
+# WSGI Helpers
+
+The following classes and functions are designed to make working with the WSGI
+specification easier or operate on the WSGI layer. All the functionality from
+this module is available on the high-level Request / Response Objects.
+
+## Iterator / Stream Helpers
+
+These classes and functions simplify working with the WSGI application
+iterator and the input stream.
+
+`class werkzeug.wsgi.ClosingIterator(iterable, callbacks=None)`
+
+    
+The WSGI specification requires that all middlewares and gateways respect the
+`close` callback of the iterable returned by the application. Because it is
+useful to add another close action to a returned iterable and adding a custom
+iterable is a boring task this class can be used for that:
+
+    
+    return ClosingIterator(app(environ, start_response), [cleanup_session,
+                                                          cleanup_locals])
+    
+If there is just one close function it can be passed instead of the list.
+
+A closing iterator is not needed if the application uses response objects and
+finishes the processing if the response is started:
+
+    
+    try:
+        return response(environ, start_response)
+    finally:
+        cleanup_session()
+        cleanup_locals()
+    
+Parameters
+
+    
+  * iterable (Iterable[bytes]) – 
+  * callbacks (Optional[Union[Callable[[], None], Iterable[Callable[[], None]]]]) – 
+
+Return type
+
+    
+None
+
+`class werkzeug.wsgi.FileWrapper(file, buffer_size=8192)`
+
+    
+This class can be used to convert a `file`-like object into an iterable. It
+yields `buffer_size` blocks until the file is fully read.
+
+You should not use this class directly but rather use the `wrap_file()`
+function that uses the WSGI server’s file wrapper support if it’s available.
+
+Changelog
+
+New in version 0.5.
+
+If you’re using this object together with a `Response` you have to use the
+`direct_passthrough` mode.
+
+Parameters
+
+    
+  * file (BinaryIO) – a `file`-like object with a `read()` method.
+  * buffer_size (int) – number of bytes for one iteration.
+
+Return type
+
+    
+None
+
+`class werkzeug.wsgi.LimitedStream(stream, limit)`
+
+    
+Wraps a stream so that it doesn’t read more than n bytes. If the stream is
+exhausted and the caller tries to get more bytes from it `on_exhausted()` is
+called which by default returns an empty string. The return value of that
+function is forwarded to the reader function. So if it returns an empty string
+`read()` will return an empty string as well.
+
+The limit however must never be higher than what the stream can output.
+Otherwise `readlines()` will try to read past the limit.
+
+Note on WSGI compliance
+
+calls to `readline()` and `readlines()` are not WSGI compliant because it
+passes a size argument to the readline methods. Unfortunately the WSGI PEP is
+not safely implementable without a size argument to `readline()` because there
+is no EOF marker in the stream. As a result of that the use of `readline()` is
+discouraged.
+
+For the same reason iterating over the `LimitedStream` is not portable. It
+internally calls `readline()`.
+
+We strongly suggest using `read()` only or using the `make_line_iter()` which
+safely iterates line-based over a WSGI input stream.
+
+Parameters
+
+    
+  * stream (BinaryIO) – the stream to wrap.
+  * limit (int) – the limit for the stream, must not be longer than what the string can provide if the stream does not end with `EOF` (like `wsgi.input`)
+
+Return type
+
+    
+None
+
+`exhaust(chunk_size=65536)`
+
+    
+Exhaust the stream. This consumes all the data left until the limit is
+reached.
+
+Parameters
+
+    
+chunk_size (int) – the size for a chunk. It will read the chunk until the
+stream is exhausted and throw away the results.
+
+Return type
+
+    
+None
+
+`property is_exhausted: bool`
+
+    
+If the stream is exhausted this attribute is `True`.
+
+`on_disconnect()`
+
+    
+What should happen if a disconnect is detected? The return value of this
+function is returned from read functions in case the client went away. By
+default a `ClientDisconnected` exception is raised.
+
+Return type
+
+    
+bytes
+
+`on_exhausted()`
+
+    
+This is called when the stream tries to read past the limit. The return value
+of this function is returned from the reading function.
+
+Return type
+
+    
+bytes
+
+`read(size=None)`
+
+    
+Read `size` bytes or if size is not provided everything is read.
+
+Parameters
+
+    
+size (Optional[int]) – the number of bytes read.
+
+Return type
+
+    
+bytes
+
+`readable()`
+
+    
+Return whether object was opened for reading.
+
+If False, read() will raise OSError.
+
+Return type
+
+    
+bool
+
+`readline(size=None)`
+
+    
+Reads one line from the stream.
+
+Parameters
+
+    
+size (Optional[int]) –
+
+Return type
+
+    
+bytes
+
+`readlines(size=None)`
+
+    
+Reads a file into a list of strings. It calls `readline()` until the file is
+read to the end. It does support the optional `size` argument if the
+underlying stream supports it for `readline`.
+
+Parameters
+
+    
+size (Optional[int]) –
+
+Return type
+
+    
+List[bytes]
+
+`tell()`
+
+    
+Returns the position of the stream.
+
+Changelog
+
+New in version 0.9.
+
+Return type
+
+    
+int
+
+`werkzeug.wsgi.make_line_iter(stream, limit=None, buffer_size=10240,
+cap_at_buffer=False)`
+
+    
+Safely iterates line-based over an input stream. If the input stream is not a
+`LimitedStream` the `limit` parameter is mandatory.
+
+This uses the stream’s `read()` method internally as opposite to the
+`readline()` method that is unsafe and can only be used in violation of the
+WSGI specification. The same problem applies to the `__iter__` function of the
+input stream which calls `readline()` without arguments.
+
+If you need line-by-line processing it’s strongly recommended to iterate over
+the input stream using this helper function.
+
+Changelog
+
+New in version 0.11.10: added support for the `cap_at_buffer` parameter.
+
+New in version 0.9: added support for iterators as input stream.
+
+Changed in version 0.8: This function now ensures that the limit was reached.
+
+Parameters
+
+    
+  * stream (Union[Iterable[bytes], BinaryIO]) – the stream or iterate to iterate over.
+  * limit (Optional[int]) – the limit in bytes for the stream. (Usually content length. Not necessary if the `stream` is a `LimitedStream`.
+  * buffer_size (int) – The optional buffer size.
+  * cap_at_buffer (bool) – if this is set chunks are split if they are longer than the buffer size. Internally this is implemented that the buffer size might be exhausted by a factor of two however.
+
+Return type
+
+    
+Iterator[bytes]
+
+`werkzeug.wsgi.make_chunk_iter(stream, separator, limit=None,
+buffer_size=10240, cap_at_buffer=False)`
+
+    
+Works like `make_line_iter()` but accepts a separator which divides chunks. If
+you want newline based processing you should use `make_line_iter()` instead as
+it supports arbitrary newline markers.
+
+Changelog
+
+New in version 0.11.10: added support for the `cap_at_buffer` parameter.
+
+New in version 0.9: added support for iterators as input stream.
+
+New in version 0.8.
+
+Parameters
+
+    
+  * stream (Union[Iterable[bytes], BinaryIO]) – the stream or iterate to iterate over.
+  * separator (bytes) – the separator that divides chunks.
+  * limit (Optional[int]) – the limit in bytes for the stream. (Usually content length. Not necessary if the `stream` is otherwise already limited).
+  * buffer_size (int) – The optional buffer size.
+  * cap_at_buffer (bool) – if this is set chunks are split if they are longer than the buffer size. Internally this is implemented that the buffer size might be exhausted by a factor of two however.
+
+Return type
+
+    
+Iterator[bytes]
+
+`werkzeug.wsgi.wrap_file(environ, file, buffer_size=8192)`
+
+    
+Wraps a file. This uses the WSGI server’s file wrapper if available or
+otherwise the generic `FileWrapper`.
+
+Changelog
+
+New in version 0.5.
+
+If the file wrapper from the WSGI server is used it’s important to not iterate
+over it from inside the application but to pass it through unchanged. If you
+want to pass out a file wrapper inside a response object you have to set
+`Response.direct_passthrough` to `True`.
+
+More information about file wrappers are available in PEP 333.
+
+Parameters
+
+    
+  * file (BinaryIO) – a `file`-like object with a `read()` method.
+  * buffer_size (int) – number of bytes for one iteration.
+  * environ (WSGIEnvironment) – 
+
+Return type
+
+    
+Iterable[bytes]
+
+## Environ Helpers
+
+These functions operate on the WSGI environment. They extract useful
+information or perform common manipulations:
+
+`werkzeug.wsgi.get_host(environ, trusted_hosts=None)`
+
+    
+Return the host for the given WSGI environment.
+
+The `Host` header is preferred, then `SERVER_NAME` if it’s not set. The
+returned host will only contain the port if it is different than the standard
+port for the protocol.
+
+Optionally, verify that the host is trusted using `host_is_trusted()` and
+raise a `SecurityError` if it is not.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – A WSGI environment dict.
+  * trusted_hosts (Optional[Iterable[str]]) – A list of trusted host names.
+
+Returns
+
+    
+Host, with port if necessary.
+
+Raises
+
+    
+SecurityError – If the host is not trusted.
+
+Return type
+
+    
+str
+
+`werkzeug.wsgi.get_content_length(environ)`
+
+    
+Returns the content length from the WSGI environment as integer. If it’s not
+available or chunked transfer encoding is used, `None` is returned.
+
+Changelog
+
+New in version 0.9.
+
+Parameters
+
+    
+environ (WSGIEnvironment) – the WSGI environ to fetch the content length from.
+
+Return type
+
+    
+Optional[int]
+
+`werkzeug.wsgi.get_input_stream(environ, safe_fallback=True)`
+
+    
+Returns the input stream from the WSGI environment and wraps it in the most
+sensible way possible. The stream returned is not the raw WSGI stream in most
+cases but one that is safe to read from without taking into account the
+content length.
+
+If content length is not set, the stream will be empty for safety reasons. If
+the WSGI server supports chunked or infinite streams, it should set the
+`wsgi.input_terminated` value in the WSGI environ to indicate that.
+
+Changelog
+
+New in version 0.9.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – the WSGI environ to fetch the stream from.
+  * safe_fallback (bool) – use an empty stream as a safe fallback when the content length is not set. Disabling this allows infinite streams, which can be a denial-of-service risk.
+
+Return type
+
+    
+BinaryIO
+
+`werkzeug.wsgi.get_current_url(environ, root_only=False,
+strip_querystring=False, host_only=False, trusted_hosts=None)`
+
+    
+Recreate the URL for a request from the parts in a WSGI environment.
+
+The URL is an IRI, not a URI, so it may contain Unicode characters. Use
+`iri_to_uri()` to convert it to ASCII.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – The WSGI environment to get the URL parts from.
+  * root_only (bool) – Only build the root path, don’t include the remaining path or query string.
+  * strip_querystring (bool) – Don’t include the query string.
+  * host_only (bool) – Only build the scheme and host.
+  * trusted_hosts (Optional[Iterable[str]]) – A list of trusted host names to validate the host against.
+
+Return type
+
+    
+str
+
+`werkzeug.wsgi.get_query_string(environ)`
+
+    
+Returns the `QUERY_STRING` from the WSGI environment. This also takes care of
+the WSGI decoding dance. The string returned will be restricted to ASCII
+characters.
+
+Parameters
+
+    
+environ (WSGIEnvironment) – WSGI environment to get the query string from.
+
+Return type
+
+    
+str
+
+Changelog
+
+New in version 0.9.
+
+`werkzeug.wsgi.get_script_name(environ, charset='utf-8', errors='replace')`
+
+    
+Return the `SCRIPT_NAME` from the WSGI environment and decode it unless
+`charset` is set to `None`.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – WSGI environment to get the path from.
+  * charset (str) – The charset for the path, or `None` if no decoding should be performed.
+  * errors (str) – The decoding error handling.
+
+Return type
+
+    
+str
+
+Changelog
+
+New in version 0.9.
+
+`werkzeug.wsgi.get_path_info(environ, charset='utf-8', errors='replace')`
+
+    
+Return the `PATH_INFO` from the WSGI environment and decode it unless
+`charset` is `None`.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – WSGI environment to get the path from.
+  * charset (str) – The charset for the path info, or `None` if no decoding should be performed.
+  * errors (str) – The decoding error handling.
+
+Return type
+
+    
+str
+
+Changelog
+
+New in version 0.9.
+
+`werkzeug.wsgi.pop_path_info(environ, charset='utf-8', errors='replace')`
+
+    
+Removes and returns the next segment of `PATH_INFO`, pushing it onto
+`SCRIPT_NAME`. Returns `None` if there is nothing left on `PATH_INFO`.
+
+If the `charset` is set to `None` bytes are returned.
+
+If there are empty segments (`'/foo//bar`) these are ignored but properly
+pushed to the `SCRIPT_NAME`:
+
+    
+    >>> env = {'SCRIPT_NAME': '/foo', 'PATH_INFO': '/a/b'}
+    >>> pop_path_info(env)
+    'a'
+    >>> env['SCRIPT_NAME']
+    '/foo/a'
+    >>> pop_path_info(env)
+    'b'
+    >>> env['SCRIPT_NAME']
+    '/foo/a/b'
+    
+Changelog
+
+Changed in version 0.9: The path is now decoded and a charset and encoding
+parameter can be provided.
+
+New in version 0.5.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – the WSGI environment that is modified.
+  * charset (str) – The `encoding` parameter passed to `bytes.decode()`.
+  * errors (str) – The `errors` paramater passed to `bytes.decode()`.
+
+Return type
+
+    
+Optional[str]
+
+`werkzeug.wsgi.peek_path_info(environ, charset='utf-8', errors='replace')`
+
+    
+Returns the next segment on the `PATH_INFO` or `None` if there is none. Works
+like `pop_path_info()` without modifying the environment:
+
+    
+    >>> env = {'SCRIPT_NAME': '/foo', 'PATH_INFO': '/a/b'}
+    >>> peek_path_info(env)
+    'a'
+    >>> peek_path_info(env)
+    'a'
+    
+If the `charset` is set to `None` bytes are returned.
+
+Changelog
+
+Changed in version 0.9: The path is now decoded and a charset and encoding
+parameter can be provided.
+
+New in version 0.5.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – the WSGI environment that is checked.
+  * charset (str) – 
+  * errors (str) – 
+
+Return type
+
+    
+Optional[str]
+
+`werkzeug.wsgi.extract_path_info(environ_or_baseurl, path_or_url,
+charset='utf-8', errors='werkzeug.url_quote', collapse_http_schemes=True)`
+
+    
+Extracts the path info from the given URL (or WSGI environment) and path. The
+path info returned is a string. The URLs might also be IRIs.
+
+If the path info could not be determined, `None` is returned.
+
+Some examples:
+
+    
+    >>> extract_path_info('http://example.com/app', '/app/hello')
+    '/hello'
+    >>> extract_path_info('http://example.com/app',
+    ...                   'https://example.com/app/hello')
+    '/hello'
+    >>> extract_path_info('http://example.com/app',
+    ...                   'https://example.com/app/hello',
+    ...                   collapse_http_schemes=False) is None
+    True
+    
+Instead of providing a base URL you can also pass a WSGI environment.
+
+Parameters
+
+    
+  * environ_or_baseurl (Union[str, WSGIEnvironment]) – a WSGI environment dict, a base URL or base IRI. This is the root of the application.
+  * path_or_url (Union[str, werkzeug.urls._URLTuple]) – an absolute path from the server root, a relative path (in which case it’s the path info) or a full URL.
+  * charset (str) – the charset for byte data in URLs
+  * errors (str) – the error handling on decode
+  * collapse_http_schemes (bool) – if set to `False` the algorithm does not assume that http and https on the same server point to the same resource.
+
+Return type
+
+    
+Optional[str]
+
+Changelog
+
+Changed in version 0.15: The `errors` parameter defaults to leaving invalid
+bytes quoted instead of replacing them.
+
+New in version 0.6.
+
+`werkzeug.wsgi.host_is_trusted(hostname, trusted_list)`
+
+    
+Check if a host matches a list of trusted names.
+
+Parameters
+
+    
+  * hostname (str) – The name to check.
+  * trusted_list (Iterable[str]) – A list of valid names to match. If a name starts with a dot it will match all subdomains.
+
+Return type
+
+    
+bool
+
+Changelog
+
+New in version 0.9.
+
+## Convenience Helpers
+
+`werkzeug.wsgi.responder(f)`
+
+    
+Marks a function as responder. Decorate a function with it and it will
+automatically call the return value as WSGI application.
+
+Example:
+
+    
+    @responder
+    def application(environ, start_response):
+        return Response('Hello World!')
+    
+Parameters
+
+    
+f (Callable[[...], WSGIApplication]) –
+
+Return type
+
+    
+WSGIApplication
+
+`werkzeug.testapp.test_app(environ, start_response)`
+
+    
+Simple test application that dumps the environment. You can use it to check if
+Werkzeug is working properly:
+
+    
+    >>> from werkzeug.serving import run_simple
+    >>> from werkzeug.testapp import test_app
+    >>> run_simple('localhost', 3000, test_app)
+     * Running on http://localhost:3000/
+    
+The application displays important information from the WSGI environment, the
+Python interpreter and the installed libraries.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – 
+  * start_response (StartResponse) – 
+
+Return type
+
+    
+Iterable[bytes]
+
+## Bytes, Strings, and Encodings
+
+The values in HTTP requests come in as bytes representing (or encoded to)
+ASCII. The WSGI specification (PEP 3333) decided to always use the `str` type
+to represent values. To accomplish this, the raw bytes are decoded using the
+ISO-8859-1 charset to produce a string.
+
+Strings in the WSGI environment are restricted to ISO-8859-1 code points. If a
+string read from the environment might contain characters outside that
+charset, it must first be decoded to bytes as ISO-8859-1, then encoded to a
+string using the proper charset (typically UTF-8). The reverse is done when
+writing to the environ. This is known as the “WSGI encoding dance”.
+
+Werkzeug provides functions to deal with this automatically so that you don’t
+need to be aware of the inner workings. Use the functions on this page as well
+as `EnvironHeaders()` to read data out of the WSGI environment.
+
+Applications should avoid manually creating or modifying a WSGI environment
+unless they take care of the proper encoding or decoding step. All high level
+interfaces in Werkzeug will apply the encoding and decoding as necessary.
+
+## Raw Request URI and Path Encoding
+
+The `PATH_INFO` in the environ is the path value after percent-decoding. For
+example, the raw path `/hello%2fworld` would show up from the WSGI server to
+Werkzeug as `/hello/world`. This loses the information that the slash was a
+raw character as opposed to a path separator.
+
+The WSGI specification (PEP 3333) does not provide a way to get the original
+value, so it is impossible to route some types of data in the path. The most
+compatible way to work around this is to send problematic data in the query
+string instead of the path.
+
+However, many WSGI servers add a non-standard environ key with the raw path.
+To match this behavior, Werkzeug’s test client and development server will add
+the raw value to both the `REQUEST_URI` and `RAW_URI` keys. If you want to
+route based on this value, you can use middleware to replace `PATH_INFO` in
+the environ before it reaches the application. However, keep in mind that
+these keys are non-standard and not guaranteed to be present.
+
+© 2007–2021 Pallets  
+Licensed under the BSD 3-clause License.  
+https://werkzeug.palletsprojects.com/en/2.0.x/wsgi/
+

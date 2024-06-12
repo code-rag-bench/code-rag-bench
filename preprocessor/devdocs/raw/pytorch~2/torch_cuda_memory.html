@@ -1,0 +1,94 @@
+<h1 id="torch-cuda-memory">Understanding CUDA Memory Usage</h1> <p id="understanding-cuda-memory-usage">To debug CUDA memory use, PyTorch provides a way to generate memory snapshots that record the state of allocated CUDA memory at any point in time, and optionally record the history of allocation events that led up to that snapshot.</p> <p>The generated snapshots can then be drag and dropped onto the interactiver viewer hosted at <a class="reference external" href="https://pytorch.org/memory_viz">pytorch.org/memory_viz</a> which can be used to explore the snapshot.</p>   <h1 id="generating-a-snapshot">Generating a Snapshot</h1> <p>The common pattern for recording a snapshot is to enable memory history, run the code to be observed, and then save a file with a pickled snapshot:</p> <pre data-language="python"># enable memory history, which will
+# add tracebacks and event history to snapshots
+torch.cuda.memory._record_memory_history()
+
+run_your_code()
+torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
+</pre>   <h1 id="using-the-visualizer">Using the visualizer</h1> <p>Open <a class="reference external" href="https://pytorch.org/memory_viz">pytorch.org/memory_viz</a> and drag/drop the pickled snapshot file into the visualizer. The visualizer is a javascript application that runs locally on your computer. It does not upload any snapshot data.</p>  <h2 id="active-memory-timeline">Active Memory Timeline</h2> <p>The Active Memory Timeline shows all the live tensors over time in the snapshot on a particular GPU. Pan/Zoom over the plot to look at smaller allocations. Mouse over allocated blocks to see a stack trace for when that block was allocated, and details like its address. The detail slider can be adjusted to render fewer allocations and improve performance when there is a lot of data.</p> <img alt="_images/active_memory_timeline.png" src="https://pytorch.org/docs/2.1/_images/active_memory_timeline.png">   <h2 id="allocator-state-history">Allocator State History</h2> <p>The Allocator State History shows individual allocator events in a timeline on the left. Select an event in the timeline to see a visual summary of the allocator state at that event. This summary shows each individual segment returned from cudaMalloc and how it is split up into blocks of individual allocations or free space. Mouse over segments and blocks to see the stack trace when the memory was allocated. Mouse over events to see the stack trace when the event occured, such as when a tensor was freed. Out of memory errors are reported as OOM events. Looking at the state of memory during an OOM may provide insight into why an allocation failed even though reserved memory still exists.</p> <img alt="_images/allocator_state_history.png" src="https://pytorch.org/docs/2.1/_images/allocator_state_history.png"> <p>The stack trace information also reports the address at which an allocation occured. The address b7f064c000000_0 refers to the (b)lock at address 7f064c000000 which is the “_0”th time this address was allocated. This unique string can be looked up in the Active Memory Timeline and searched in the Active State History to examine the memory state when a tensor was allocated or freed.</p>    <h1 id="snapshot-api-reference">Snapshot API Reference</h1> <dl class="py function"> <dt class="sig sig-object py" id="torch.cuda.memory._record_memory_history">
+<code>torch.cuda.memory._record_memory_history(enabled='all', context='all', stacks='all', max_entries=9223372036854775807, device=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/cuda/memory.html#_record_memory_history"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Enables recording of stack traces associated with memory allocations, so you can tell what allocated any piece of memory in <a class="reference internal" href="#torch.cuda.memory._snapshot" title="torch.cuda.memory._snapshot"><code>torch.cuda.memory._snapshot()</code></a>.</p> <p>In addition too keeping stack traces with each current allocation and free, this will also enable recording of a history of all alloc/free events.</p> <p>Use <a class="reference internal" href="#torch.cuda.memory._snapshot" title="torch.cuda.memory._snapshot"><code>torch.cuda.memory._snapshot()</code></a> to retrieve this information, and the tools in <code>_memory_viz.py</code> to visualize snapshots.</p> <p>The Python trace collection is fast (2us per trace), so you may consider enabling this on production jobs if you anticipate ever having to debug memory issues.</p> <p>C++ trace collection is also fast (~50ns/frame), which for many typical programs works out to ~2us per trace, but can vary depending on stack depth.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>enabled</strong> (<em>Literal</em><em>[</em><em>None</em><em>, </em><em>"state"</em><em>, </em><em>"all"</em><em>]</em><em>, </em><em>optional</em>) – <code>None</code>, disable recording memory history. <code>“state”</code>, keep information for currenly allocated memory. <code>“all”</code>, additionally keep a history of all alloc/free calls. Defaults to “all”.</li> <li>
+<strong>context</strong> (<em>Literal</em><em>[</em><em>None</em><em>, </em><em>"state"</em><em>, </em><em>"alloc"</em><em>, </em><em>"all"</em><em>]</em><em>, </em><em>optional</em>) – <code>None</code>, Do not record any tracebacks. <code>“state”</code>, Record tracebacks for currently allocated memory. <code>“alloc”</code>, additionally keep tracebacks for alloc calls. <code>“all”</code>, additionally keep tracebacks for free calls. Defaults to “all”.</li> <li>
+<strong>stacks</strong> (<em>Literal</em><em>[</em><em>"python"</em><em>, </em><em>"all"</em><em>]</em><em>, </em><em>optional</em>) – <code>“python”</code>, include Python, TorchScript, and inductor frames in tracebacks <code>“all”</code>, additionally include C++ frames Defaults to “all”.</li> <li>
+<strong>max_entries</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><em>optional</em>) – Keep a maximum of <code>max_entries</code> alloc/free events in the recorded history recorded.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.cuda.memory._snapshot">
+<code>torch.cuda.memory._snapshot(device=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/cuda/memory.html#_snapshot"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Saves a snapshot of CUDA memory state at the time it was called. The state is represented as a dictionary with the following structure.</p> <pre data-language="python">class Snapshot(TypedDict):
+    segments : List[Segment]
+    device_traces: List[List[TraceEntry]]
+
+class Segment(TypedDict):
+    # Segments are memory returned from a cudaMalloc call.
+    # The size of reserved memory is the sum of all Segments.
+    # Segments are cached and reused for future allocations.
+    # If the reuse is smaller than the segment, the segment
+    # is split into more then one Block.
+    # empty_cache() frees Segments that are entirely inactive.
+    address: int
+    total_size: int #  cudaMalloc'd size of segment
+    stream: int
+    segment_type: Literal['small', 'large'] # 'large' (&gt;1MB)
+    allocated_size: int # size of memory in use
+    active_size: int # size of memory in use or in active_awaiting_free state
+    blocks : List[Block]
+
+class Block(TypedDict):
+    # A piece of memory returned from the allocator, or
+    # current cached but inactive.
+    size: int
+    requested_size: int # size requested during malloc, may be smaller than
+                        # size due to rounding
+    address: int
+    state: Literal['active_allocated', # used by a tensor
+                'active_awaiting_free', # waiting for another stream to finish using
+                                        # this, then it will become free
+                'inactive',] # free for reuse
+    frames: List[Frame] # stack trace from where the allocation occurred
+
+class Frame(TypedDict):
+        filename: str
+        line: int
+        name: str
+
+class TraceEntry(TypedDict):
+    # When `torch.cuda.memory._record_memory_history()` is enabled,
+    # the snapshot will contain TraceEntry objects that record each
+    # action the allocator took.
+    action: Literal[
+    'alloc'  # memory allocated
+    'free_requested', # the allocated received a call to free memory
+    'free_completed', # the memory that was requested to be freed is now
+                    # able to be used in future allocation calls
+    'segment_alloc', # the caching allocator ask cudaMalloc for more memory
+                    # and added it as a segment in its cache
+    'segment_free',  # the caching allocator called cudaFree to return memory
+                    # to cuda possibly trying free up memory to
+                    # allocate more segments or because empty_caches was called
+    'oom',          # the allocator threw an OOM exception. 'size' is
+                    # the requested number of bytes that did not succeed
+    'snapshot'      # the allocator generated a memory snapshot
+                    # useful to coorelate a previously taken
+                    # snapshot with this trace
+    ]
+    addr: int # not present for OOM
+    frames: List[Frame]
+    size: int
+    stream: int
+    device_free: int # only present for OOM, the amount of
+                    # memory cuda still reports to be free
+</pre> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The Snapshot dictionary object</p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.cuda.memory._dump_snapshot">
+<code>torch.cuda.memory._dump_snapshot(filename='dump_snapshot.pickle')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/cuda/memory.html#_dump_snapshot"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Saves a pickled version of the <code>torch.memory._snapshot()</code> dictionary to a file. This file can be opened by the interactive snapshot viewer at pytorch.org/memory_viz</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>filename</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>optional</em>) – Name of the file to create. Defaults to “dump_snapshot.pickle”.</p> </dd> </dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch_cuda_memory.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch_cuda_memory.html</a>
+  </p>
+</div>

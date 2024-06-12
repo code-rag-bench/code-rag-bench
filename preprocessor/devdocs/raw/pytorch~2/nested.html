@@ -1,0 +1,187 @@
+<h1 id="torch-nested">torch.nested</h1>  <h2 id="module-torch.nested">Introduction</h2> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The PyTorch API of nested tensors is in prototype stage and will change in the near future.</p> </div> <p>NestedTensor allows the user to pack a list of Tensors into a single, efficient datastructure.</p> <p>The only constraint on the input Tensors is that their dimension must match.</p> <p>This enables more efficient metadata representations and access to purpose built kernels.</p> <p>One application of NestedTensors is to express sequential data in various domains. While the conventional approach is to pad variable length sequences, NestedTensor enables users to bypass padding. The API for calling operations on a nested tensor is no different from that of a regular <code>torch.Tensor</code>, which should allow seamless integration with existing models, with the main difference being <a class="reference internal" href="#construction"><span class="std std-ref">construction of the inputs</span></a>.</p> <p>As this is a prototype feature, the <a class="reference internal" href="#supported-operations"><span class="std std-ref">operations supported</span></a> are still limited. However, we welcome issues, feature requests and contributions. More information on contributing can be found <a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/nested/README.md">in this Readme</a>.</p>   <h2 id="id1">Construction</h2> <p id="construction">Construction is straightforward and involves passing a list of Tensors to the <code>torch.nested.nested_tensor</code> constructor.</p> <pre data-language="python">&gt;&gt;&gt; a, b = torch.arange(3), torch.arange(5) + 3
+&gt;&gt;&gt; a
+tensor([0, 1, 2])
+&gt;&gt;&gt; b
+tensor([3, 4, 5, 6, 7])
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b])
+&gt;&gt;&gt; nt
+nested_tensor([
+  tensor([0, 1, 2]),
+    tensor([3, 4, 5, 6, 7])
+    ])
+</pre> <p>Data type, device and whether gradients are required can be chosen via the usual keyword arguments.</p> <pre data-language="python">&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], dtype=torch.float32, device="cuda", requires_grad=True)
+&gt;&gt;&gt; nt
+nested_tensor([
+  tensor([0., 1., 2.], device='cuda:0', requires_grad=True),
+  tensor([3., 4., 5., 6., 7.], device='cuda:0', requires_grad=True)
+], device='cuda:0', requires_grad=True)
+</pre> <p>In the vein of <code>torch.as_tensor</code>, <code>torch.nested.as_nested_tensor</code> can be used to preserve autograd history from the tensors passed to the constructor. For more information, refer to the section on <a class="reference internal" href="#constructor-functions"><span class="std std-ref">Nested tensor constructor and conversion functions</span></a>.</p> <p>In order to form a valid NestedTensor all the passed Tensors need to match in dimension, but none of the other attributes need to.</p> <pre data-language="python">&gt;&gt;&gt; a = torch.randn(3, 50, 70) # image 1
+&gt;&gt;&gt; b = torch.randn(3, 128, 64) # image 2
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], dtype=torch.float32)
+&gt;&gt;&gt; nt.dim()
+4
+</pre> <p>If one of the dimensions doesn’t match, the constructor throws an error.</p> <pre data-language="python">&gt;&gt;&gt; a = torch.randn(50, 128) # text 1
+&gt;&gt;&gt; b = torch.randn(3, 128, 64) # image 2
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], dtype=torch.float32)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+RuntimeError: All Tensors given to nested_tensor must have the same dimension. Found dimension 3 for Tensor at index 1 and dimension 2 for Tensor at index 0.
+</pre> <p>Note that the passed Tensors are being copied into a contiguous piece of memory. The resulting NestedTensor allocates new memory to store them and does not keep a reference.</p> <p>At this moment we only support one level of nesting, i.e. a simple, flat list of Tensors. In the future we can add support for multiple levels of nesting, such as a list that consists entirely of lists of Tensors. Note that for this extension it is important to maintain an even level of nesting across entries so that the resulting NestedTensor has a well defined dimension. If you have a need for this feature, please feel encouraged to open a feature request so that we can track it and plan accordingly.</p>   <h2 id="size">size</h2> <p>Even though a NestedTensor does not support <code>.size()</code> (or <code>.shape</code>), it supports <code>.size(i)</code> if dimension i is regular.</p> <pre data-language="python">&gt;&gt;&gt; a = torch.randn(50, 128) # text 1
+&gt;&gt;&gt; b = torch.randn(32, 128) # text 2
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], dtype=torch.float32)
+&gt;&gt;&gt; nt.size(0)
+2
+&gt;&gt;&gt; nt.size(1)
+Traceback (most recent call last):
+  File "&lt;stdin&gt;", line 1, in &lt;module&gt;
+RuntimeError: Given dimension 1 is irregular and does not have a size.
+&gt;&gt;&gt; nt.size(2)
+128
+</pre> <p>If all dimensions are regular, the NestedTensor is intended to be semantically indistinguishable from a regular <code>torch.Tensor</code>.</p> <pre data-language="python">&gt;&gt;&gt; a = torch.randn(20, 128) # text 1
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, a], dtype=torch.float32)
+&gt;&gt;&gt; nt.size(0)
+2
+&gt;&gt;&gt; nt.size(1)
+20
+&gt;&gt;&gt; nt.size(2)
+128
+&gt;&gt;&gt; torch.stack(nt.unbind()).size()
+torch.Size([2, 20, 128])
+&gt;&gt;&gt; torch.stack([a, a]).size()
+torch.Size([2, 20, 128])
+&gt;&gt;&gt; torch.equal(torch.stack(nt.unbind()), torch.stack([a, a]))
+True
+</pre> <p>In the future we might make it easier to detect this condition and convert seamlessly.</p> <p>Please open a feature request if you have a need for this (or any other related feature for that matter).</p>   <h2 id="unbind">unbind</h2> <p><code>unbind</code> allows you to retrieve a view of the constituents.</p> <pre data-language="python">&gt;&gt;&gt; import torch
+&gt;&gt;&gt; a = torch.randn(2, 3)
+&gt;&gt;&gt; b = torch.randn(3, 4)
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], dtype=torch.float32)
+&gt;&gt;&gt; nt
+nested_tensor([
+  tensor([[ 1.2286, -1.2343, -1.4842],
+          [-0.7827,  0.6745,  0.0658]]),
+  tensor([[-1.1247, -0.4078, -1.0633,  0.8083],
+          [-0.2871, -0.2980,  0.5559,  1.9885],
+          [ 0.4074,  2.4855,  0.0733,  0.8285]])
+])
+&gt;&gt;&gt; nt.unbind()
+(tensor([[ 1.2286, -1.2343, -1.4842],
+        [-0.7827,  0.6745,  0.0658]]), tensor([[-1.1247, -0.4078, -1.0633,  0.8083],
+        [-0.2871, -0.2980,  0.5559,  1.9885],
+        [ 0.4074,  2.4855,  0.0733,  0.8285]]))
+&gt;&gt;&gt; nt.unbind()[0] is not a
+True
+&gt;&gt;&gt; nt.unbind()[0].mul_(3)
+tensor([[ 3.6858, -3.7030, -4.4525],
+        [-2.3481,  2.0236,  0.1975]])
+&gt;&gt;&gt; nt
+nested_tensor([
+  tensor([[ 3.6858, -3.7030, -4.4525],
+          [-2.3481,  2.0236,  0.1975]]),
+  tensor([[-1.1247, -0.4078, -1.0633,  0.8083],
+          [-0.2871, -0.2980,  0.5559,  1.9885],
+          [ 0.4074,  2.4855,  0.0733,  0.8285]])
+])
+</pre> <p>Note that <code>nt.unbind()[0]</code> is not a copy, but rather a slice of the underlying memory, which represents the first entry or constituent of the NestedTensor.</p>   <h2 id="constructor-functions">Nested tensor constructor and conversion functions</h2> <p id="nested-tensor-constructor-and-conversion-functions">The following functions are related to nested tensors:</p> <dl class="py function"> <dt class="sig sig-object py" id="torch.nested.nested_tensor">
+<code>torch.nested.nested_tensor(tensor_list, *, dtype=None, device=None, requires_grad=False, pin_memory=False) → Tensor</code> </dt> <dd>
+<p>Constructs a nested tensor with no autograd history (also known as a “leaf tensor”, see <a class="reference internal" href="https://pytorch.org/docs/2.1/notes/autograd.html#autograd-mechanics"><span class="std std-ref">Autograd mechanics</span></a>) from <code>tensor_list</code> a list of tensors.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>tensor_list</strong> (<em>List</em><em>[</em><em>array_like</em><em>]</em>) – a list of tensors, or anything that can be passed to torch.tensor,</li> <li>
+<strong>dimensionality.</strong> (<em>where each element</em><em> of </em><em>the list has the same</em>) – </li> </ul> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>dtype</strong> (<a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype"><code>torch.dtype</code></a>, optional) – the desired type of returned nested tensor. Default: if None, same <a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype"><code>torch.dtype</code></a> as leftmost tensor in the list.</li> <li>
+<strong>device</strong> (<a class="reference internal" href="tensor_attributes#torch.device" title="torch.device"><code>torch.device</code></a>, optional) – the desired device of returned nested tensor. Default: if None, same <a class="reference internal" href="tensor_attributes#torch.device" title="torch.device"><code>torch.device</code></a> as leftmost tensor in the list</li> <li>
+<strong>requires_grad</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If autograd should record operations on the returned nested tensor. Default: <code>False</code>.</li> <li>
+<strong>pin_memory</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If set, returned nested tensor would be allocated in the pinned memory. Works only for CPU tensors. Default: <code>False</code>.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; a = torch.arange(3, dtype=torch.float, requires_grad=True)
+&gt;&gt;&gt; b = torch.arange(5, dtype=torch.float, requires_grad=True)
+&gt;&gt;&gt; nt = torch.nested.nested_tensor([a, b], requires_grad=True)
+&gt;&gt;&gt; nt.is_leaf
+True
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.nested.as_nested_tensor">
+<code>torch.nested.as_nested_tensor(tensor_list, dtype=None, device=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/nested.html#as_nested_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Constructs a nested tensor preserving autograd history from <code>tensor_list</code> a list of tensors.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Tensors within the list are always copied by this function due to current nested tensor semantics.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>tensor_list</strong> (<em>List</em><em>[</em><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>]</em>) – a list of tensors with the same ndim</p> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>dtype</strong> (<a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype"><code>torch.dtype</code></a>, optional) – the desired type of returned nested tensor. Default: if None, same <a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype"><code>torch.dtype</code></a> as leftmost tensor in the list.</li> <li>
+<strong>device</strong> (<a class="reference internal" href="tensor_attributes#torch.device" title="torch.device"><code>torch.device</code></a>, optional) – the desired device of returned nested tensor. Default: if None, same <a class="reference internal" href="tensor_attributes#torch.device" title="torch.device"><code>torch.device</code></a> as leftmost tensor in the list</li> </ul> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></p> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; a = torch.arange(3, dtype=torch.float, requires_grad=True)
+&gt;&gt;&gt; b = torch.arange(5, dtype=torch.float, requires_grad=True)
+&gt;&gt;&gt; nt = torch.nested.as_nested_tensor([a, b])
+&gt;&gt;&gt; nt.is_leaf
+False
+&gt;&gt;&gt; fake_grad = torch.nested.nested_tensor([torch.ones_like(a), torch.zeros_like(b)])
+&gt;&gt;&gt; nt.backward(fake_grad)
+&gt;&gt;&gt; a.grad
+tensor([1., 1., 1.])
+&gt;&gt;&gt; b.grad
+tensor([0., 0., 0., 0., 0.])
+</pre> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.nested.to_padded_tensor">
+<code>torch.nested.to_padded_tensor(input, padding, output_size=None, out=None) → Tensor</code> </dt> <dd>
+<p>Returns a new (non-nested) Tensor by padding the <code>input</code> nested tensor. The leading entries will be filled with the nested data, while the trailing entries will be padded.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><a class="reference internal" href="#torch.nested.to_padded_tensor" title="torch.nested.to_padded_tensor"><code>to_padded_tensor()</code></a> always copies the underlying data, since the nested and the non-nested tensors differ in memory layout.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>padding</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>) – The padding value for the trailing entries.</p> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>output_size</strong> (<em>Tuple</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – The size of the output tensor. If given, it must be large enough to contain all nested data; else, will infer by taking the max size of each nested sub-tensor along each dimension.</li> <li>
+<strong>out</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>, </em><em>optional</em>) – the output tensor.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; nt = torch.nested.nested_tensor([torch.randn((2, 5)), torch.randn((3, 4))])
+nested_tensor([
+  tensor([[ 1.6862, -1.1282,  1.1031,  0.0464, -1.3276],
+          [-1.9967, -1.0054,  1.8972,  0.9174, -1.4995]]),
+  tensor([[-1.8546, -0.7194, -0.2918, -0.1846],
+          [ 0.2773,  0.8793, -0.5183, -0.6447],
+          [ 1.8009,  1.8468, -0.9832, -1.5272]])
+])
+&gt;&gt;&gt; pt_infer = torch.nested.to_padded_tensor(nt, 0.0)
+tensor([[[ 1.6862, -1.1282,  1.1031,  0.0464, -1.3276],
+         [-1.9967, -1.0054,  1.8972,  0.9174, -1.4995],
+         [ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000]],
+        [[-1.8546, -0.7194, -0.2918, -0.1846,  0.0000],
+         [ 0.2773,  0.8793, -0.5183, -0.6447,  0.0000],
+         [ 1.8009,  1.8468, -0.9832, -1.5272,  0.0000]]])
+&gt;&gt;&gt; pt_large = torch.nested.to_padded_tensor(nt, 1.0, (2, 4, 6))
+tensor([[[ 1.6862, -1.1282,  1.1031,  0.0464, -1.3276,  1.0000],
+         [-1.9967, -1.0054,  1.8972,  0.9174, -1.4995,  1.0000],
+         [ 1.0000,  1.0000,  1.0000,  1.0000,  1.0000,  1.0000],
+         [ 1.0000,  1.0000,  1.0000,  1.0000,  1.0000,  1.0000]],
+        [[-1.8546, -0.7194, -0.2918, -0.1846,  1.0000,  1.0000],
+         [ 0.2773,  0.8793, -0.5183, -0.6447,  1.0000,  1.0000],
+         [ 1.8009,  1.8468, -0.9832, -1.5272,  1.0000,  1.0000],
+         [ 1.0000,  1.0000,  1.0000,  1.0000,  1.0000,  1.0000]]])
+&gt;&gt;&gt; pt_small = torch.nested.to_padded_tensor(nt, 2.0, (2, 2, 2))
+RuntimeError: Value in output_size is less than NestedTensor padded size. Truncation is not supported.
+</pre> </dd>
+</dl>   <h2 id="id2">Supported operations</h2> <p id="supported-operations">In this section, we summarize the operations that are currently supported on NestedTensor and any constraints they have.</p> <table class="colwidths-given docutils colwidths-auto align-default">  <thead> <tr>
+<th class="head"><p>PyTorch operation</p></th> <th class="head"><p>Constraints</p></th> </tr> </thead>  <tr>
+<td><p><a class="reference internal" href="generated/torch.matmul#torch.matmul" title="torch.matmul"><code>torch.matmul()</code></a></p></td> <td><p>Supports matrix multiplication between two (&gt;= 3d) nested tensors where the last two dimensions are matrix dimensions and the leading (batch) dimensions have the same size (i.e. no broadcasting support for batch dimensions yet).</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.bmm#torch.bmm" title="torch.bmm"><code>torch.bmm()</code></a></p></td> <td><p>Supports batch matrix multiplication of two 3-d nested tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.nn.linear#torch.nn.Linear" title="torch.nn.Linear"><code>torch.nn.Linear()</code></a></p></td> <td><p>Supports 3-d nested input and a dense 2-d weight matrix.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.nn.functional.softmax#torch.nn.functional.softmax" title="torch.nn.functional.softmax"><code>torch.nn.functional.softmax()</code></a></p></td> <td><p>Supports softmax along all dims except dim=0.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.nn.dropout#torch.nn.Dropout" title="torch.nn.Dropout"><code>torch.nn.Dropout()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.tensor.masked_fill#torch.Tensor.masked_fill" title="torch.Tensor.masked_fill"><code>torch.Tensor.masked_fill()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><code>torch.relu()</code></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><code>torch.gelu()</code></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><code>torch.silu()</code></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.abs#torch.abs" title="torch.abs"><code>torch.abs()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.sgn#torch.sgn" title="torch.sgn"><code>torch.sgn()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.logical_not#torch.logical_not" title="torch.logical_not"><code>torch.logical_not()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.neg#torch.neg" title="torch.neg"><code>torch.neg()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.sub#torch.sub" title="torch.sub"><code>torch.sub()</code></a></p></td> <td><p>Supports elementwise subtraction of two nested tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.add#torch.add" title="torch.add"><code>torch.add()</code></a></p></td> <td><p>Supports elementwise addition of two nested tensors. Supports addition of a scalar to a nested tensor.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.mul#torch.mul" title="torch.mul"><code>torch.mul()</code></a></p></td> <td><p>Supports elementwise multiplication of two nested tensors. Supports multiplication of a nested tensor by a scalar.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.select#torch.select" title="torch.select"><code>torch.select()</code></a></p></td> <td><p>Supports selecting along all dimensions.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.clone#torch.clone" title="torch.clone"><code>torch.clone()</code></a></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><code>torch.detach()</code></p></td> <td><p>Behavior is the same as on regular tensors.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.unbind#torch.unbind" title="torch.unbind"><code>torch.unbind()</code></a></p></td> <td><p>Supports unbinding along <code>dim=0</code> only.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.reshape#torch.reshape" title="torch.reshape"><code>torch.reshape()</code></a></p></td> <td><p>Supports reshaping with size of <code>dim=0</code> preserved (i.e. number of tensors nested cannot be changed). Unlike regular tensors, a size of <code>-1</code> here means that the existing size is inherited. In particular, the only valid size for a irregular dimension is <code>-1</code>. Size inference is not implemented yet and hence for new dimensions the size cannot be <code>-1</code>.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.tensor.reshape_as#torch.Tensor.reshape_as" title="torch.Tensor.reshape_as"><code>torch.Tensor.reshape_as()</code></a></p></td> <td><p>Similar constraint as for <code>reshape</code>.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.transpose#torch.transpose" title="torch.transpose"><code>torch.transpose()</code></a></p></td> <td><p>Supports transposing of all dims except <code>dim=0</code>.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.tensor.view#torch.Tensor.view" title="torch.Tensor.view"><code>torch.Tensor.view()</code></a></p></td> <td><p>Rules for the new shape are similar to that of <code>reshape</code>.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.empty_like#torch.empty_like" title="torch.empty_like"><code>torch.empty_like()</code></a></p></td> <td><p>Behavior is analogous to that of regular tensors; returns a new empty nested tensor (i.e. with uninitialized values) matching the nested structure of the input.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.randn_like#torch.randn_like" title="torch.randn_like"><code>torch.randn_like()</code></a></p></td> <td><p>Behavior is analogous to that of regular tensors; returns a new nested tensor with values randomly initialized according to a standard normal distribution matching the nested structure of the input.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.zeros_like#torch.zeros_like" title="torch.zeros_like"><code>torch.zeros_like()</code></a></p></td> <td><p>Behavior is analogous to that of regular tensors; returns a new nested tensor with all zero values matching the nested structure of the input.</p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.nn.layernorm#torch.nn.LayerNorm" title="torch.nn.LayerNorm"><code>torch.nn.LayerNorm()</code></a></p></td> <td><p>The <code>normalized_shape</code> argument is restricted to not extend into the irregular dimensions of the NestedTensor.</p></td> </tr>  </table><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/nested.html" class="_attribution-link">https://pytorch.org/docs/2.1/nested.html</a>
+  </p>
+</div>

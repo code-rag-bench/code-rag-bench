@@ -1,0 +1,66 @@
+<h1 class="devsite-page-title">tf.random.set_seed</h1>       <p>Sets the global random seed.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.random.set_seed(
+    seed
+)
+</pre>  <p>Operations that rely on a random seed actually derive it from two seeds: the global and operation-level seeds. This sets the global seed.</p> <p>Its interactions with operation-level seeds is as follows:</p> <ol> <li>If neither the global seed nor the operation seed is set: A randomly picked seed is used for this op.</li> <li>If the graph-level seed is set, but the operation seed is not: The system deterministically picks an operation seed in conjunction with the graph-level seed so that it gets a unique random sequence. Within the same version of tensorflow and user code, this sequence is deterministic. However across different versions, this sequence might change. If the code depends on particular seeds to work, specify both graph-level and operation-level seeds explicitly.</li> <li>If the operation seed is set, but the global seed is not set: A default global seed and the specified operation seed are used to determine the random sequence.</li> <li>If both the global and the operation seed are set: Both seeds are used in conjunction to determine the random sequence.</li> </ol> <p>To illustrate the user-visible effects, consider these examples:</p> <p>If neither the global seed nor the operation seed is set, we get different results for every call to the random op and every re-run of the program:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">print(tf.random.uniform([1]))  # generates 'A1'
+print(tf.random.uniform([1]))  # generates 'A2'
+</pre> <p>(now close the program and run it again)</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">print(tf.random.uniform([1]))  # generates 'A3'
+print(tf.random.uniform([1]))  # generates 'A4'
+</pre> <p>If the global seed is set but the operation seed is not set, we get different results for every call to the random op, but the same sequence for every re-run of the program:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">tf.random.set_seed(1234)
+print(tf.random.uniform([1]))  # generates 'A1'
+print(tf.random.uniform([1]))  # generates 'A2'
+</pre> <p>(now close the program and run it again)</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">tf.random.set_seed(1234)
+print(tf.random.uniform([1]))  # generates 'A1'
+print(tf.random.uniform([1]))  # generates 'A2'
+</pre> <p>The reason we get 'A2' instead 'A1' on the second call of <a href="uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> above is because the second call uses a different operation seed.</p> <p>Note that <a href="../function"><code translate="no" dir="ltr">tf.function</code></a> acts like a re-run of a program in this case. When the global seed is set but operation seeds are not set, the sequence of random numbers are the same for each <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. For example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">tf.random.set_seed(1234)
+
+@tf.function
+def f():
+  a = tf.random.uniform([1])
+  b = tf.random.uniform([1])
+  return a, b
+
+@tf.function
+def g():
+  a = tf.random.uniform([1])
+  b = tf.random.uniform([1])
+  return a, b
+
+print(f())  # prints '(A1, A2)'
+print(g())  # prints '(A1, A2)'
+</pre> <p>If the operation seed is set, we get different results for every call to the random op, but the same sequence for every re-run of the program:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">print(tf.random.uniform([1], seed=1))  # generates 'A1'
+print(tf.random.uniform([1], seed=1))  # generates 'A2'
+</pre> <p>(now close the program and run it again)</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">print(tf.random.uniform([1], seed=1))  # generates 'A1'
+print(tf.random.uniform([1], seed=1))  # generates 'A2'
+</pre> <p>The reason we get 'A2' instead 'A1' on the second call of <a href="uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> above is because the same <a href="uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> kernel (i.e. internal representation) is used by TensorFlow for all calls of it with the same arguments, and the kernel maintains an internal counter which is incremented every time it is executed, generating different results.</p> <p>Calling <a href="set_seed"><code translate="no" dir="ltr">tf.random.set_seed</code></a> will reset any such counters:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">tf.random.set_seed(1234)
+print(tf.random.uniform([1], seed=1))  # generates 'A1'
+print(tf.random.uniform([1], seed=1))  # generates 'A2'
+tf.random.set_seed(1234)
+print(tf.random.uniform([1], seed=1))  # generates 'A1'
+print(tf.random.uniform([1], seed=1))  # generates 'A2'
+</pre> <p>When multiple identical random ops are wrapped in a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>, their behaviors change because the ops no long share the same counter. For example:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@tf.function
+def foo():
+  a = tf.random.uniform([1], seed=1)
+  b = tf.random.uniform([1], seed=1)
+  return a, b
+print(foo())  # prints '(A1, A1)'
+print(foo())  # prints '(A2, A2)'
+
+@tf.function
+def bar():
+  a = tf.random.uniform([1])
+  b = tf.random.uniform([1])
+  return a, b
+print(bar())  # prints '(A1, A2)'
+print(bar())  # prints '(A3, A4)'
+</pre> <p>The second call of <code translate="no" dir="ltr">foo</code> returns '(A2, A2)' instead of '(A1, A1)' because <a href="uniform"><code translate="no" dir="ltr">tf.random.uniform</code></a> maintains an internal counter. If you want <code translate="no" dir="ltr">foo</code> to return '(A1, A1)' every time, use the stateless random ops such as <a href="stateless_uniform"><code translate="no" dir="ltr">tf.random.stateless_uniform</code></a>. Also see <a href="generator"><code translate="no" dir="ltr">tf.random.experimental.Generator</code></a> for a new set of stateful random ops that use external variables to manage their states.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">seed</code> </td> <td> integer. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/random/set_seed" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/random/set_seed</a>
+  </p>
+</div>

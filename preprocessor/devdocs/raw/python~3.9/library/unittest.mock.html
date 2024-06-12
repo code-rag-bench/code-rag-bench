@@ -1,0 +1,1289 @@
+<h1 id="unittest-mock-mock-object-library">unittest.mock — mock object library</h1> <div class="versionadded" id="module-unittest.mock"> <p><span class="versionmodified added">New in version 3.3.</span></p> </div> <p><strong>Source code:</strong> <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/unittest/mock.py">Lib/unittest/mock.py</a></p>  <p><a class="reference internal" href="#module-unittest.mock" title="unittest.mock: Mock object library."><code>unittest.mock</code></a> is a library for testing in Python. It allows you to replace parts of your system under test with mock objects and make assertions about how they have been used.</p> <p><a class="reference internal" href="#module-unittest.mock" title="unittest.mock: Mock object library."><code>unittest.mock</code></a> provides a core <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> class removing the need to create a host of stubs throughout your test suite. After performing an action, you can make assertions about which methods / attributes were used and arguments they were called with. You can also specify return values and set needed attributes in the normal way.</p> <p>Additionally, mock provides a <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> decorator that handles patching module and class level attributes within the scope of a test, along with <a class="reference internal" href="#unittest.mock.sentinel" title="unittest.mock.sentinel"><code>sentinel</code></a> for creating unique objects. See the <a class="reference internal" href="#quick-guide">quick guide</a> for some examples of how to use <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>, <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> and <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>.</p> <p>Mock is designed for use with <a class="reference internal" href="unittest#module-unittest" title="unittest: Unit testing framework for Python."><code>unittest</code></a> and is based on the ‘action -&gt; assertion’ pattern instead of ‘record -&gt; replay’ used by many mocking frameworks.</p> <p>There is a backport of <a class="reference internal" href="#module-unittest.mock" title="unittest.mock: Mock object library."><code>unittest.mock</code></a> for earlier versions of Python, available as <a class="reference external" href="https://pypi.org/project/mock">mock on PyPI</a>.</p>  <h2 id="quick-guide">Quick Guide</h2> <p><a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> and <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> objects create all attributes and methods as you access them and store details of how they have been used. You can configure them, to specify return values or limit what attributes are available, and then make assertions about how they have been used:</p> <pre data-language="python">&gt;&gt;&gt; from unittest.mock import MagicMock
+&gt;&gt;&gt; thing = ProductionClass()
+&gt;&gt;&gt; thing.method = MagicMock(return_value=3)
+&gt;&gt;&gt; thing.method(3, 4, 5, key='value')
+3
+&gt;&gt;&gt; thing.method.assert_called_with(3, 4, 5, key='value')
+</pre> <p><code>side_effect</code> allows you to perform side effects, including raising an exception when a mock is called:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(side_effect=KeyError('foo'))
+&gt;&gt;&gt; mock()
+Traceback (most recent call last):
+ ...
+KeyError: 'foo'
+</pre> <pre data-language="python">&gt;&gt;&gt; values = {'a': 1, 'b': 2, 'c': 3}
+&gt;&gt;&gt; def side_effect(arg):
+...     return values[arg]
+...
+&gt;&gt;&gt; mock.side_effect = side_effect
+&gt;&gt;&gt; mock('a'), mock('b'), mock('c')
+(1, 2, 3)
+&gt;&gt;&gt; mock.side_effect = [5, 4, 3, 2, 1]
+&gt;&gt;&gt; mock(), mock(), mock()
+(5, 4, 3)
+</pre> <p>Mock has many other ways you can configure it and control its behaviour. For example the <em>spec</em> argument configures the mock to take its specification from another object. Attempting to access attributes or methods on the mock that don’t exist on the spec will fail with an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</p> <p>The <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> decorator / context manager makes it easy to mock classes or objects in a module under test. The object you specify will be replaced with a mock (or other object) during the test and restored when the test ends:</p> <pre data-language="python">&gt;&gt;&gt; from unittest.mock import patch
+&gt;&gt;&gt; @patch('module.ClassName2')
+... @patch('module.ClassName1')
+... def test(MockClass1, MockClass2):
+...     module.ClassName1()
+...     module.ClassName2()
+...     assert MockClass1 is module.ClassName1
+...     assert MockClass2 is module.ClassName2
+...     assert MockClass1.called
+...     assert MockClass2.called
+...
+&gt;&gt;&gt; test()
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>When you nest patch decorators the mocks are passed in to the decorated function in the same order they applied (the normal <em>Python</em> order that decorators are applied). This means from the bottom up, so in the example above the mock for <code>module.ClassName1</code> is passed in first.</p> <p>With <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> it matters that you patch objects in the namespace where they are looked up. This is normally straightforward, but for a quick guide read <a class="reference internal" href="#where-to-patch"><span class="std std-ref">where to patch</span></a>.</p> </div> <p>As well as a decorator <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> can be used as a context manager in a with statement:</p> <pre data-language="python">&gt;&gt;&gt; with patch.object(ProductionClass, 'method', return_value=None) as mock_method:
+...     thing = ProductionClass()
+...     thing.method(1, 2, 3)
+...
+&gt;&gt;&gt; mock_method.assert_called_once_with(1, 2, 3)
+</pre> <p>There is also <a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> for setting values in a dictionary just during a scope and restoring the dictionary to its original state when the test ends:</p> <pre data-language="python">&gt;&gt;&gt; foo = {'key': 'value'}
+&gt;&gt;&gt; original = foo.copy()
+&gt;&gt;&gt; with patch.dict(foo, {'newkey': 'newvalue'}, clear=True):
+...     assert foo == {'newkey': 'newvalue'}
+...
+&gt;&gt;&gt; assert foo == original
+</pre> <p>Mock supports the mocking of Python <a class="reference internal" href="#magic-methods"><span class="std std-ref">magic methods</span></a>. The easiest way of using magic methods is with the <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> class. It allows you to do things like:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.__str__.return_value = 'foobarbaz'
+&gt;&gt;&gt; str(mock)
+'foobarbaz'
+&gt;&gt;&gt; mock.__str__.assert_called_with()
+</pre> <p>Mock allows you to assign functions (or other Mock instances) to magic methods and they will be called appropriately. The <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> class is just a Mock variant that has all of the magic methods pre-created for you (well, all the useful ones anyway).</p> <p>The following is an example of using magic methods with the ordinary Mock class:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__str__ = Mock(return_value='wheeeeee')
+&gt;&gt;&gt; str(mock)
+'wheeeeee'
+</pre> <p>For ensuring that the mock objects in your tests have the same api as the objects they are replacing, you can use <a class="reference internal" href="#auto-speccing"><span class="std std-ref">auto-speccing</span></a>. Auto-speccing can be done through the <em>autospec</em> argument to patch, or the <a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> function. Auto-speccing creates mock objects that have the same attributes and methods as the objects they are replacing, and any functions and methods (including constructors) have the same call signature as the real object.</p> <p>This ensures that your mocks will fail in the same way as your production code if they are used incorrectly:</p> <pre data-language="python">&gt;&gt;&gt; from unittest.mock import create_autospec
+&gt;&gt;&gt; def function(a, b, c):
+...     pass
+...
+&gt;&gt;&gt; mock_function = create_autospec(function, return_value='fishy')
+&gt;&gt;&gt; mock_function(1, 2, 3)
+'fishy'
+&gt;&gt;&gt; mock_function.assert_called_once_with(1, 2, 3)
+&gt;&gt;&gt; mock_function('wrong arguments')
+Traceback (most recent call last):
+ ...
+TypeError: &lt;lambda&gt;() takes exactly 3 arguments (1 given)
+</pre> <p><a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> can also be used on classes, where it copies the signature of the <code>__init__</code> method, and on callable objects where it copies the signature of the <code>__call__</code> method.</p>   <h2 id="the-mock-class">The Mock Class</h2> <p><a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> is a flexible mock object intended to replace the use of stubs and test doubles throughout your code. Mocks are callable and create attributes as new mocks when you access them <a class="footnote-reference brackets" href="#id3" id="id1">1</a>. Accessing the same attribute will always return the same mock. Mocks record how you use them, allowing you to make assertions about what your code has done to them.</p> <p><a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> is a subclass of <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> with all the magic methods pre-created and ready to use. There are also non-callable variants, useful when you are mocking out objects that aren’t callable: <a class="reference internal" href="#unittest.mock.NonCallableMock" title="unittest.mock.NonCallableMock"><code>NonCallableMock</code></a> and <a class="reference internal" href="#unittest.mock.NonCallableMagicMock" title="unittest.mock.NonCallableMagicMock"><code>NonCallableMagicMock</code></a></p> <p>The <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> decorators makes it easy to temporarily replace classes in a particular module with a <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> object. By default <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> will create a <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> for you. You can specify an alternative class of <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> using the <em>new_callable</em> argument to <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>.</p> <dl class="class"> <dt id="unittest.mock.Mock">
+<code>class unittest.mock.Mock(spec=None, side_effect=None, return_value=DEFAULT, wraps=None, name=None, spec_set=None, unsafe=False, **kwargs)</code> </dt> <dd>
+<p>Create a new <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> object. <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> takes several optional arguments that specify the behaviour of the Mock object:</p> <ul> <li>
+<p><em>spec</em>: This can be either a list of strings or an existing object (a class or instance) that acts as the specification for the mock object. If you pass in an object then a list of strings is formed by calling dir on the object (excluding unsupported magic attributes and methods). Accessing any attribute not in this list will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</p> <p>If <em>spec</em> is an object (rather than a list of strings) then <a class="reference internal" href="stdtypes#instance.__class__" title="instance.__class__"><code>__class__</code></a> returns the class of the spec object. This allows mocks to pass <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> tests.</p> </li> <li>
+<em>spec_set</em>: A stricter variant of <em>spec</em>. If used, attempting to <em>set</em> or get an attribute on the mock that isn’t on the object passed as <em>spec_set</em> will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</li> <li>
+<p><em>side_effect</em>: A function to be called whenever the Mock is called. See the <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> attribute. Useful for raising exceptions or dynamically changing return values. The function is called with the same arguments as the mock, and unless it returns <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a>, the return value of this function is used as the return value.</p> <p>Alternatively <em>side_effect</em> can be an exception class or instance. In this case the exception will be raised when the mock is called.</p> <p>If <em>side_effect</em> is an iterable then each call to the mock will return the next value from the iterable.</p> <p>A <em>side_effect</em> can be cleared by setting it to <code>None</code>.</p> </li> <li>
+<em>return_value</em>: The value returned when the mock is called. By default this is a new Mock (created on first access). See the <a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a> attribute.</li> <li>
+<p><em>unsafe</em>: By default if any attribute starts with <em>assert</em> or <em>assret</em> will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>. Passing <code>unsafe=True</code> will allow access to these attributes.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.</span></p> </div> </li> <li>
+<p><em>wraps</em>: Item for the mock object to wrap. If <em>wraps</em> is not <code>None</code> then calling the Mock will pass the call through to the wrapped object (returning the real result). Attribute access on the mock will return a Mock object that wraps the corresponding attribute of the wrapped object (so attempting to access an attribute that doesn’t exist will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>).</p> <p>If the mock has an explicit <em>return_value</em> set then calls are not passed to the wrapped object and the <em>return_value</em> is returned instead.</p> </li> <li>
+<em>name</em>: If the mock has a name then it will be used in the repr of the mock. This can be useful for debugging. The name is propagated to child mocks.</li> </ul> <p>Mocks can also be called with arbitrary keyword arguments. These will be used to set attributes on the mock after it is created. See the <a class="reference internal" href="#unittest.mock.Mock.configure_mock" title="unittest.mock.Mock.configure_mock"><code>configure_mock()</code></a> method for details.</p> <dl class="method"> <dt id="unittest.mock.Mock.assert_called">
+<code>assert_called()</code> </dt> <dd>
+<p>Assert that the mock was called at least once.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.method()
+&lt;Mock name='mock.method()' id='...'&gt;
+&gt;&gt;&gt; mock.method.assert_called()
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_called_once">
+<code>assert_called_once()</code> </dt> <dd>
+<p>Assert that the mock was called exactly once.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.method()
+&lt;Mock name='mock.method()' id='...'&gt;
+&gt;&gt;&gt; mock.method.assert_called_once()
+&gt;&gt;&gt; mock.method()
+&lt;Mock name='mock.method()' id='...'&gt;
+&gt;&gt;&gt; mock.method.assert_called_once()
+Traceback (most recent call last):
+...
+AssertionError: Expected 'method' to have been called once. Called 2 times.
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_called_with">
+<code>assert_called_with(*args, **kwargs)</code> </dt> <dd>
+<p>This method is a convenient way of asserting that the last call has been made in a particular way:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.method(1, 2, 3, test='wow')
+&lt;Mock name='mock.method()' id='...'&gt;
+&gt;&gt;&gt; mock.method.assert_called_with(1, 2, 3, test='wow')
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_called_once_with">
+<code>assert_called_once_with(*args, **kwargs)</code> </dt> <dd>
+<p>Assert that the mock was called exactly once and that that call was with the specified arguments.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock('foo', bar='baz')
+&gt;&gt;&gt; mock.assert_called_once_with('foo', bar='baz')
+&gt;&gt;&gt; mock('other', bar='values')
+&gt;&gt;&gt; mock.assert_called_once_with('other', bar='values')
+Traceback (most recent call last):
+  ...
+AssertionError: Expected 'mock' to be called once. Called 2 times.
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_any_call">
+<code>assert_any_call(*args, **kwargs)</code> </dt> <dd>
+<p>assert the mock has been called with the specified arguments.</p> <p>The assert passes if the mock has <em>ever</em> been called, unlike <a class="reference internal" href="#unittest.mock.Mock.assert_called_with" title="unittest.mock.Mock.assert_called_with"><code>assert_called_with()</code></a> and <a class="reference internal" href="#unittest.mock.Mock.assert_called_once_with" title="unittest.mock.Mock.assert_called_once_with"><code>assert_called_once_with()</code></a> that only pass if the call is the most recent one, and in the case of <a class="reference internal" href="#unittest.mock.Mock.assert_called_once_with" title="unittest.mock.Mock.assert_called_once_with"><code>assert_called_once_with()</code></a> it must also be the only call.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock(1, 2, arg='thing')
+&gt;&gt;&gt; mock('some', 'thing', 'else')
+&gt;&gt;&gt; mock.assert_any_call(1, 2, arg='thing')
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_has_calls">
+<code>assert_has_calls(calls, any_order=False)</code> </dt> <dd>
+<p>assert the mock has been called with the specified calls. The <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> list is checked for the calls.</p> <p>If <em>any_order</em> is false then the calls must be sequential. There can be extra calls before or after the specified calls.</p> <p>If <em>any_order</em> is true then the calls can be in any order, but they must all appear in <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock(1)
+&gt;&gt;&gt; mock(2)
+&gt;&gt;&gt; mock(3)
+&gt;&gt;&gt; mock(4)
+&gt;&gt;&gt; calls = [call(2), call(3)]
+&gt;&gt;&gt; mock.assert_has_calls(calls)
+&gt;&gt;&gt; calls = [call(4), call(2), call(3)]
+&gt;&gt;&gt; mock.assert_has_calls(calls, any_order=True)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.assert_not_called">
+<code>assert_not_called()</code> </dt> <dd>
+<p>Assert the mock was never called.</p> <pre data-language="python">&gt;&gt;&gt; m = Mock()
+&gt;&gt;&gt; m.hello.assert_not_called()
+&gt;&gt;&gt; obj = m.hello()
+&gt;&gt;&gt; m.hello.assert_not_called()
+Traceback (most recent call last):
+  ...
+AssertionError: Expected 'hello' to not have been called. Called 1 times.
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.reset_mock">
+<code>reset_mock(*, return_value=False, side_effect=False)</code> </dt> <dd>
+<p>The reset_mock method resets all the call attributes on a mock object:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock('hello')
+&gt;&gt;&gt; mock.called
+True
+&gt;&gt;&gt; mock.reset_mock()
+&gt;&gt;&gt; mock.called
+False
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>Added two keyword only argument to the reset_mock function.</p> </div> <p>This can be useful where you want to make a series of assertions that reuse the same object. Note that <a class="reference internal" href="#unittest.mock.Mock.reset_mock" title="unittest.mock.Mock.reset_mock"><code>reset_mock()</code></a> <em>doesn’t</em> clear the return value, <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> or any child attributes you have set using normal assignment by default. In case you want to reset <em>return_value</em> or <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a>, then pass the corresponding parameter as <code>True</code>. Child mocks and the return value mock (if any) are reset as well.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p><em>return_value</em>, and <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> are keyword only argument.</p> </div> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.mock_add_spec">
+<code>mock_add_spec(spec, spec_set=False)</code> </dt> <dd>
+<p>Add a spec to a mock. <em>spec</em> can either be an object or a list of strings. Only attributes on the <em>spec</em> can be fetched as attributes from the mock.</p> <p>If <em>spec_set</em> is true then only attributes on the spec can be set.</p> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.attach_mock">
+<code>attach_mock(mock, attribute)</code> </dt> <dd>
+<p>Attach a mock as an attribute of this one, replacing its name and parent. Calls to the attached mock will be recorded in the <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a> and <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> attributes of this one.</p> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.configure_mock">
+<code>configure_mock(**kwargs)</code> </dt> <dd>
+<p>Set attributes on the mock through keyword arguments.</p> <p>Attributes plus return values and side effects can be set on child mocks using standard dot notation and unpacking a dictionary in the method call:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; attrs = {'method.return_value': 3, 'other.side_effect': KeyError}
+&gt;&gt;&gt; mock.configure_mock(**attrs)
+&gt;&gt;&gt; mock.method()
+3
+&gt;&gt;&gt; mock.other()
+Traceback (most recent call last):
+  ...
+KeyError
+</pre> <p>The same thing can be achieved in the constructor call to mocks:</p> <pre data-language="python">&gt;&gt;&gt; attrs = {'method.return_value': 3, 'other.side_effect': KeyError}
+&gt;&gt;&gt; mock = Mock(some_attribute='eggs', **attrs)
+&gt;&gt;&gt; mock.some_attribute
+'eggs'
+&gt;&gt;&gt; mock.method()
+3
+&gt;&gt;&gt; mock.other()
+Traceback (most recent call last):
+  ...
+KeyError
+</pre> <p><a class="reference internal" href="#unittest.mock.Mock.configure_mock" title="unittest.mock.Mock.configure_mock"><code>configure_mock()</code></a> exists to make it easier to do configuration after the mock has been created.</p> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock.__dir__">
+<code>__dir__()</code> </dt> <dd>
+<p><a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> objects limit the results of <code>dir(some_mock)</code> to useful results. For mocks with a <em>spec</em> this includes all the permitted attributes for the mock.</p> <p>See <a class="reference internal" href="#unittest.mock.FILTER_DIR" title="unittest.mock.FILTER_DIR"><code>FILTER_DIR</code></a> for what this filtering does, and how to switch it off.</p> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.Mock._get_child_mock">
+<code>_get_child_mock(**kw)</code> </dt> <dd>
+<p>Create the child mocks for attributes and return value. By default child mocks will be the same type as the parent. Subclasses of Mock may want to override this to customize the way child mocks are made.</p> <p>For non-callable mocks the callable variant will be used (rather than any custom subclass).</p> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.called">
+<code>called</code> </dt> <dd>
+<p>A boolean representing whether or not the mock object has been called:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock.called
+False
+&gt;&gt;&gt; mock()
+&gt;&gt;&gt; mock.called
+True
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.call_count">
+<code>call_count</code> </dt> <dd>
+<p>An integer telling you how many times the mock object has been called:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock.call_count
+0
+&gt;&gt;&gt; mock()
+&gt;&gt;&gt; mock()
+&gt;&gt;&gt; mock.call_count
+2
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.return_value">
+<code>return_value</code> </dt> <dd>
+<p>Set this to configure the value returned by calling the mock:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.return_value = 'fish'
+&gt;&gt;&gt; mock()
+'fish'
+</pre> <p>The default return value is a mock object and you can configure it in the normal way:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.return_value.attribute = sentinel.Attribute
+&gt;&gt;&gt; mock.return_value()
+&lt;Mock name='mock()()' id='...'&gt;
+&gt;&gt;&gt; mock.return_value.assert_called_with()
+</pre> <p><a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a> can also be set in the constructor:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=3)
+&gt;&gt;&gt; mock.return_value
+3
+&gt;&gt;&gt; mock()
+3
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.side_effect">
+<code>side_effect</code> </dt> <dd>
+<p>This can either be a function to be called when the mock is called, an iterable or an exception (class or instance) to be raised.</p> <p>If you pass in a function it will be called with same arguments as the mock and unless the function returns the <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> singleton the call to the mock will then return whatever the function returns. If the function returns <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> then the mock will return its normal value (from the <a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a>).</p> <p>If you pass in an iterable, it is used to retrieve an iterator which must yield a value on every call. This value can either be an exception instance to be raised, or a value to be returned from the call to the mock (<a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> handling is identical to the function case).</p> <p>An example of a mock that raises an exception (to test exception handling of an API):</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.side_effect = Exception('Boom!')
+&gt;&gt;&gt; mock()
+Traceback (most recent call last):
+  ...
+Exception: Boom!
+</pre> <p>Using <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> to return a sequence of values:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.side_effect = [3, 2, 1]
+&gt;&gt;&gt; mock(), mock(), mock()
+(3, 2, 1)
+</pre> <p>Using a callable:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=3)
+&gt;&gt;&gt; def side_effect(*args, **kwargs):
+...     return DEFAULT
+...
+&gt;&gt;&gt; mock.side_effect = side_effect
+&gt;&gt;&gt; mock()
+3
+</pre> <p><a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> can be set in the constructor. Here’s an example that adds one to the value the mock is called with and returns it:</p> <pre data-language="python">&gt;&gt;&gt; side_effect = lambda value: value + 1
+&gt;&gt;&gt; mock = Mock(side_effect=side_effect)
+&gt;&gt;&gt; mock(3)
+4
+&gt;&gt;&gt; mock(-8)
+-7
+</pre> <p>Setting <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> to <code>None</code> clears it:</p> <pre data-language="python">&gt;&gt;&gt; m = Mock(side_effect=KeyError, return_value=3)
+&gt;&gt;&gt; m()
+Traceback (most recent call last):
+ ...
+KeyError
+&gt;&gt;&gt; m.side_effect = None
+&gt;&gt;&gt; m()
+3
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.call_args">
+<code>call_args</code> </dt> <dd>
+<p>This is either <code>None</code> (if the mock hasn’t been called), or the arguments that the mock was last called with. This will be in the form of a tuple: the first member, which can also be accessed through the <code>args</code> property, is any ordered arguments the mock was called with (or an empty tuple) and the second member, which can also be accessed through the <code>kwargs</code> property, is any keyword arguments (or an empty dictionary).</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; print(mock.call_args)
+None
+&gt;&gt;&gt; mock()
+&gt;&gt;&gt; mock.call_args
+call()
+&gt;&gt;&gt; mock.call_args == ()
+True
+&gt;&gt;&gt; mock(3, 4)
+&gt;&gt;&gt; mock.call_args
+call(3, 4)
+&gt;&gt;&gt; mock.call_args == ((3, 4),)
+True
+&gt;&gt;&gt; mock.call_args.args
+(3, 4)
+&gt;&gt;&gt; mock.call_args.kwargs
+{}
+&gt;&gt;&gt; mock(3, 4, 5, key='fish', next='w00t!')
+&gt;&gt;&gt; mock.call_args
+call(3, 4, 5, key='fish', next='w00t!')
+&gt;&gt;&gt; mock.call_args.args
+(3, 4, 5)
+&gt;&gt;&gt; mock.call_args.kwargs
+{'key': 'fish', 'next': 'w00t!'}
+</pre> <p><a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>call_args</code></a>, along with members of the lists <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>call_args_list</code></a>, <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a> and <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> are <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call</code></a> objects. These are tuples, so they can be unpacked to get at the individual arguments and make more complex assertions. See <a class="reference internal" href="#calls-as-tuples"><span class="std std-ref">calls as tuples</span></a>.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added <code>args</code> and <code>kwargs</code> properties.</p> </div> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.call_args_list">
+<code>call_args_list</code> </dt> <dd>
+<p>This is a list of all the calls made to the mock object in sequence (so the length of the list is the number of times it has been called). Before any calls have been made it is an empty list. The <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call</code></a> object can be used for conveniently constructing lists of calls to compare with <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>call_args_list</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock()
+&gt;&gt;&gt; mock(3, 4)
+&gt;&gt;&gt; mock(key='fish', next='w00t!')
+&gt;&gt;&gt; mock.call_args_list
+[call(), call(3, 4), call(key='fish', next='w00t!')]
+&gt;&gt;&gt; expected = [(), ((3, 4),), ({'key': 'fish', 'next': 'w00t!'},)]
+&gt;&gt;&gt; mock.call_args_list == expected
+True
+</pre> <p>Members of <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>call_args_list</code></a> are <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call</code></a> objects. These can be unpacked as tuples to get at the individual arguments. See <a class="reference internal" href="#calls-as-tuples"><span class="std std-ref">calls as tuples</span></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.method_calls">
+<code>method_calls</code> </dt> <dd>
+<p>As well as tracking calls to themselves, mocks also track calls to methods and attributes, and <em>their</em> methods and attributes:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.method()
+&lt;Mock name='mock.method()' id='...'&gt;
+&gt;&gt;&gt; mock.property.method.attribute()
+&lt;Mock name='mock.property.method.attribute()' id='...'&gt;
+&gt;&gt;&gt; mock.method_calls
+[call.method(), call.property.method.attribute()]
+</pre> <p>Members of <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a> are <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call</code></a> objects. These can be unpacked as tuples to get at the individual arguments. See <a class="reference internal" href="#calls-as-tuples"><span class="std std-ref">calls as tuples</span></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.mock_calls">
+<code>mock_calls</code> </dt> <dd>
+<p><a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> records <em>all</em> calls to the mock object, its methods, magic methods <em>and</em> return value mocks.</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; result = mock(1, 2, 3)
+&gt;&gt;&gt; mock.first(a=3)
+&lt;MagicMock name='mock.first()' id='...'&gt;
+&gt;&gt;&gt; mock.second()
+&lt;MagicMock name='mock.second()' id='...'&gt;
+&gt;&gt;&gt; int(mock)
+1
+&gt;&gt;&gt; result(1)
+&lt;MagicMock name='mock()()' id='...'&gt;
+&gt;&gt;&gt; expected = [call(1, 2, 3), call.first(a=3), call.second(),
+... call.__int__(), call()(1)]
+&gt;&gt;&gt; mock.mock_calls == expected
+True
+</pre> <p>Members of <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> are <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call</code></a> objects. These can be unpacked as tuples to get at the individual arguments. See <a class="reference internal" href="#calls-as-tuples"><span class="std std-ref">calls as tuples</span></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The way <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> are recorded means that where nested calls are made, the parameters of ancestor calls are not recorded and so will always compare equal:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.top(a=3).bottom()
+&lt;MagicMock name='mock.top().bottom()' id='...'&gt;
+&gt;&gt;&gt; mock.mock_calls
+[call.top(a=3), call.top().bottom()]
+&gt;&gt;&gt; mock.mock_calls[-1] == call.top(a=-1).bottom()
+True
+</pre> </div> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.Mock.__class__">
+<code>__class__</code> </dt> <dd>
+<p>Normally the <a class="reference internal" href="#unittest.mock.Mock.__class__" title="unittest.mock.Mock.__class__"><code>__class__</code></a> attribute of an object will return its type. For a mock object with a <code>spec</code>, <code>__class__</code> returns the spec class instead. This allows mock objects to pass <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> tests for the object they are replacing / masquerading as:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(spec=3)
+&gt;&gt;&gt; isinstance(mock, int)
+True
+</pre> <p><a class="reference internal" href="#unittest.mock.Mock.__class__" title="unittest.mock.Mock.__class__"><code>__class__</code></a> is assignable to, this allows a mock to pass an <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> check without forcing you to use a spec:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__class__ = dict
+&gt;&gt;&gt; isinstance(mock, dict)
+True
+</pre> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="unittest.mock.NonCallableMock">
+<code>class unittest.mock.NonCallableMock(spec=None, wraps=None, name=None, spec_set=None, **kwargs)</code> </dt> <dd>
+<p>A non-callable version of <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>. The constructor parameters have the same meaning of <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>, with the exception of <em>return_value</em> and <em>side_effect</em> which have no meaning on a non-callable mock.</p> </dd>
+</dl> <p>Mock objects that use a class or an instance as a <code>spec</code> or <code>spec_set</code> are able to pass <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> tests:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(spec=SomeClass)
+&gt;&gt;&gt; isinstance(mock, SomeClass)
+True
+&gt;&gt;&gt; mock = Mock(spec_set=SomeClass())
+&gt;&gt;&gt; isinstance(mock, SomeClass)
+True
+</pre> <p>The <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> classes have support for mocking magic methods. See <a class="reference internal" href="#magic-methods"><span class="std std-ref">magic methods</span></a> for the full details.</p> <p>The mock classes and the <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> decorators all take arbitrary keyword arguments for configuration. For the <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> decorators the keywords are passed to the constructor of the mock being created. The keyword arguments are for configuring attributes of the mock:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(attribute=3, other='fish')
+&gt;&gt;&gt; m.attribute
+3
+&gt;&gt;&gt; m.other
+'fish'
+</pre> <p>The return value and side effect of child mocks can be set in the same way, using dotted notation. As you can’t use dotted names directly in a call you have to create a dictionary and unpack it using <code>**</code>:</p> <pre data-language="python">&gt;&gt;&gt; attrs = {'method.return_value': 3, 'other.side_effect': KeyError}
+&gt;&gt;&gt; mock = Mock(some_attribute='eggs', **attrs)
+&gt;&gt;&gt; mock.some_attribute
+'eggs'
+&gt;&gt;&gt; mock.method()
+3
+&gt;&gt;&gt; mock.other()
+Traceback (most recent call last):
+  ...
+KeyError
+</pre> <p>A callable mock which was created with a <em>spec</em> (or a <em>spec_set</em>) will introspect the specification object’s signature when matching calls to the mock. Therefore, it can match the actual call’s arguments regardless of whether they were passed positionally or by name:</p> <pre data-language="python">&gt;&gt;&gt; def f(a, b, c): pass
+...
+&gt;&gt;&gt; mock = Mock(spec=f)
+&gt;&gt;&gt; mock(1, 2, c=3)
+&lt;Mock name='mock()' id='140161580456576'&gt;
+&gt;&gt;&gt; mock.assert_called_with(1, 2, 3)
+&gt;&gt;&gt; mock.assert_called_with(a=1, b=2, c=3)
+</pre> <p>This applies to <a class="reference internal" href="#unittest.mock.Mock.assert_called_with" title="unittest.mock.Mock.assert_called_with"><code>assert_called_with()</code></a>, <a class="reference internal" href="#unittest.mock.Mock.assert_called_once_with" title="unittest.mock.Mock.assert_called_once_with"><code>assert_called_once_with()</code></a>, <a class="reference internal" href="#unittest.mock.Mock.assert_has_calls" title="unittest.mock.Mock.assert_has_calls"><code>assert_has_calls()</code></a> and <a class="reference internal" href="#unittest.mock.Mock.assert_any_call" title="unittest.mock.Mock.assert_any_call"><code>assert_any_call()</code></a>. When <a class="reference internal" href="#auto-speccing"><span class="std std-ref">Autospeccing</span></a>, it will also apply to method calls on the mock object.</p>  <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.4: </span>Added signature introspection on specced and autospecced mock objects.</p> </div>  <dl class="class"> <dt id="unittest.mock.PropertyMock">
+<code>class unittest.mock.PropertyMock(*args, **kwargs)</code> </dt> <dd>
+<p>A mock intended to be used as a property, or other descriptor, on a class. <a class="reference internal" href="#unittest.mock.PropertyMock" title="unittest.mock.PropertyMock"><code>PropertyMock</code></a> provides <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__get__" title="object.__get__"><code>__get__()</code></a> and <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__set__" title="object.__set__"><code>__set__()</code></a> methods so you can specify a return value when it is fetched.</p> <p>Fetching a <a class="reference internal" href="#unittest.mock.PropertyMock" title="unittest.mock.PropertyMock"><code>PropertyMock</code></a> instance from an object calls the mock, with no args. Setting it calls the mock with the value being set.</p> <pre data-language="python">&gt;&gt;&gt; class Foo:
+...     @property
+...     def foo(self):
+...         return 'something'
+...     @foo.setter
+...     def foo(self, value):
+...         pass
+...
+&gt;&gt;&gt; with patch('__main__.Foo.foo', new_callable=PropertyMock) as mock_foo:
+...     mock_foo.return_value = 'mockity-mock'
+...     this_foo = Foo()
+...     print(this_foo.foo)
+...     this_foo.foo = 6
+...
+mockity-mock
+&gt;&gt;&gt; mock_foo.mock_calls
+[call(), call(6)]
+</pre> </dd>
+</dl> <p>Because of the way mock attributes are stored you can’t directly attach a <a class="reference internal" href="#unittest.mock.PropertyMock" title="unittest.mock.PropertyMock"><code>PropertyMock</code></a> to a mock object. Instead you can attach it to the mock type object:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock()
+&gt;&gt;&gt; p = PropertyMock(return_value=3)
+&gt;&gt;&gt; type(m).foo = p
+&gt;&gt;&gt; m.foo
+3
+&gt;&gt;&gt; p.assert_called_once_with()
+</pre> <dl class="class"> <dt id="unittest.mock.AsyncMock">
+<code>class unittest.mock.AsyncMock(spec=None, side_effect=None, return_value=DEFAULT, wraps=None, name=None, spec_set=None, unsafe=False, **kwargs)</code> </dt> <dd>
+<p>An asynchronous version of <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a>. The <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> object will behave so the object is recognized as an async function, and the result of a call is an awaitable.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; asyncio.iscoroutinefunction(mock)
+True
+&gt;&gt;&gt; inspect.isawaitable(mock())  
+True
+</pre> <p>The result of <code>mock()</code> is an async function which will have the outcome of <code>side_effect</code> or <code>return_value</code> after it has been awaited:</p> <ul class="simple"> <li>if <code>side_effect</code> is a function, the async function will return the result of that function,</li> <li>if <code>side_effect</code> is an exception, the async function will raise the exception,</li> <li>if <code>side_effect</code> is an iterable, the async function will return the next value of the iterable, however, if the sequence of result is exhausted, <code>StopAsyncIteration</code> is raised immediately,</li> <li>if <code>side_effect</code> is not defined, the async function will return the value defined by <code>return_value</code>, hence, by default, the async function returns a new <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> object.</li> </ul> <p>Setting the <em>spec</em> of a <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> or <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> to an async function will result in a coroutine object being returned after calling.</p> <pre data-language="python">&gt;&gt;&gt; async def async_func(): pass
+...
+&gt;&gt;&gt; mock = MagicMock(async_func)
+&gt;&gt;&gt; mock
+&lt;MagicMock spec='function' id='...'&gt;
+&gt;&gt;&gt; mock()  
+&lt;coroutine object AsyncMockMixin._mock_call at ...&gt;
+</pre> <p>Setting the <em>spec</em> of a <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>, <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a>, or <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> to a class with asynchronous and synchronous functions will automatically detect the synchronous functions and set them as <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> (if the parent mock is <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> or <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a>) or <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> (if the parent mock is <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>). All asynchronous functions will be <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; class ExampleClass:
+...     def sync_foo():
+...         pass
+...     async def async_foo():
+...         pass
+...
+&gt;&gt;&gt; a_mock = AsyncMock(ExampleClass)
+&gt;&gt;&gt; a_mock.sync_foo
+&lt;MagicMock name='mock.sync_foo' id='...'&gt;
+&gt;&gt;&gt; a_mock.async_foo
+&lt;AsyncMock name='mock.async_foo' id='...'&gt;
+&gt;&gt;&gt; mock = Mock(ExampleClass)
+&gt;&gt;&gt; mock.sync_foo
+&lt;Mock name='mock.sync_foo' id='...'&gt;
+&gt;&gt;&gt; mock.async_foo
+&lt;AsyncMock name='mock.async_foo' id='...'&gt;
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_awaited">
+<code>assert_awaited()</code> </dt> <dd>
+<p>Assert that the mock was awaited at least once. Note that this is separate from the object having been called, the <code>await</code> keyword must be used:</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(coroutine_mock):
+...     await coroutine_mock
+...
+&gt;&gt;&gt; coroutine_mock = mock()
+&gt;&gt;&gt; mock.called
+True
+&gt;&gt;&gt; mock.assert_awaited()
+Traceback (most recent call last):
+...
+AssertionError: Expected mock to have been awaited.
+&gt;&gt;&gt; asyncio.run(main(coroutine_mock))
+&gt;&gt;&gt; mock.assert_awaited()
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_awaited_once">
+<code>assert_awaited_once()</code> </dt> <dd>
+<p>Assert that the mock was awaited exactly once.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main():
+...     await mock()
+...
+&gt;&gt;&gt; asyncio.run(main())
+&gt;&gt;&gt; mock.assert_awaited_once()
+&gt;&gt;&gt; asyncio.run(main())
+&gt;&gt;&gt; mock.method.assert_awaited_once()
+Traceback (most recent call last):
+...
+AssertionError: Expected mock to have been awaited once. Awaited 2 times.
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_awaited_with">
+<code>assert_awaited_with(*args, **kwargs)</code> </dt> <dd>
+<p>Assert that the last await was with the specified arguments.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args, **kwargs):
+...     await mock(*args, **kwargs)
+...
+&gt;&gt;&gt; asyncio.run(main('foo', bar='bar'))
+&gt;&gt;&gt; mock.assert_awaited_with('foo', bar='bar')
+&gt;&gt;&gt; mock.assert_awaited_with('other')
+Traceback (most recent call last):
+...
+AssertionError: expected call not found.
+Expected: mock('other')
+Actual: mock('foo', bar='bar')
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_awaited_once_with">
+<code>assert_awaited_once_with(*args, **kwargs)</code> </dt> <dd>
+<p>Assert that the mock was awaited exactly once and with the specified arguments.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args, **kwargs):
+...     await mock(*args, **kwargs)
+...
+&gt;&gt;&gt; asyncio.run(main('foo', bar='bar'))
+&gt;&gt;&gt; mock.assert_awaited_once_with('foo', bar='bar')
+&gt;&gt;&gt; asyncio.run(main('foo', bar='bar'))
+&gt;&gt;&gt; mock.assert_awaited_once_with('foo', bar='bar')
+Traceback (most recent call last):
+...
+AssertionError: Expected mock to have been awaited once. Awaited 2 times.
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_any_await">
+<code>assert_any_await(*args, **kwargs)</code> </dt> <dd>
+<p>Assert the mock has ever been awaited with the specified arguments.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args, **kwargs):
+...     await mock(*args, **kwargs)
+...
+&gt;&gt;&gt; asyncio.run(main('foo', bar='bar'))
+&gt;&gt;&gt; asyncio.run(main('hello'))
+&gt;&gt;&gt; mock.assert_any_await('foo', bar='bar')
+&gt;&gt;&gt; mock.assert_any_await('other')
+Traceback (most recent call last):
+...
+AssertionError: mock('other') await not found
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_has_awaits">
+<code>assert_has_awaits(calls, any_order=False)</code> </dt> <dd>
+<p>Assert the mock has been awaited with the specified calls. The <a class="reference internal" href="#unittest.mock.AsyncMock.await_args_list" title="unittest.mock.AsyncMock.await_args_list"><code>await_args_list</code></a> list is checked for the awaits.</p> <p>If <em>any_order</em> is false then the awaits must be sequential. There can be extra calls before or after the specified awaits.</p> <p>If <em>any_order</em> is true then the awaits can be in any order, but they must all appear in <a class="reference internal" href="#unittest.mock.AsyncMock.await_args_list" title="unittest.mock.AsyncMock.await_args_list"><code>await_args_list</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args, **kwargs):
+...     await mock(*args, **kwargs)
+...
+&gt;&gt;&gt; calls = [call("foo"), call("bar")]
+&gt;&gt;&gt; mock.assert_has_awaits(calls)
+Traceback (most recent call last):
+...
+AssertionError: Awaits not found.
+Expected: [call('foo'), call('bar')]
+Actual: []
+&gt;&gt;&gt; asyncio.run(main('foo'))
+&gt;&gt;&gt; asyncio.run(main('bar'))
+&gt;&gt;&gt; mock.assert_has_awaits(calls)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.assert_not_awaited">
+<code>assert_not_awaited()</code> </dt> <dd>
+<p>Assert that the mock was never awaited.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; mock.assert_not_awaited()
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.AsyncMock.reset_mock">
+<code>reset_mock(*args, **kwargs)</code> </dt> <dd>
+<p>See <a class="reference internal" href="#unittest.mock.Mock.reset_mock" title="unittest.mock.Mock.reset_mock"><code>Mock.reset_mock()</code></a>. Also sets <a class="reference internal" href="#unittest.mock.AsyncMock.await_count" title="unittest.mock.AsyncMock.await_count"><code>await_count</code></a> to 0, <a class="reference internal" href="#unittest.mock.AsyncMock.await_args" title="unittest.mock.AsyncMock.await_args"><code>await_args</code></a> to None, and clears the <a class="reference internal" href="#unittest.mock.AsyncMock.await_args_list" title="unittest.mock.AsyncMock.await_args_list"><code>await_args_list</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.AsyncMock.await_count">
+<code>await_count</code> </dt> <dd>
+<p>An integer keeping track of how many times the mock object has been awaited.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main():
+...     await mock()
+...
+&gt;&gt;&gt; asyncio.run(main())
+&gt;&gt;&gt; mock.await_count
+1
+&gt;&gt;&gt; asyncio.run(main())
+&gt;&gt;&gt; mock.await_count
+2
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.AsyncMock.await_args">
+<code>await_args</code> </dt> <dd>
+<p>This is either <code>None</code> (if the mock hasn’t been awaited), or the arguments that the mock was last awaited with. Functions the same as <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>Mock.call_args</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args):
+...     await mock(*args)
+...
+&gt;&gt;&gt; mock.await_args
+&gt;&gt;&gt; asyncio.run(main('foo'))
+&gt;&gt;&gt; mock.await_args
+call('foo')
+&gt;&gt;&gt; asyncio.run(main('bar'))
+&gt;&gt;&gt; mock.await_args
+call('bar')
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="unittest.mock.AsyncMock.await_args_list">
+<code>await_args_list</code> </dt> <dd>
+<p>This is a list of all the awaits made to the mock object in sequence (so the length of the list is the number of times it has been awaited). Before any awaits have been made it is an empty list.</p> <pre data-language="python">&gt;&gt;&gt; mock = AsyncMock()
+&gt;&gt;&gt; async def main(*args):
+...     await mock(*args)
+...
+&gt;&gt;&gt; mock.await_args_list
+[]
+&gt;&gt;&gt; asyncio.run(main('foo'))
+&gt;&gt;&gt; mock.await_args_list
+[call('foo')]
+&gt;&gt;&gt; asyncio.run(main('bar'))
+&gt;&gt;&gt; mock.await_args_list
+[call('foo'), call('bar')]
+</pre> </dd>
+</dl> </dd>
+</dl>  <h3 id="calling">Calling</h3> <p>Mock objects are callable. The call will return the value set as the <a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a> attribute. The default return value is a new Mock object; it is created the first time the return value is accessed (either explicitly or by calling the Mock) - but it is stored and the same one returned each time.</p> <p>Calls made to the object will be recorded in the attributes like <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>call_args</code></a> and <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>call_args_list</code></a>.</p> <p>If <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> is set then it will be called after the call has been recorded, so if <code>side_effect</code> raises an exception the call is still recorded.</p> <p>The simplest way to make a mock raise an exception when called is to make <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> an exception class or instance:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(side_effect=IndexError)
+&gt;&gt;&gt; m(1, 2, 3)
+Traceback (most recent call last):
+  ...
+IndexError
+&gt;&gt;&gt; m.mock_calls
+[call(1, 2, 3)]
+&gt;&gt;&gt; m.side_effect = KeyError('Bang!')
+&gt;&gt;&gt; m('two', 'three', 'four')
+Traceback (most recent call last):
+  ...
+KeyError: 'Bang!'
+&gt;&gt;&gt; m.mock_calls
+[call(1, 2, 3), call('two', 'three', 'four')]
+</pre> <p>If <code>side_effect</code> is a function then whatever that function returns is what calls to the mock return. The <code>side_effect</code> function is called with the same arguments as the mock. This allows you to vary the return value of the call dynamically, based on the input:</p> <pre data-language="python">&gt;&gt;&gt; def side_effect(value):
+...     return value + 1
+...
+&gt;&gt;&gt; m = MagicMock(side_effect=side_effect)
+&gt;&gt;&gt; m(1)
+2
+&gt;&gt;&gt; m(2)
+3
+&gt;&gt;&gt; m.mock_calls
+[call(1), call(2)]
+</pre> <p>If you want the mock to still return the default return value (a new mock), or any set return value, then there are two ways of doing this. Either return <code>mock.return_value</code> from inside <code>side_effect</code>, or return <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock()
+&gt;&gt;&gt; def side_effect(*args, **kwargs):
+...     return m.return_value
+...
+&gt;&gt;&gt; m.side_effect = side_effect
+&gt;&gt;&gt; m.return_value = 3
+&gt;&gt;&gt; m()
+3
+&gt;&gt;&gt; def side_effect(*args, **kwargs):
+...     return DEFAULT
+...
+&gt;&gt;&gt; m.side_effect = side_effect
+&gt;&gt;&gt; m()
+3
+</pre> <p>To remove a <code>side_effect</code>, and return to the default behaviour, set the <code>side_effect</code> to <code>None</code>:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(return_value=6)
+&gt;&gt;&gt; def side_effect(*args, **kwargs):
+...     return 3
+...
+&gt;&gt;&gt; m.side_effect = side_effect
+&gt;&gt;&gt; m()
+3
+&gt;&gt;&gt; m.side_effect = None
+&gt;&gt;&gt; m()
+6
+</pre> <p>The <code>side_effect</code> can also be any iterable object. Repeated calls to the mock will return values from the iterable (until the iterable is exhausted and a <a class="reference internal" href="exceptions#StopIteration" title="StopIteration"><code>StopIteration</code></a> is raised):</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(side_effect=[1, 2, 3])
+&gt;&gt;&gt; m()
+1
+&gt;&gt;&gt; m()
+2
+&gt;&gt;&gt; m()
+3
+&gt;&gt;&gt; m()
+Traceback (most recent call last):
+  ...
+StopIteration
+</pre> <p>If any members of the iterable are exceptions they will be raised instead of returned:</p> <pre data-language="python">&gt;&gt;&gt; iterable = (33, ValueError, 66)
+&gt;&gt;&gt; m = MagicMock(side_effect=iterable)
+&gt;&gt;&gt; m()
+33
+&gt;&gt;&gt; m()
+Traceback (most recent call last):
+ ...
+ValueError
+&gt;&gt;&gt; m()
+66
+</pre>   <h3 id="id2">Deleting Attributes</h3> <p id="deleting-attributes">Mock objects create attributes on demand. This allows them to pretend to be objects of any type.</p> <p>You may want a mock object to return <code>False</code> to a <a class="reference internal" href="functions#hasattr" title="hasattr"><code>hasattr()</code></a> call, or raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a> when an attribute is fetched. You can do this by providing an object as a <code>spec</code> for a mock, but that isn’t always convenient.</p> <p>You “block” attributes by deleting them. Once deleted, accessing an attribute will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; hasattr(mock, 'm')
+True
+&gt;&gt;&gt; del mock.m
+&gt;&gt;&gt; hasattr(mock, 'm')
+False
+&gt;&gt;&gt; del mock.f
+&gt;&gt;&gt; mock.f
+Traceback (most recent call last):
+    ...
+AttributeError: f
+</pre>   <h3 id="mock-names-and-the-name-attribute">Mock names and the name attribute</h3> <p>Since “name” is an argument to the <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> constructor, if you want your mock object to have a “name” attribute you can’t just pass it in at creation time. There are two alternatives. One option is to use <a class="reference internal" href="#unittest.mock.Mock.configure_mock" title="unittest.mock.Mock.configure_mock"><code>configure_mock()</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.configure_mock(name='my_name')
+&gt;&gt;&gt; mock.name
+'my_name'
+</pre> <p>A simpler option is to simply set the “name” attribute after mock creation:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.name = "foo"
+</pre>   <h3 id="attaching-mocks-as-attributes">Attaching Mocks as Attributes</h3> <p>When you attach a mock as an attribute of another mock (or as the return value) it becomes a “child” of that mock. Calls to the child are recorded in the <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a> and <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> attributes of the parent. This is useful for configuring child mocks and then attaching them to the parent, or for attaching mocks to a parent that records all calls to the children and allows you to make assertions about the order of calls between mocks:</p> <pre data-language="python">&gt;&gt;&gt; parent = MagicMock()
+&gt;&gt;&gt; child1 = MagicMock(return_value=None)
+&gt;&gt;&gt; child2 = MagicMock(return_value=None)
+&gt;&gt;&gt; parent.child1 = child1
+&gt;&gt;&gt; parent.child2 = child2
+&gt;&gt;&gt; child1(1)
+&gt;&gt;&gt; child2(2)
+&gt;&gt;&gt; parent.mock_calls
+[call.child1(1), call.child2(2)]
+</pre> <p>The exception to this is if the mock has a name. This allows you to prevent the “parenting” if for some reason you don’t want it to happen.</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; not_a_child = MagicMock(name='not-a-child')
+&gt;&gt;&gt; mock.attribute = not_a_child
+&gt;&gt;&gt; mock.attribute()
+&lt;MagicMock name='not-a-child()' id='...'&gt;
+&gt;&gt;&gt; mock.mock_calls
+[]
+</pre> <p>Mocks created for you by <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> are automatically given names. To attach mocks that have names to a parent you use the <a class="reference internal" href="#unittest.mock.Mock.attach_mock" title="unittest.mock.Mock.attach_mock"><code>attach_mock()</code></a> method:</p> <pre data-language="python">&gt;&gt;&gt; thing1 = object()
+&gt;&gt;&gt; thing2 = object()
+&gt;&gt;&gt; parent = MagicMock()
+&gt;&gt;&gt; with patch('__main__.thing1', return_value=None) as child1:
+...     with patch('__main__.thing2', return_value=None) as child2:
+...         parent.attach_mock(child1, 'child1')
+...         parent.attach_mock(child2, 'child2')
+...         child1('one')
+...         child2('two')
+...
+&gt;&gt;&gt; parent.mock_calls
+[call.child1('one'), call.child2('two')]
+</pre> <dl class="footnote brackets"> <dt class="label" id="id3">
+<code>1</code> </dt> <dd>
+<p>The only exceptions are magic methods and attributes (those that have leading and trailing double underscores). Mock doesn’t create these but instead raises an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>. This is because the interpreter will often implicitly request these methods, and gets <em>very</em> confused to get a new Mock object when it expects a magic method. If you need magic method support see <a class="reference internal" href="#magic-methods"><span class="std std-ref">magic methods</span></a>.</p> </dd> </dl>    <h2 id="the-patchers">The patchers</h2> <p>The patch decorators are used for patching objects only within the scope of the function they decorate. They automatically handle the unpatching for you, even if exceptions are raised. All of these functions can also be used in with statements or as class decorators.</p>  <h3 id="patch">patch</h3> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The key is to do the patching in the right namespace. See the section <a class="reference internal" href="#id6">where to patch</a>.</p> </div> <dl class="function"> <dt id="unittest.mock.patch">
+<code>unittest.mock.patch(target, new=DEFAULT, spec=None, create=False, spec_set=None, autospec=None, new_callable=None, **kwargs)</code> </dt> <dd>
+<p><a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> acts as a function decorator, class decorator or a context manager. Inside the body of the function or with statement, the <em>target</em> is patched with a <em>new</em> object. When the function/with statement exits the patch is undone.</p> <p>If <em>new</em> is omitted, then the target is replaced with an <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> if the patched object is an async function or a <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> otherwise. If <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> is used as a decorator and <em>new</em> is omitted, the created mock is passed in as an extra argument to the decorated function. If <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> is used as a context manager the created mock is returned by the context manager.</p> <p><em>target</em> should be a string in the form <code>'package.module.ClassName'</code>. The <em>target</em> is imported and the specified object replaced with the <em>new</em> object, so the <em>target</em> must be importable from the environment you are calling <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> from. The target is imported when the decorated function is executed, not at decoration time.</p> <p>The <em>spec</em> and <em>spec_set</em> keyword arguments are passed to the <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> if patch is creating one for you.</p> <p>In addition you can pass <code>spec=True</code> or <code>spec_set=True</code>, which causes patch to pass in the object being mocked as the spec/spec_set object.</p> <p><em>new_callable</em> allows you to specify a different class, or callable object, that will be called to create the <em>new</em> object. By default <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> is used for async functions and <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> for the rest.</p> <p>A more powerful form of <em>spec</em> is <em>autospec</em>. If you set <code>autospec=True</code> then the mock will be created with a spec from the object being replaced. All attributes of the mock will also have the spec of the corresponding attribute of the object being replaced. Methods and functions being mocked will have their arguments checked and will raise a <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a> if they are called with the wrong signature. For mocks replacing a class, their return value (the ‘instance’) will have the same spec as the class. See the <a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> function and <a class="reference internal" href="#auto-speccing"><span class="std std-ref">Autospeccing</span></a>.</p> <p>Instead of <code>autospec=True</code> you can pass <code>autospec=some_object</code> to use an arbitrary object as the spec instead of the one being replaced.</p> <p>By default <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> will fail to replace attributes that don’t exist. If you pass in <code>create=True</code>, and the attribute doesn’t exist, patch will create the attribute for you when the patched function is called, and delete it again after the patched function has exited. This is useful for writing tests against attributes that your production code creates at runtime. It is off by default because it can be dangerous. With it switched on you can write passing tests against APIs that don’t actually exist!</p> <div class="admonition note"> <p class="admonition-title">Note</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>If you are patching builtins in a module then you don’t need to pass <code>create=True</code>, it will be added by default.</p> </div> </div> <p>Patch can be used as a <code>TestCase</code> class decorator. It works by decorating each test method in the class. This reduces the boilerplate code when your test methods share a common patchings set. <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> finds tests by looking for method names that start with <code>patch.TEST_PREFIX</code>. By default this is <code>'test'</code>, which matches the way <a class="reference internal" href="unittest#module-unittest" title="unittest: Unit testing framework for Python."><code>unittest</code></a> finds tests. You can specify an alternative prefix by setting <code>patch.TEST_PREFIX</code>.</p> <p>Patch can be used as a context manager, with the with statement. Here the patching applies to the indented block after the with statement. If you use “as” then the patched object will be bound to the name after the “as”; very useful if <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> is creating a mock object for you.</p> <p><a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> takes arbitrary keyword arguments. These will be passed to <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> if the patched object is asynchronous, to <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> otherwise or to <em>new_callable</em> if specified.</p> <p><code>patch.dict(...)</code>, <code>patch.multiple(...)</code> and <code>patch.object(...)</code> are available for alternate use-cases.</p> </dd>
+</dl> <p><a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> as function decorator, creating the mock for you and passing it into the decorated function:</p> <pre data-language="python">&gt;&gt;&gt; @patch('__main__.SomeClass')
+... def function(normal_argument, mock_class):
+...     print(mock_class is SomeClass)
+...
+&gt;&gt;&gt; function(None)
+True
+</pre> <p>Patching a class replaces the class with a <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> <em>instance</em>. If the class is instantiated in the code under test then it will be the <a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a> of the mock that will be used.</p> <p>If the class is instantiated multiple times you could use <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> to return a new mock each time. Alternatively you can set the <em>return_value</em> to be anything you want.</p> <p>To configure return values on methods of <em>instances</em> on the patched class you must do this on the <code>return_value</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; class Class:
+...     def method(self):
+...         pass
+...
+&gt;&gt;&gt; with patch('__main__.Class') as MockClass:
+...     instance = MockClass.return_value
+...     instance.method.return_value = 'foo'
+...     assert Class() is instance
+...     assert Class().method() == 'foo'
+...
+</pre> <p>If you use <em>spec</em> or <em>spec_set</em> and <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> is replacing a <em>class</em>, then the return value of the created mock will have the same spec.</p> <pre data-language="python">&gt;&gt;&gt; Original = Class
+&gt;&gt;&gt; patcher = patch('__main__.Class', spec=True)
+&gt;&gt;&gt; MockClass = patcher.start()
+&gt;&gt;&gt; instance = MockClass()
+&gt;&gt;&gt; assert isinstance(instance, Original)
+&gt;&gt;&gt; patcher.stop()
+</pre> <p>The <em>new_callable</em> argument is useful where you want to use an alternative class to the default <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> for the created mock. For example, if you wanted a <a class="reference internal" href="#unittest.mock.NonCallableMock" title="unittest.mock.NonCallableMock"><code>NonCallableMock</code></a> to be used:</p> <pre data-language="python">&gt;&gt;&gt; thing = object()
+&gt;&gt;&gt; with patch('__main__.thing', new_callable=NonCallableMock) as mock_thing:
+...     assert thing is mock_thing
+...     thing()
+...
+Traceback (most recent call last):
+  ...
+TypeError: 'NonCallableMock' object is not callable
+</pre> <p>Another use case might be to replace an object with an <a class="reference internal" href="io#io.StringIO" title="io.StringIO"><code>io.StringIO</code></a> instance:</p> <pre data-language="python">&gt;&gt;&gt; from io import StringIO
+&gt;&gt;&gt; def foo():
+...     print('Something')
+...
+&gt;&gt;&gt; @patch('sys.stdout', new_callable=StringIO)
+... def test(mock_stdout):
+...     foo()
+...     assert mock_stdout.getvalue() == 'Something\n'
+...
+&gt;&gt;&gt; test()
+</pre> <p>When <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> is creating a mock for you, it is common that the first thing you need to do is to configure the mock. Some of that configuration can be done in the call to patch. Any arbitrary keywords you pass into the call will be used to set attributes on the created mock:</p> <pre data-language="python">&gt;&gt;&gt; patcher = patch('__main__.thing', first='one', second='two')
+&gt;&gt;&gt; mock_thing = patcher.start()
+&gt;&gt;&gt; mock_thing.first
+'one'
+&gt;&gt;&gt; mock_thing.second
+'two'
+</pre> <p>As well as attributes on the created mock attributes, like the <a class="reference internal" href="#unittest.mock.Mock.return_value" title="unittest.mock.Mock.return_value"><code>return_value</code></a> and <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a>, of child mocks can also be configured. These aren’t syntactically valid to pass in directly as keyword arguments, but a dictionary with these as keys can still be expanded into a <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> call using <code>**</code>:</p> <pre data-language="python">&gt;&gt;&gt; config = {'method.return_value': 3, 'other.side_effect': KeyError}
+&gt;&gt;&gt; patcher = patch('__main__.thing', **config)
+&gt;&gt;&gt; mock_thing = patcher.start()
+&gt;&gt;&gt; mock_thing.method()
+3
+&gt;&gt;&gt; mock_thing.other()
+Traceback (most recent call last):
+  ...
+KeyError
+</pre> <p>By default, attempting to patch a function in a module (or a method or an attribute in a class) that does not exist will fail with <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; @patch('sys.non_existing_attribute', 42)
+... def test():
+...     assert sys.non_existing_attribute == 42
+...
+&gt;&gt;&gt; test()
+Traceback (most recent call last):
+  ...
+AttributeError: &lt;module 'sys' (built-in)&gt; does not have the attribute 'non_existing'
+</pre> <p>but adding <code>create=True</code> in the call to <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> will make the previous example work as expected:</p> <pre data-language="python">&gt;&gt;&gt; @patch('sys.non_existing_attribute', 42, create=True)
+... def test(mock_stdout):
+...     assert sys.non_existing_attribute == 42
+...
+&gt;&gt;&gt; test()
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span><a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> now returns an <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> if the target is an async function.</p> </div>   <h3 id="patch-object">patch.object</h3> <dl class="function"> <dt id="unittest.mock.patch.object">
+<code>patch.object(target, attribute, new=DEFAULT, spec=None, create=False, spec_set=None, autospec=None, new_callable=None, **kwargs)</code> </dt> <dd>
+<p>patch the named member (<em>attribute</em>) on an object (<em>target</em>) with a mock object.</p> <p><a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> can be used as a decorator, class decorator or a context manager. Arguments <em>new</em>, <em>spec</em>, <em>create</em>, <em>spec_set</em>, <em>autospec</em> and <em>new_callable</em> have the same meaning as for <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>. Like <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>, <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> takes arbitrary keyword arguments for configuring the mock object it creates.</p> <p>When used as a class decorator <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> honours <code>patch.TEST_PREFIX</code> for choosing which methods to wrap.</p> </dd>
+</dl> <p>You can either call <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> with three arguments or two arguments. The three argument form takes the object to be patched, the attribute name and the object to replace the attribute with.</p> <p>When calling with the two argument form you omit the replacement object, and a mock is created for you and passed in as an extra argument to the decorated function:</p> <pre data-language="python">&gt;&gt;&gt; @patch.object(SomeClass, 'class_method')
+... def test(mock_method):
+...     SomeClass.class_method(3)
+...     mock_method.assert_called_with(3)
+...
+&gt;&gt;&gt; test()
+</pre> <p><em>spec</em>, <em>create</em> and the other arguments to <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> have the same meaning as they do for <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>.</p>   <h3 id="patch-dict">patch.dict</h3> <dl class="function"> <dt id="unittest.mock.patch.dict">
+<code>patch.dict(in_dict, values=(), clear=False, **kwargs)</code> </dt> <dd>
+<p>Patch a dictionary, or dictionary like object, and restore the dictionary to its original state after the test.</p> <p><em>in_dict</em> can be a dictionary or a mapping like container. If it is a mapping then it must at least support getting, setting and deleting items plus iterating over keys.</p> <p><em>in_dict</em> can also be a string specifying the name of the dictionary, which will then be fetched by importing it.</p> <p><em>values</em> can be a dictionary of values to set in the dictionary. <em>values</em> can also be an iterable of <code>(key, value)</code> pairs.</p> <p>If <em>clear</em> is true then the dictionary will be cleared before the new values are set.</p> <p><a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> can also be called with arbitrary keyword arguments to set values in the dictionary.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span><a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> now returns the patched dictionary when used as a context manager.</p> </div> </dd>
+</dl> <p><a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> can be used as a context manager, decorator or class decorator:</p> <pre data-language="python">&gt;&gt;&gt; foo = {}
+&gt;&gt;&gt; @patch.dict(foo, {'newkey': 'newvalue'})
+... def test():
+...     assert foo == {'newkey': 'newvalue'}
+&gt;&gt;&gt; test()
+&gt;&gt;&gt; assert foo == {}
+</pre> <p>When used as a class decorator <a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> honours <code>patch.TEST_PREFIX</code> (default to <code>'test'</code>) for choosing which methods to wrap:</p> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; import unittest
+&gt;&gt;&gt; from unittest.mock import patch
+&gt;&gt;&gt; @patch.dict('os.environ', {'newkey': 'newvalue'})
+... class TestSample(unittest.TestCase):
+...     def test_sample(self):
+...         self.assertEqual(os.environ['newkey'], 'newvalue')
+</pre> <p>If you want to use a different prefix for your test, you can inform the patchers of the different prefix by setting <code>patch.TEST_PREFIX</code>. For more details about how to change the value of see <a class="reference internal" href="#test-prefix"><span class="std std-ref">TEST_PREFIX</span></a>.</p> <p><a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> can be used to add members to a dictionary, or simply let a test change a dictionary, and ensure the dictionary is restored when the test ends.</p> <pre data-language="python">&gt;&gt;&gt; foo = {}
+&gt;&gt;&gt; with patch.dict(foo, {'newkey': 'newvalue'}) as patched_foo:
+...     assert foo == {'newkey': 'newvalue'}
+...     assert patched_foo == {'newkey': 'newvalue'}
+...     # You can add, update or delete keys of foo (or patched_foo, it's the same dict)
+...     patched_foo['spam'] = 'eggs'
+...
+&gt;&gt;&gt; assert foo == {}
+&gt;&gt;&gt; assert patched_foo == {}
+</pre> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; with patch.dict('os.environ', {'newkey': 'newvalue'}):
+...     print(os.environ['newkey'])
+...
+newvalue
+&gt;&gt;&gt; assert 'newkey' not in os.environ
+</pre> <p>Keywords can be used in the <a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> call to set values in the dictionary:</p> <pre data-language="python">&gt;&gt;&gt; mymodule = MagicMock()
+&gt;&gt;&gt; mymodule.function.return_value = 'fish'
+&gt;&gt;&gt; with patch.dict('sys.modules', mymodule=mymodule):
+...     import mymodule
+...     mymodule.function('some', 'args')
+...
+'fish'
+</pre> <p><a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> can be used with dictionary like objects that aren’t actually dictionaries. At the very minimum they must support item getting, setting, deleting and either iteration or membership test. This corresponds to the magic methods <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__getitem__" title="object.__getitem__"><code>__getitem__()</code></a>, <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__setitem__" title="object.__setitem__"><code>__setitem__()</code></a>, <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__delitem__" title="object.__delitem__"><code>__delitem__()</code></a> and either <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__iter__" title="object.__iter__"><code>__iter__()</code></a> or <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__contains__" title="object.__contains__"><code>__contains__()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; class Container:
+...     def __init__(self):
+...         self.values = {}
+...     def __getitem__(self, name):
+...         return self.values[name]
+...     def __setitem__(self, name, value):
+...         self.values[name] = value
+...     def __delitem__(self, name):
+...         del self.values[name]
+...     def __iter__(self):
+...         return iter(self.values)
+...
+&gt;&gt;&gt; thing = Container()
+&gt;&gt;&gt; thing['one'] = 1
+&gt;&gt;&gt; with patch.dict(thing, one=2, two=3):
+...     assert thing['one'] == 2
+...     assert thing['two'] == 3
+...
+&gt;&gt;&gt; assert thing['one'] == 1
+&gt;&gt;&gt; assert list(thing) == ['one']
+</pre>   <h3 id="patch-multiple">patch.multiple</h3> <dl class="function"> <dt id="unittest.mock.patch.multiple">
+<code>patch.multiple(target, spec=None, create=False, spec_set=None, autospec=None, new_callable=None, **kwargs)</code> </dt> <dd>
+<p>Perform multiple patches in a single call. It takes the object to be patched (either as an object or a string to fetch the object by importing) and keyword arguments for the patches:</p> <pre data-language="python">with patch.multiple(settings, FIRST_PATCH='one', SECOND_PATCH='two'):
+    ...
+</pre> <p>Use <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> as the value if you want <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> to create mocks for you. In this case the created mocks are passed into a decorated function by keyword, and a dictionary is returned when <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> is used as a context manager.</p> <p><a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> can be used as a decorator, class decorator or a context manager. The arguments <em>spec</em>, <em>spec_set</em>, <em>create</em>, <em>autospec</em> and <em>new_callable</em> have the same meaning as for <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>. These arguments will be applied to <em>all</em> patches done by <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a>.</p> <p>When used as a class decorator <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> honours <code>patch.TEST_PREFIX</code> for choosing which methods to wrap.</p> </dd>
+</dl> <p>If you want <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> to create mocks for you, then you can use <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> as the value. If you use <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> as a decorator then the created mocks are passed into the decorated function by keyword.</p> <pre data-language="python">&gt;&gt;&gt; thing = object()
+&gt;&gt;&gt; other = object()
+
+&gt;&gt;&gt; @patch.multiple('__main__', thing=DEFAULT, other=DEFAULT)
+... def test_function(thing, other):
+...     assert isinstance(thing, MagicMock)
+...     assert isinstance(other, MagicMock)
+...
+&gt;&gt;&gt; test_function()
+</pre> <p><a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> can be nested with other <code>patch</code> decorators, but put arguments passed by keyword <em>after</em> any of the standard arguments created by <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; @patch('sys.exit')
+... @patch.multiple('__main__', thing=DEFAULT, other=DEFAULT)
+... def test_function(mock_exit, other, thing):
+...     assert 'other' in repr(other)
+...     assert 'thing' in repr(thing)
+...     assert 'exit' in repr(mock_exit)
+...
+&gt;&gt;&gt; test_function()
+</pre> <p>If <a class="reference internal" href="#unittest.mock.patch.multiple" title="unittest.mock.patch.multiple"><code>patch.multiple()</code></a> is used as a context manager, the value returned by the context manager is a dictionary where created mocks are keyed by name:</p> <pre data-language="python">&gt;&gt;&gt; with patch.multiple('__main__', thing=DEFAULT, other=DEFAULT) as values:
+...     assert 'other' in repr(values['other'])
+...     assert 'thing' in repr(values['thing'])
+...     assert values['thing'] is thing
+...     assert values['other'] is other
+...
+</pre>   <h3 id="start-and-stop">patch methods: start and stop</h3> <p id="patch-methods-start-and-stop">All the patchers have <code>start()</code> and <code>stop()</code> methods. These make it simpler to do patching in <code>setUp</code> methods or where you want to do multiple patches without nesting decorators or with statements.</p> <p>To use them call <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>, <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> or <a class="reference internal" href="#unittest.mock.patch.dict" title="unittest.mock.patch.dict"><code>patch.dict()</code></a> as normal and keep a reference to the returned <code>patcher</code> object. You can then call <code>start()</code> to put the patch in place and <code>stop()</code> to undo it.</p> <p>If you are using <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> to create a mock for you then it will be returned by the call to <code>patcher.start</code>.</p> <pre data-language="python">&gt;&gt;&gt; patcher = patch('package.module.ClassName')
+&gt;&gt;&gt; from package import module
+&gt;&gt;&gt; original = module.ClassName
+&gt;&gt;&gt; new_mock = patcher.start()
+&gt;&gt;&gt; assert module.ClassName is not original
+&gt;&gt;&gt; assert module.ClassName is new_mock
+&gt;&gt;&gt; patcher.stop()
+&gt;&gt;&gt; assert module.ClassName is original
+&gt;&gt;&gt; assert module.ClassName is not new_mock
+</pre> <p>A typical use case for this might be for doing multiple patches in the <code>setUp</code> method of a <code>TestCase</code>:</p> <pre data-language="python">&gt;&gt;&gt; class MyTest(unittest.TestCase):
+...     def setUp(self):
+...         self.patcher1 = patch('package.module.Class1')
+...         self.patcher2 = patch('package.module.Class2')
+...         self.MockClass1 = self.patcher1.start()
+...         self.MockClass2 = self.patcher2.start()
+...
+...     def tearDown(self):
+...         self.patcher1.stop()
+...         self.patcher2.stop()
+...
+...     def test_something(self):
+...         assert package.module.Class1 is self.MockClass1
+...         assert package.module.Class2 is self.MockClass2
+...
+&gt;&gt;&gt; MyTest('test_something').run()
+</pre> <div class="admonition caution"> <p class="admonition-title">Caution</p> <p>If you use this technique you must ensure that the patching is “undone” by calling <code>stop</code>. This can be fiddlier than you might think, because if an exception is raised in the <code>setUp</code> then <code>tearDown</code> is not called. <a class="reference internal" href="unittest#unittest.TestCase.addCleanup" title="unittest.TestCase.addCleanup"><code>unittest.TestCase.addCleanup()</code></a> makes this easier:</p> <pre data-language="python">&gt;&gt;&gt; class MyTest(unittest.TestCase):
+...     def setUp(self):
+...         patcher = patch('package.module.Class')
+...         self.MockClass = patcher.start()
+...         self.addCleanup(patcher.stop)
+...
+...     def test_something(self):
+...         assert package.module.Class is self.MockClass
+...
+</pre> <p>As an added bonus you no longer need to keep a reference to the <code>patcher</code> object.</p> </div> <p>It is also possible to stop all patches which have been started by using <a class="reference internal" href="#unittest.mock.patch.stopall" title="unittest.mock.patch.stopall"><code>patch.stopall()</code></a>.</p> <dl class="function"> <dt id="unittest.mock.patch.stopall">
+<code>patch.stopall()</code> </dt> <dd>
+<p>Stop all active patches. Only stops patches started with <code>start</code>.</p> </dd>
+</dl>   <h3 id="id4">patch builtins</h3> <p id="patch-builtins">You can patch any builtins within a module. The following example patches builtin <a class="reference internal" href="functions#ord" title="ord"><code>ord()</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; @patch('__main__.ord')
+... def test(mock_ord):
+...     mock_ord.return_value = 101
+...     print(ord('c'))
+...
+&gt;&gt;&gt; test()
+101
+</pre>   <h3 id="id5">TEST_PREFIX</h3> <p id="test-prefix">All of the patchers can be used as class decorators. When used in this way they wrap every test method on the class. The patchers recognise methods that start with <code>'test'</code> as being test methods. This is the same way that the <a class="reference internal" href="unittest#unittest.TestLoader" title="unittest.TestLoader"><code>unittest.TestLoader</code></a> finds test methods by default.</p> <p>It is possible that you want to use a different prefix for your tests. You can inform the patchers of the different prefix by setting <code>patch.TEST_PREFIX</code>:</p> <pre data-language="python">&gt;&gt;&gt; patch.TEST_PREFIX = 'foo'
+&gt;&gt;&gt; value = 3
+&gt;&gt;&gt;
+&gt;&gt;&gt; @patch('__main__.value', 'not three')
+... class Thing:
+...     def foo_one(self):
+...         print(value)
+...     def foo_two(self):
+...         print(value)
+...
+&gt;&gt;&gt;
+&gt;&gt;&gt; Thing().foo_one()
+not three
+&gt;&gt;&gt; Thing().foo_two()
+not three
+&gt;&gt;&gt; value
+3
+</pre>   <h3 id="nesting-patch-decorators">Nesting Patch Decorators</h3> <p>If you want to perform multiple patches then you can simply stack up the decorators.</p> <p>You can stack up multiple patch decorators using this pattern:</p> <pre data-language="python">&gt;&gt;&gt; @patch.object(SomeClass, 'class_method')
+... @patch.object(SomeClass, 'static_method')
+... def test(mock1, mock2):
+...     assert SomeClass.static_method is mock1
+...     assert SomeClass.class_method is mock2
+...     SomeClass.static_method('foo')
+...     SomeClass.class_method('bar')
+...     return mock1, mock2
+...
+&gt;&gt;&gt; mock1, mock2 = test()
+&gt;&gt;&gt; mock1.assert_called_once_with('foo')
+&gt;&gt;&gt; mock2.assert_called_once_with('bar')
+</pre> <p>Note that the decorators are applied from the bottom upwards. This is the standard way that Python applies decorators. The order of the created mocks passed into your test function matches this order.</p>   <h3 id="id6">Where to patch</h3> <p id="where-to-patch"><a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> works by (temporarily) changing the object that a <em>name</em> points to with another one. There can be many names pointing to any individual object, so for patching to work you must ensure that you patch the name used by the system under test.</p> <p>The basic principle is that you patch where an object is <em>looked up</em>, which is not necessarily the same place as where it is defined. A couple of examples will help to clarify this.</p> <p>Imagine we have a project that we want to test with the following structure:</p> <pre data-language="python">a.py
+    -&gt; Defines SomeClass
+
+b.py
+    -&gt; from a import SomeClass
+    -&gt; some_function instantiates SomeClass
+</pre> <p>Now we want to test <code>some_function</code> but we want to mock out <code>SomeClass</code> using <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>. The problem is that when we import module b, which we will have to do then it imports <code>SomeClass</code> from module a. If we use <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> to mock out <code>a.SomeClass</code> then it will have no effect on our test; module b already has a reference to the <em>real</em> <code>SomeClass</code> and it looks like our patching had no effect.</p> <p>The key is to patch out <code>SomeClass</code> where it is used (or where it is looked up). In this case <code>some_function</code> will actually look up <code>SomeClass</code> in module b, where we have imported it. The patching should look like:</p> <pre data-language="python">@patch('b.SomeClass')
+</pre> <p>However, consider the alternative scenario where instead of <code>from a import
+SomeClass</code> module b does <code>import a</code> and <code>some_function</code> uses <code>a.SomeClass</code>. Both of these import forms are common. In this case the class we want to patch is being looked up in the module and so we have to patch <code>a.SomeClass</code> instead:</p> <pre data-language="python">@patch('a.SomeClass')
+</pre>   <h3 id="patching-descriptors-and-proxy-objects">Patching Descriptors and Proxy Objects</h3> <p>Both <a class="reference internal" href="#patch">patch</a> and <a class="reference internal" href="#patch-object">patch.object</a> correctly patch and restore descriptors: class methods, static methods and properties. You should patch these on the <em>class</em> rather than an instance. They also work with <em>some</em> objects that proxy attribute access, like the <a class="reference external" href="http://www.voidspace.org.uk/python/weblog/arch_d7_2010_12_04.shtml#e1198">django settings object</a>.</p>    <h2 id="magicmock-and-magic-method-support">MagicMock and magic method support</h2>  <h3 id="magic-methods">Mocking Magic Methods</h3> <p id="mocking-magic-methods"><a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> supports mocking the Python protocol methods, also known as “magic methods”. This allows mock objects to replace containers or other objects that implement Python protocols.</p> <p>Because magic methods are looked up differently from normal methods <a class="footnote-reference brackets" href="#id9" id="id7">2</a>, this support has been specially implemented. This means that only specific magic methods are supported. The supported list includes <em>almost</em> all of them. If there are any missing that you need please let us know.</p> <p>You mock magic methods by setting the method you are interested in to a function or a mock instance. If you are using a function then it <em>must</em> take <code>self</code> as the first argument <a class="footnote-reference brackets" href="#id10" id="id8">3</a>.</p> <pre data-language="python">&gt;&gt;&gt; def __str__(self):
+...     return 'fooble'
+...
+&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__str__ = __str__
+&gt;&gt;&gt; str(mock)
+'fooble'
+</pre> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__str__ = Mock()
+&gt;&gt;&gt; mock.__str__.return_value = 'fooble'
+&gt;&gt;&gt; str(mock)
+'fooble'
+</pre> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__iter__ = Mock(return_value=iter([]))
+&gt;&gt;&gt; list(mock)
+[]
+</pre> <p>One use case for this is for mocking objects used as context managers in a <a class="reference internal" href="https://docs.python.org/3.9/reference/compound_stmts.html#with"><code>with</code></a> statement:</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.__enter__ = Mock(return_value='foo')
+&gt;&gt;&gt; mock.__exit__ = Mock(return_value=False)
+&gt;&gt;&gt; with mock as m:
+...     assert m == 'foo'
+...
+&gt;&gt;&gt; mock.__enter__.assert_called_with()
+&gt;&gt;&gt; mock.__exit__.assert_called_with(None, None, None)
+</pre> <p>Calls to magic methods do not appear in <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a>, but they are recorded in <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>If you use the <em>spec</em> keyword argument to create a mock then attempting to set a magic method that isn’t in the spec will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</p> </div> <p>The full list of supported magic methods is:</p> <ul class="simple"> <li>
+<code>__hash__</code>, <code>__sizeof__</code>, <code>__repr__</code> and <code>__str__</code>
+</li> <li>
+<code>__dir__</code>, <code>__format__</code> and <code>__subclasses__</code>
+</li> <li>
+<code>__round__</code>, <code>__floor__</code>, <code>__trunc__</code> and <code>__ceil__</code>
+</li> <li>Comparisons: <code>__lt__</code>, <code>__gt__</code>, <code>__le__</code>, <code>__ge__</code>, <code>__eq__</code> and <code>__ne__</code>
+</li> <li>Container methods: <code>__getitem__</code>, <code>__setitem__</code>, <code>__delitem__</code>, <code>__contains__</code>, <code>__len__</code>, <code>__iter__</code>, <code>__reversed__</code> and <code>__missing__</code>
+</li> <li>Context manager: <code>__enter__</code>, <code>__exit__</code>, <code>__aenter__</code> and <code>__aexit__</code>
+</li> <li>Unary numeric methods: <code>__neg__</code>, <code>__pos__</code> and <code>__invert__</code>
+</li> <li>The numeric methods (including right hand and in-place variants): <code>__add__</code>, <code>__sub__</code>, <code>__mul__</code>, <code>__matmul__</code>, <code>__div__</code>, <code>__truediv__</code>, <code>__floordiv__</code>, <code>__mod__</code>, <code>__divmod__</code>, <code>__lshift__</code>, <code>__rshift__</code>, <code>__and__</code>, <code>__xor__</code>, <code>__or__</code>, and <code>__pow__</code>
+</li> <li>Numeric conversion methods: <code>__complex__</code>, <code>__int__</code>, <code>__float__</code> and <code>__index__</code>
+</li> <li>Descriptor methods: <code>__get__</code>, <code>__set__</code> and <code>__delete__</code>
+</li> <li>Pickling: <code>__reduce__</code>, <code>__reduce_ex__</code>, <code>__getinitargs__</code>, <code>__getnewargs__</code>, <code>__getstate__</code> and <code>__setstate__</code>
+</li> <li>File system path representation: <code>__fspath__</code>
+</li> <li>Asynchronous iteration methods: <code>__aiter__</code> and <code>__anext__</code>
+</li> </ul> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added support for <a class="reference internal" href="os#os.PathLike.__fspath__" title="os.PathLike.__fspath__"><code>os.PathLike.__fspath__()</code></a>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added support for <code>__aenter__</code>, <code>__aexit__</code>, <code>__aiter__</code> and <code>__anext__</code>.</p> </div> <p>The following methods exist but are <em>not</em> supported as they are either in use by mock, can’t be set dynamically, or can cause problems:</p> <ul class="simple"> <li>
+<code>__getattr__</code>, <code>__setattr__</code>, <code>__init__</code> and <code>__new__</code>
+</li> <li>
+<code>__prepare__</code>, <code>__instancecheck__</code>, <code>__subclasscheck__</code>, <code>__del__</code>
+</li> </ul>   <h3 id="magic-mock">Magic Mock</h3> <p>There are two <code>MagicMock</code> variants: <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> and <a class="reference internal" href="#unittest.mock.NonCallableMagicMock" title="unittest.mock.NonCallableMagicMock"><code>NonCallableMagicMock</code></a>.</p> <dl class="class"> <dt id="unittest.mock.MagicMock">
+<code>class unittest.mock.MagicMock(*args, **kw)</code> </dt> <dd>
+<p><code>MagicMock</code> is a subclass of <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> with default implementations of most of the magic methods. You can use <code>MagicMock</code> without having to configure the magic methods yourself.</p> <p>The constructor parameters have the same meaning as for <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>.</p> <p>If you use the <em>spec</em> or <em>spec_set</em> arguments then <em>only</em> magic methods that exist in the spec will be created.</p> </dd>
+</dl> <dl class="class"> <dt id="unittest.mock.NonCallableMagicMock">
+<code>class unittest.mock.NonCallableMagicMock(*args, **kw)</code> </dt> <dd>
+<p>A non-callable version of <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a>.</p> <p>The constructor parameters have the same meaning as for <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a>, with the exception of <em>return_value</em> and <em>side_effect</em> which have no meaning on a non-callable mock.</p> </dd>
+</dl> <p>The magic methods are setup with <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> objects, so you can configure them and use them in the usual way:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock[3] = 'fish'
+&gt;&gt;&gt; mock.__setitem__.assert_called_with(3, 'fish')
+&gt;&gt;&gt; mock.__getitem__.return_value = 'result'
+&gt;&gt;&gt; mock[2]
+'result'
+</pre> <p>By default many of the protocol methods are required to return objects of a specific type. These methods are preconfigured with a default return value, so that they can be used without you having to do anything if you aren’t interested in the return value. You can still <em>set</em> the return value manually if you want to change the default.</p> <p>Methods and their defaults:</p> <ul class="simple"> <li>
+<code>__lt__</code>: <code>NotImplemented</code>
+</li> <li>
+<code>__gt__</code>: <code>NotImplemented</code>
+</li> <li>
+<code>__le__</code>: <code>NotImplemented</code>
+</li> <li>
+<code>__ge__</code>: <code>NotImplemented</code>
+</li> <li>
+<code>__int__</code>: <code>1</code>
+</li> <li>
+<code>__contains__</code>: <code>False</code>
+</li> <li>
+<code>__len__</code>: <code>0</code>
+</li> <li>
+<code>__iter__</code>: <code>iter([])</code>
+</li> <li>
+<code>__exit__</code>: <code>False</code>
+</li> <li>
+<code>__aexit__</code>: <code>False</code>
+</li> <li>
+<code>__complex__</code>: <code>1j</code>
+</li> <li>
+<code>__float__</code>: <code>1.0</code>
+</li> <li>
+<code>__bool__</code>: <code>True</code>
+</li> <li>
+<code>__index__</code>: <code>1</code>
+</li> <li>
+<code>__hash__</code>: default hash for the mock</li> <li>
+<code>__str__</code>: default str for the mock</li> <li>
+<code>__sizeof__</code>: default sizeof for the mock</li> </ul> <p>For example:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; int(mock)
+1
+&gt;&gt;&gt; len(mock)
+0
+&gt;&gt;&gt; list(mock)
+[]
+&gt;&gt;&gt; object() in mock
+False
+</pre> <p>The two equality methods, <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__eq__" title="object.__eq__"><code>__eq__()</code></a> and <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__ne__" title="object.__ne__"><code>__ne__()</code></a>, are special. They do the default equality comparison on identity, using the <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> attribute, unless you change their return value to return something else:</p> <pre data-language="python">&gt;&gt;&gt; MagicMock() == 3
+False
+&gt;&gt;&gt; MagicMock() != 3
+True
+&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.__eq__.return_value = True
+&gt;&gt;&gt; mock == 3
+True
+</pre> <p>The return value of <code>MagicMock.__iter__()</code> can be any iterable object and isn’t required to be an iterator:</p> <pre data-language="python">&gt;&gt;&gt; mock = MagicMock()
+&gt;&gt;&gt; mock.__iter__.return_value = ['a', 'b', 'c']
+&gt;&gt;&gt; list(mock)
+['a', 'b', 'c']
+&gt;&gt;&gt; list(mock)
+['a', 'b', 'c']
+</pre> <p>If the return value <em>is</em> an iterator, then iterating over it once will consume it and subsequent iterations will result in an empty list:</p> <pre data-language="python">&gt;&gt;&gt; mock.__iter__.return_value = iter(['a', 'b', 'c'])
+&gt;&gt;&gt; list(mock)
+['a', 'b', 'c']
+&gt;&gt;&gt; list(mock)
+[]
+</pre> <p><code>MagicMock</code> has all of the supported magic methods configured except for some of the obscure and obsolete ones. You can still set these up if you want.</p> <p>Magic methods that are supported but not setup by default in <code>MagicMock</code> are:</p> <ul class="simple"> <li><code>__subclasses__</code></li> <li><code>__dir__</code></li> <li><code>__format__</code></li> <li>
+<code>__get__</code>, <code>__set__</code> and <code>__delete__</code>
+</li> <li>
+<code>__reversed__</code> and <code>__missing__</code>
+</li> <li>
+<code>__reduce__</code>, <code>__reduce_ex__</code>, <code>__getinitargs__</code>, <code>__getnewargs__</code>, <code>__getstate__</code> and <code>__setstate__</code>
+</li> <li>
+<code>__getformat__</code> and <code>__setformat__</code>
+</li> </ul> <dl class="footnote brackets"> <dt class="label" id="id9">
+<code>2</code> </dt> <dd>
+<p>Magic methods <em>should</em> be looked up on the class rather than the instance. Different versions of Python are inconsistent about applying this rule. The supported protocol methods should work with all supported versions of Python.</p> </dd> <dt class="label" id="id10">
+<code>3</code> </dt> <dd>
+<p>The function is basically hooked up to the class, but each <code>Mock</code> instance is kept isolated from the others.</p> </dd> </dl>    <h2 id="helpers">Helpers</h2>  <h3 id="sentinel">sentinel</h3> <dl class="data"> <dt id="unittest.mock.sentinel">
+<code>unittest.mock.sentinel</code> </dt> <dd>
+<p>The <code>sentinel</code> object provides a convenient way of providing unique objects for your tests.</p> <p>Attributes are created on demand when you access them by name. Accessing the same attribute will always return the same object. The objects returned have a sensible repr so that test failure messages are readable.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>The <code>sentinel</code> attributes now preserve their identity when they are <a class="reference internal" href="copy#module-copy" title="copy: Shallow and deep copy operations."><code>copied</code></a> or <a class="reference internal" href="pickle#module-pickle" title="pickle: Convert Python objects to streams of bytes and back."><code>pickled</code></a>.</p> </div> </dd>
+</dl> <p>Sometimes when testing you need to test that a specific object is passed as an argument to another method, or returned. It can be common to create named sentinel objects to test this. <a class="reference internal" href="#unittest.mock.sentinel" title="unittest.mock.sentinel"><code>sentinel</code></a> provides a convenient way of creating and testing the identity of objects like this.</p> <p>In this example we monkey patch <code>method</code> to return <code>sentinel.some_object</code>:</p> <pre data-language="python">&gt;&gt;&gt; real = ProductionClass()
+&gt;&gt;&gt; real.method = Mock(name="method")
+&gt;&gt;&gt; real.method.return_value = sentinel.some_object
+&gt;&gt;&gt; result = real.method()
+&gt;&gt;&gt; assert result is sentinel.some_object
+&gt;&gt;&gt; sentinel.some_object
+sentinel.some_object
+</pre>   <h3 id="default">DEFAULT</h3> <dl class="data"> <dt id="unittest.mock.DEFAULT">
+<code>unittest.mock.DEFAULT</code> </dt> <dd>
+<p>The <a class="reference internal" href="#unittest.mock.DEFAULT" title="unittest.mock.DEFAULT"><code>DEFAULT</code></a> object is a pre-created sentinel (actually <code>sentinel.DEFAULT</code>). It can be used by <a class="reference internal" href="#unittest.mock.Mock.side_effect" title="unittest.mock.Mock.side_effect"><code>side_effect</code></a> functions to indicate that the normal return value should be used.</p> </dd>
+</dl>   <h3 id="call">call</h3> <dl class="function"> <dt id="unittest.mock.call">
+<code>unittest.mock.call(*args, **kwargs)</code> </dt> <dd>
+<p><a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call()</code></a> is a helper object for making simpler assertions, for comparing with <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>call_args</code></a>, <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>call_args_list</code></a>, <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> and <a class="reference internal" href="#unittest.mock.Mock.method_calls" title="unittest.mock.Mock.method_calls"><code>method_calls</code></a>. <a class="reference internal" href="#unittest.mock.call" title="unittest.mock.call"><code>call()</code></a> can also be used with <a class="reference internal" href="#unittest.mock.Mock.assert_has_calls" title="unittest.mock.Mock.assert_has_calls"><code>assert_has_calls()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(return_value=None)
+&gt;&gt;&gt; m(1, 2, a='foo', b='bar')
+&gt;&gt;&gt; m()
+&gt;&gt;&gt; m.call_args_list == [call(1, 2, a='foo', b='bar'), call()]
+True
+</pre> </dd>
+</dl> <dl class="method"> <dt id="unittest.mock.call.call_list">
+<code>call.call_list()</code> </dt> <dd>
+<p>For a call object that represents multiple calls, <a class="reference internal" href="#unittest.mock.call.call_list" title="unittest.mock.call.call_list"><code>call_list()</code></a> returns a list of all the intermediate calls as well as the final call.</p> </dd>
+</dl> <p><code>call_list</code> is particularly useful for making assertions on “chained calls”. A chained call is multiple calls on a single line of code. This results in multiple entries in <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a> on a mock. Manually constructing the sequence of calls can be tedious.</p> <p><a class="reference internal" href="#unittest.mock.call.call_list" title="unittest.mock.call.call_list"><code>call_list()</code></a> can construct the sequence of calls from the same chained call:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock()
+&gt;&gt;&gt; m(1).method(arg='foo').other('bar')(2.0)
+&lt;MagicMock name='mock().method().other()()' id='...'&gt;
+&gt;&gt;&gt; kall = call(1).method(arg='foo').other('bar')(2.0)
+&gt;&gt;&gt; kall.call_list()
+[call(1),
+ call().method(arg='foo'),
+ call().method().other('bar'),
+ call().method().other()(2.0)]
+&gt;&gt;&gt; m.mock_calls == kall.call_list()
+True
+</pre> <p id="calls-as-tuples">A <code>call</code> object is either a tuple of (positional args, keyword args) or (name, positional args, keyword args) depending on how it was constructed. When you construct them yourself this isn’t particularly interesting, but the <code>call</code> objects that are in the <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>Mock.call_args</code></a>, <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>Mock.call_args_list</code></a> and <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>Mock.mock_calls</code></a> attributes can be introspected to get at the individual arguments they contain.</p> <p>The <code>call</code> objects in <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>Mock.call_args</code></a> and <a class="reference internal" href="#unittest.mock.Mock.call_args_list" title="unittest.mock.Mock.call_args_list"><code>Mock.call_args_list</code></a> are two-tuples of (positional args, keyword args) whereas the <code>call</code> objects in <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>Mock.mock_calls</code></a>, along with ones you construct yourself, are three-tuples of (name, positional args, keyword args).</p> <p>You can use their “tupleness” to pull out the individual arguments for more complex introspection and assertions. The positional arguments are a tuple (an empty tuple if there are no positional arguments) and the keyword arguments are a dictionary:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(return_value=None)
+&gt;&gt;&gt; m(1, 2, 3, arg='one', arg2='two')
+&gt;&gt;&gt; kall = m.call_args
+&gt;&gt;&gt; kall.args
+(1, 2, 3)
+&gt;&gt;&gt; kall.kwargs
+{'arg': 'one', 'arg2': 'two'}
+&gt;&gt;&gt; kall.args is kall[0]
+True
+&gt;&gt;&gt; kall.kwargs is kall[1]
+True
+</pre> <pre data-language="python">&gt;&gt;&gt; m = MagicMock()
+&gt;&gt;&gt; m.foo(4, 5, 6, arg='two', arg2='three')
+&lt;MagicMock name='mock.foo()' id='...'&gt;
+&gt;&gt;&gt; kall = m.mock_calls[0]
+&gt;&gt;&gt; name, args, kwargs = kall
+&gt;&gt;&gt; name
+'foo'
+&gt;&gt;&gt; args
+(4, 5, 6)
+&gt;&gt;&gt; kwargs
+{'arg': 'two', 'arg2': 'three'}
+&gt;&gt;&gt; name is m.mock_calls[0][0]
+True
+</pre>   <h3 id="create-autospec">create_autospec</h3> <dl class="function"> <dt id="unittest.mock.create_autospec">
+<code>unittest.mock.create_autospec(spec, spec_set=False, instance=False, **kwargs)</code> </dt> <dd>
+<p>Create a mock object using another object as a spec. Attributes on the mock will use the corresponding attribute on the <em>spec</em> object as their spec.</p> <p>Functions or methods being mocked will have their arguments checked to ensure that they are called with the correct signature.</p> <p>If <em>spec_set</em> is <code>True</code> then attempting to set attributes that don’t exist on the spec object will raise an <a class="reference internal" href="exceptions#AttributeError" title="AttributeError"><code>AttributeError</code></a>.</p> <p>If a class is used as a spec then the return value of the mock (the instance of the class) will have the same spec. You can use a class as the spec for an instance object by passing <code>instance=True</code>. The returned mock will only be callable if instances of the mock are callable.</p> <p><a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> also takes arbitrary keyword arguments that are passed to the constructor of the created mock.</p> </dd>
+</dl> <p>See <a class="reference internal" href="#auto-speccing"><span class="std std-ref">Autospeccing</span></a> for examples of how to use auto-speccing with <a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> and the <em>autospec</em> argument to <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a>.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span><a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> now returns an <a class="reference internal" href="#unittest.mock.AsyncMock" title="unittest.mock.AsyncMock"><code>AsyncMock</code></a> if the target is an async function.</p> </div>   <h3 id="any">ANY</h3> <dl class="data"> <dt id="unittest.mock.ANY">
+<code>unittest.mock.ANY</code> </dt> 
+</dl> <p>Sometimes you may need to make assertions about <em>some</em> of the arguments in a call to mock, but either not care about some of the arguments or want to pull them individually out of <a class="reference internal" href="#unittest.mock.Mock.call_args" title="unittest.mock.Mock.call_args"><code>call_args</code></a> and make more complex assertions on them.</p> <p>To ignore certain arguments you can pass in objects that compare equal to <em>everything</em>. Calls to <a class="reference internal" href="#unittest.mock.Mock.assert_called_with" title="unittest.mock.Mock.assert_called_with"><code>assert_called_with()</code></a> and <a class="reference internal" href="#unittest.mock.Mock.assert_called_once_with" title="unittest.mock.Mock.assert_called_once_with"><code>assert_called_once_with()</code></a> will then succeed no matter what was passed in.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(return_value=None)
+&gt;&gt;&gt; mock('foo', bar=object())
+&gt;&gt;&gt; mock.assert_called_once_with('foo', bar=ANY)
+</pre> <p><a class="reference internal" href="#unittest.mock.ANY" title="unittest.mock.ANY"><code>ANY</code></a> can also be used in comparisons with call lists like <a class="reference internal" href="#unittest.mock.Mock.mock_calls" title="unittest.mock.Mock.mock_calls"><code>mock_calls</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; m = MagicMock(return_value=None)
+&gt;&gt;&gt; m(1)
+&gt;&gt;&gt; m(1, 2)
+&gt;&gt;&gt; m(object())
+&gt;&gt;&gt; m.mock_calls == [call(1), call(1, 2), ANY]
+True
+</pre>   <h3 id="filter-dir">FILTER_DIR</h3> <dl class="data"> <dt id="unittest.mock.FILTER_DIR">
+<code>unittest.mock.FILTER_DIR</code> </dt> 
+</dl> <p><a class="reference internal" href="#unittest.mock.FILTER_DIR" title="unittest.mock.FILTER_DIR"><code>FILTER_DIR</code></a> is a module level variable that controls the way mock objects respond to <a class="reference internal" href="functions#dir" title="dir"><code>dir()</code></a> (only for Python 2.6 or more recent). The default is <code>True</code>, which uses the filtering described below, to only show useful members. If you dislike this filtering, or need to switch it off for diagnostic purposes, then set <code>mock.FILTER_DIR = False</code>.</p> <p>With filtering on, <code>dir(some_mock)</code> shows only useful attributes and will include any dynamically created attributes that wouldn’t normally be shown. If the mock was created with a <em>spec</em> (or <em>autospec</em> of course) then all the attributes from the original are shown, even if they haven’t been accessed yet:</p> <pre data-language="pycon3">&gt;&gt;&gt; dir(Mock())
+['assert_any_call',
+ 'assert_called',
+ 'assert_called_once',
+ 'assert_called_once_with',
+ 'assert_called_with',
+ 'assert_has_calls',
+ 'assert_not_called',
+ 'attach_mock',
+ ...
+&gt;&gt;&gt; from urllib import request
+&gt;&gt;&gt; dir(Mock(spec=request))
+['AbstractBasicAuthHandler',
+ 'AbstractDigestAuthHandler',
+ 'AbstractHTTPHandler',
+ 'BaseHandler',
+ ...
+</pre> <p>Many of the not-very-useful (private to <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> rather than the thing being mocked) underscore and double underscore prefixed attributes have been filtered from the result of calling <a class="reference internal" href="functions#dir" title="dir"><code>dir()</code></a> on a <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>. If you dislike this behaviour you can switch it off by setting the module level switch <a class="reference internal" href="#unittest.mock.FILTER_DIR" title="unittest.mock.FILTER_DIR"><code>FILTER_DIR</code></a>:</p> <pre data-language="pycon3">&gt;&gt;&gt; from unittest import mock
+&gt;&gt;&gt; mock.FILTER_DIR = False
+&gt;&gt;&gt; dir(mock.Mock())
+['_NonCallableMock__get_return_value',
+ '_NonCallableMock__get_side_effect',
+ '_NonCallableMock__return_value_doc',
+ '_NonCallableMock__set_return_value',
+ '_NonCallableMock__set_side_effect',
+ '__call__',
+ '__class__',
+ ...
+</pre> <p>Alternatively you can just use <code>vars(my_mock)</code> (instance members) and <code>dir(type(my_mock))</code> (type members) to bypass the filtering irrespective of <code>mock.FILTER_DIR</code>.</p>   <h3 id="mock-open">mock_open</h3> <dl class="function"> <dt id="unittest.mock.mock_open">
+<code>unittest.mock.mock_open(mock=None, read_data=None)</code> </dt> <dd>
+<p>A helper function to create a mock to replace the use of <a class="reference internal" href="functions#open" title="open"><code>open()</code></a>. It works for <a class="reference internal" href="functions#open" title="open"><code>open()</code></a> called directly or used as a context manager.</p> <p>The <em>mock</em> argument is the mock object to configure. If <code>None</code> (the default) then a <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> will be created for you, with the API limited to methods or attributes available on standard file handles.</p> <p><em>read_data</em> is a string for the <code>read()</code>, <a class="reference internal" href="io#io.IOBase.readline" title="io.IOBase.readline"><code>readline()</code></a>, and <a class="reference internal" href="io#io.IOBase.readlines" title="io.IOBase.readlines"><code>readlines()</code></a> methods of the file handle to return. Calls to those methods will take data from <em>read_data</em> until it is depleted. The mock of these methods is pretty simplistic: every time the <em>mock</em> is called, the <em>read_data</em> is rewound to the start. If you need more control over the data that you are feeding to the tested code you will need to customize this mock for yourself. When that is insufficient, one of the in-memory filesystem packages on <a class="reference external" href="https://pypi.org">PyPI</a> can offer a realistic filesystem for testing.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.4: </span>Added <a class="reference internal" href="io#io.IOBase.readline" title="io.IOBase.readline"><code>readline()</code></a> and <a class="reference internal" href="io#io.IOBase.readlines" title="io.IOBase.readlines"><code>readlines()</code></a> support. The mock of <code>read()</code> changed to consume <em>read_data</em> rather than returning it on each call.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span><em>read_data</em> is now reset on each call to the <em>mock</em>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>Added <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__iter__" title="object.__iter__"><code>__iter__()</code></a> to implementation so that iteration (such as in for loops) correctly consumes <em>read_data</em>.</p> </div> </dd>
+</dl> <p>Using <a class="reference internal" href="functions#open" title="open"><code>open()</code></a> as a context manager is a great way to ensure your file handles are closed properly and is becoming common:</p> <pre data-language="python">with open('/some/path', 'w') as f:
+    f.write('something')
+</pre> <p>The issue is that even if you mock out the call to <a class="reference internal" href="functions#open" title="open"><code>open()</code></a> it is the <em>returned object</em> that is used as a context manager (and has <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__enter__" title="object.__enter__"><code>__enter__()</code></a> and <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__exit__" title="object.__exit__"><code>__exit__()</code></a> called).</p> <p>Mocking context managers with a <a class="reference internal" href="#unittest.mock.MagicMock" title="unittest.mock.MagicMock"><code>MagicMock</code></a> is common enough and fiddly enough that a helper function is useful.</p> <pre data-language="python">&gt;&gt;&gt; m = mock_open()
+&gt;&gt;&gt; with patch('__main__.open', m):
+...     with open('foo', 'w') as h:
+...         h.write('some stuff')
+...
+&gt;&gt;&gt; m.mock_calls
+[call('foo', 'w'),
+ call().__enter__(),
+ call().write('some stuff'),
+ call().__exit__(None, None, None)]
+&gt;&gt;&gt; m.assert_called_once_with('foo', 'w')
+&gt;&gt;&gt; handle = m()
+&gt;&gt;&gt; handle.write.assert_called_once_with('some stuff')
+</pre> <p>And for reading files:</p> <pre data-language="python">&gt;&gt;&gt; with patch('__main__.open', mock_open(read_data='bibble')) as m:
+...     with open('foo') as h:
+...         result = h.read()
+...
+&gt;&gt;&gt; m.assert_called_once_with('foo')
+&gt;&gt;&gt; assert result == 'bibble'
+</pre>   <h3 id="auto-speccing">Autospeccing</h3> <p id="autospeccing">Autospeccing is based on the existing <code>spec</code> feature of mock. It limits the api of mocks to the api of an original object (the spec), but it is recursive (implemented lazily) so that attributes of mocks only have the same api as the attributes of the spec. In addition mocked functions / methods have the same call signature as the original so they raise a <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a> if they are called incorrectly.</p> <p>Before I explain how auto-speccing works, here’s why it is needed.</p> <p><a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> is a very powerful and flexible object, but it suffers from two flaws when used to mock out objects from a system under test. One of these flaws is specific to the <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> api and the other is a more general problem with using mock objects.</p> <p>First the problem specific to <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a>. <a class="reference internal" href="#unittest.mock.Mock" title="unittest.mock.Mock"><code>Mock</code></a> has two assert methods that are extremely handy: <a class="reference internal" href="#unittest.mock.Mock.assert_called_with" title="unittest.mock.Mock.assert_called_with"><code>assert_called_with()</code></a> and <a class="reference internal" href="#unittest.mock.Mock.assert_called_once_with" title="unittest.mock.Mock.assert_called_once_with"><code>assert_called_once_with()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock(name='Thing', return_value=None)
+&gt;&gt;&gt; mock(1, 2, 3)
+&gt;&gt;&gt; mock.assert_called_once_with(1, 2, 3)
+&gt;&gt;&gt; mock(1, 2, 3)
+&gt;&gt;&gt; mock.assert_called_once_with(1, 2, 3)
+Traceback (most recent call last):
+ ...
+AssertionError: Expected 'mock' to be called once. Called 2 times.
+</pre> <p>Because mocks auto-create attributes on demand, and allow you to call them with arbitrary arguments, if you misspell one of these assert methods then your assertion is gone:</p> <pre data-language="pycon">&gt;&gt;&gt; mock = Mock(name='Thing', return_value=None)
+&gt;&gt;&gt; mock(1, 2, 3)
+&gt;&gt;&gt; mock.assret_called_once_with(4, 5, 6)
+</pre> <p>Your tests can pass silently and incorrectly because of the typo.</p> <p>The second issue is more general to mocking. If you refactor some of your code, rename members and so on, any tests for code that is still using the <em>old api</em> but uses mocks instead of the real objects will still pass. This means your tests can all pass even though your code is broken.</p> <p>Note that this is another reason why you need integration tests as well as unit tests. Testing everything in isolation is all fine and dandy, but if you don’t test how your units are “wired together” there is still lots of room for bugs that tests might have caught.</p> <p><code>mock</code> already provides a feature to help with this, called speccing. If you use a class or instance as the <code>spec</code> for a mock then you can only access attributes on the mock that exist on the real class:</p> <pre data-language="python">&gt;&gt;&gt; from urllib import request
+&gt;&gt;&gt; mock = Mock(spec=request.Request)
+&gt;&gt;&gt; mock.assret_called_with
+Traceback (most recent call last):
+ ...
+AttributeError: Mock object has no attribute 'assret_called_with'
+</pre> <p>The spec only applies to the mock itself, so we still have the same issue with any methods on the mock:</p> <pre data-language="pycon">&gt;&gt;&gt; mock.has_data()
+&lt;mock.Mock object at 0x...&gt;
+&gt;&gt;&gt; mock.has_data.assret_called_with()
+</pre> <p>Auto-speccing solves this problem. You can either pass <code>autospec=True</code> to <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> / <a class="reference internal" href="#unittest.mock.patch.object" title="unittest.mock.patch.object"><code>patch.object()</code></a> or use the <a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> function to create a mock with a spec. If you use the <code>autospec=True</code> argument to <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> then the object that is being replaced will be used as the spec object. Because the speccing is done “lazily” (the spec is created as attributes on the mock are accessed) you can use it with very complex or deeply nested objects (like modules that import modules that import modules) without a big performance hit.</p> <p>Here’s an example of it in use:</p> <pre data-language="python">&gt;&gt;&gt; from urllib import request
+&gt;&gt;&gt; patcher = patch('__main__.request', autospec=True)
+&gt;&gt;&gt; mock_request = patcher.start()
+&gt;&gt;&gt; request is mock_request
+True
+&gt;&gt;&gt; mock_request.Request
+&lt;MagicMock name='request.Request' spec='Request' id='...'&gt;
+</pre> <p>You can see that <code>request.Request</code> has a spec. <code>request.Request</code> takes two arguments in the constructor (one of which is <em>self</em>). Here’s what happens if we try to call it incorrectly:</p> <pre data-language="python">&gt;&gt;&gt; req = request.Request()
+Traceback (most recent call last):
+ ...
+TypeError: &lt;lambda&gt;() takes at least 2 arguments (1 given)
+</pre> <p>The spec also applies to instantiated classes (i.e. the return value of specced mocks):</p> <pre data-language="python">&gt;&gt;&gt; req = request.Request('foo')
+&gt;&gt;&gt; req
+&lt;NonCallableMagicMock name='request.Request()' spec='Request' id='...'&gt;
+</pre> <p><code>Request</code> objects are not callable, so the return value of instantiating our mocked out <code>request.Request</code> is a non-callable mock. With the spec in place any typos in our asserts will raise the correct error:</p> <pre data-language="python">&gt;&gt;&gt; req.add_header('spam', 'eggs')
+&lt;MagicMock name='request.Request().add_header()' id='...'&gt;
+&gt;&gt;&gt; req.add_header.assret_called_with
+Traceback (most recent call last):
+ ...
+AttributeError: Mock object has no attribute 'assret_called_with'
+&gt;&gt;&gt; req.add_header.assert_called_with('spam', 'eggs')
+</pre> <p>In many cases you will just be able to add <code>autospec=True</code> to your existing <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> calls and then be protected against bugs due to typos and api changes.</p> <p>As well as using <em>autospec</em> through <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> there is a <a class="reference internal" href="#unittest.mock.create_autospec" title="unittest.mock.create_autospec"><code>create_autospec()</code></a> for creating autospecced mocks directly:</p> <pre data-language="python">&gt;&gt;&gt; from urllib import request
+&gt;&gt;&gt; mock_request = create_autospec(request)
+&gt;&gt;&gt; mock_request.Request('foo', 'bar')
+&lt;NonCallableMagicMock name='mock.Request()' spec='Request' id='...'&gt;
+</pre> <p>This isn’t without caveats and limitations however, which is why it is not the default behaviour. In order to know what attributes are available on the spec object, autospec has to introspect (access attributes) the spec. As you traverse attributes on the mock a corresponding traversal of the original object is happening under the hood. If any of your specced objects have properties or descriptors that can trigger code execution then you may not be able to use autospec. On the other hand it is much better to design your objects so that introspection is safe <a class="footnote-reference brackets" href="#id12" id="id11">4</a>.</p> <p>A more serious problem is that it is common for instance attributes to be created in the <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__init__" title="object.__init__"><code>__init__()</code></a> method and not to exist on the class at all. <em>autospec</em> can’t know about any dynamically created attributes and restricts the api to visible attributes.</p> <pre data-language="python">&gt;&gt;&gt; class Something:
+...   def __init__(self):
+...     self.a = 33
+...
+&gt;&gt;&gt; with patch('__main__.Something', autospec=True):
+...   thing = Something()
+...   thing.a
+...
+Traceback (most recent call last):
+  ...
+AttributeError: Mock object has no attribute 'a'
+</pre> <p>There are a few different ways of resolving this problem. The easiest, but not necessarily the least annoying, way is to simply set the required attributes on the mock after creation. Just because <em>autospec</em> doesn’t allow you to fetch attributes that don’t exist on the spec it doesn’t prevent you setting them:</p> <pre data-language="python">&gt;&gt;&gt; with patch('__main__.Something', autospec=True):
+...   thing = Something()
+...   thing.a = 33
+...
+</pre> <p>There is a more aggressive version of both <em>spec</em> and <em>autospec</em> that <em>does</em> prevent you setting non-existent attributes. This is useful if you want to ensure your code only <em>sets</em> valid attributes too, but obviously it prevents this particular scenario:</p> <pre data-language="python">&gt;&gt;&gt; with patch('__main__.Something', autospec=True, spec_set=True):
+...   thing = Something()
+...   thing.a = 33
+...
+Traceback (most recent call last):
+ ...
+AttributeError: Mock object has no attribute 'a'
+</pre> <p>Probably the best way of solving the problem is to add class attributes as default values for instance members initialised in <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__init__" title="object.__init__"><code>__init__()</code></a>. Note that if you are only setting default attributes in <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__init__" title="object.__init__"><code>__init__()</code></a> then providing them via class attributes (shared between instances of course) is faster too. e.g.</p> <pre data-language="python">class Something:
+    a = 33
+</pre> <p>This brings up another issue. It is relatively common to provide a default value of <code>None</code> for members that will later be an object of a different type. <code>None</code> would be useless as a spec because it wouldn’t let you access <em>any</em> attributes or methods on it. As <code>None</code> is <em>never</em> going to be useful as a spec, and probably indicates a member that will normally of some other type, autospec doesn’t use a spec for members that are set to <code>None</code>. These will just be ordinary mocks (well - MagicMocks):</p> <pre data-language="python">&gt;&gt;&gt; class Something:
+...     member = None
+...
+&gt;&gt;&gt; mock = create_autospec(Something)
+&gt;&gt;&gt; mock.member.foo.bar.baz()
+&lt;MagicMock name='mock.member.foo.bar.baz()' id='...'&gt;
+</pre> <p>If modifying your production classes to add defaults isn’t to your liking then there are more options. One of these is simply to use an instance as the spec rather than the class. The other is to create a subclass of the production class and add the defaults to the subclass without affecting the production class. Both of these require you to use an alternative object as the spec. Thankfully <a class="reference internal" href="#unittest.mock.patch" title="unittest.mock.patch"><code>patch()</code></a> supports this - you can simply pass the alternative object as the <em>autospec</em> argument:</p> <pre data-language="python">&gt;&gt;&gt; class Something:
+...   def __init__(self):
+...     self.a = 33
+...
+&gt;&gt;&gt; class SomethingForTest(Something):
+...   a = 33
+...
+&gt;&gt;&gt; p = patch('__main__.Something', autospec=SomethingForTest)
+&gt;&gt;&gt; mock = p.start()
+&gt;&gt;&gt; mock.a
+&lt;NonCallableMagicMock name='Something.a' spec='int' id='...'&gt;
+</pre> <dl class="footnote brackets"> <dt class="label" id="id12">
+<code>4</code> </dt> <dd>
+<p>This only applies to classes or already instantiated objects. Calling a mocked class to create a mock instance <em>does not</em> create a real instance. It is only attribute lookups - along with calls to <a class="reference internal" href="functions#dir" title="dir"><code>dir()</code></a> - that are done.</p> </dd> </dl>   <h3 id="sealing-mocks">Sealing mocks</h3> <dl class="function"> <dt id="unittest.mock.seal">
+<code>unittest.mock.seal(mock)</code> </dt> <dd>
+<p>Seal will disable the automatic creation of mocks when accessing an attribute of the mock being sealed or any of its attributes that are already mocks recursively.</p> <p>If a mock instance with a name or a spec is assigned to an attribute it won’t be considered in the sealing chain. This allows one to prevent seal from fixing part of the mock object.</p> <pre data-language="python">&gt;&gt;&gt; mock = Mock()
+&gt;&gt;&gt; mock.submock.attribute1 = 2
+&gt;&gt;&gt; mock.not_submock = mock.Mock(name="sample_name")
+&gt;&gt;&gt; seal(mock)
+&gt;&gt;&gt; mock.new_attribute  # This will raise AttributeError.
+&gt;&gt;&gt; mock.submock.attribute2  # This will raise AttributeError.
+&gt;&gt;&gt; mock.not_submock.attribute2  # This won't raise.
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.</span></p> </div> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/unittest.mock.html" class="_attribution-link">https://docs.python.org/3.9/library/unittest.mock.html</a>
+  </p>
+</div>

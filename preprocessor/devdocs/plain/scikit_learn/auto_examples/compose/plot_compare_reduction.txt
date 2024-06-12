@@ -1,0 +1,262 @@
+# Selecting dimensionality reduction with Pipeline and GridSearchCV
+
+This example constructs a pipeline that does dimensionality reduction followed
+by prediction with a support vector classifier. It demonstrates the use of
+`GridSearchCV` and `Pipeline` to optimize over different classes of estimators
+in a single CV run – unsupervised `PCA` and `NMF` dimensionality reductions
+are compared to univariate feature selection during the grid search.
+
+Additionally, `Pipeline` can be instantiated with the `memory` argument to
+memoize the transformers within the pipeline, avoiding to fit again the same
+transformers over and over.
+
+Note that the use of `memory` to enable caching becomes interesting when the
+fitting of a transformer is costly.
+
+# %% Illustration of `Pipeline` and `GridSearchCV`
+###############################################################################
+
+This section illustrates the use of a `Pipeline` with `GridSearchCV`
+
+    
+    # Authors: Robert McGibbon, Joel Nothman, Guillaume Lemaitre
+    
+    
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from sklearn.datasets import load_digits
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import LinearSVC
+    from sklearn.decomposition import PCA, NMF
+    from sklearn.feature_selection import SelectKBest, chi2
+    
+    print(__doc__)
+    
+    pipe = Pipeline([
+        # the reduce_dim stage is populated by the param_grid
+        ('reduce_dim', 'passthrough'),
+        ('classify', LinearSVC(dual=False, max_iter=10000))
+    ])
+    
+    N_FEATURES_OPTIONS = [2, 4, 8]
+    C_OPTIONS = [1, 10, 100, 1000]
+    param_grid = [
+        {
+            'reduce_dim': [PCA(iterated_power=7), NMF()],
+            'reduce_dim__n_components': N_FEATURES_OPTIONS,
+            'classify__C': C_OPTIONS
+        },
+        {
+            'reduce_dim': [SelectKBest(chi2)],
+            'reduce_dim__k': N_FEATURES_OPTIONS,
+            'classify__C': C_OPTIONS
+        },
+    ]
+    reducer_labels = ['PCA', 'NMF', 'KBest(chi2)']
+    
+    grid = GridSearchCV(pipe, n_jobs=1, param_grid=param_grid)
+    X, y = load_digits(return_X_y=True)
+    grid.fit(X, y)
+    
+    mean_scores = np.array(grid.cv_results_['mean_test_score'])
+    # scores are in the order of param_grid iteration, which is alphabetical
+    mean_scores = mean_scores.reshape(len(C_OPTIONS), -1, len(N_FEATURES_OPTIONS))
+    # select score for best C
+    mean_scores = mean_scores.max(axis=0)
+    bar_offsets = (np.arange(len(N_FEATURES_OPTIONS)) *
+                   (len(reducer_labels) + 1) + .5)
+    
+    plt.figure()
+    COLORS = 'bgrcmyk'
+    for i, (label, reducer_scores) in enumerate(zip(reducer_labels, mean_scores)):
+        plt.bar(bar_offsets + i, reducer_scores, label=label, color=COLORS[i])
+    
+    plt.title("Comparing feature reduction techniques")
+    plt.xlabel('Reduced number of features')
+    plt.xticks(bar_offsets + len(reducer_labels) / 2, N_FEATURES_OPTIONS)
+    plt.ylabel('Digit classification accuracy')
+    plt.ylim((0, 1))
+    plt.legend(loc='upper left')
+    
+    plt.show()
+    
+![Comparing feature reduction
+techniques](data:image/png;base64,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)
+
+Out:
+
+    
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    /home/circleci/project/sklearn/decomposition/_nmf.py:312: FutureWarning: The 'init' value, when 'init=None' and n_components is less than n_samples and n_features, will be changed from 'nndsvd' to 'nndsvda' in 1.1 (renaming of 0.26).
+      warnings.warn(("The 'init' value, when 'init=None' and "
+    
+## Caching transformers within a `Pipeline`
+
+It is sometimes worthwhile storing the state of a specific transformer since
+it could be used again. Using a pipeline in `GridSearchCV` triggers such
+situations. Therefore, we use the argument `memory` to enable caching.
+
+Warning
+
+Note that this example is, however, only an illustration since for this
+specific case fitting PCA is not necessarily slower than loading the cache.
+Hence, use the `memory` constructor parameter when the fitting of a
+transformer is costly.
+
+    
+    from joblib import Memory
+    from shutil import rmtree
+    
+    # Create a temporary folder to store the transformers of the pipeline
+    location = 'cachedir'
+    memory = Memory(location=location, verbose=10)
+    cached_pipe = Pipeline([('reduce_dim', PCA()),
+                            ('classify', LinearSVC(dual=False, max_iter=10000))],
+                           memory=memory)
+    
+    # This time, a cached pipeline will be used within the grid search
+    
+    
+    # Delete the temporary cache before exiting
+    memory.clear(warn=False)
+    rmtree(location)
+    
+The `PCA` fitting is only computed at the evaluation of the first
+configuration of the `C` parameter of the `LinearSVC` classifier. The other
+configurations of `C` will trigger the loading of the cached `PCA` estimator
+data, leading to save processing time. Therefore, the use of caching the
+pipeline using `memory` is highly beneficial when fitting a transformer is
+costly.
+
+Total running time of the script: ( 0 minutes 6.972 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_compare_reduction.py`
+
+`Download Jupyter notebook: plot_compare_reduction.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-
+learn.org/0.24/auto_examples/compose/plot_compare_reduction.html
+

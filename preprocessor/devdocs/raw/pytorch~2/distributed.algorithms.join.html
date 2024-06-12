@@ -1,0 +1,70 @@
+<h1 id="generic-join-context-manager">Generic Join Context Manager</h1> <p>The generic join context manager facilitates distributed training on uneven inputs. This page outlines the API of the relevant classes: <code>Join</code>, <code>Joinable</code>, and <code>JoinHook</code>. For a tutorial, see <a class="reference external" href="https://pytorch.org/tutorials/advanced/generic_join.html">Distributed Training with Uneven Inputs Using the Join Context Manager</a>.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Join">
+<code>class torch.distributed.algorithms.Join(joinables, enable=True, throw_on_early_termination=False, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#Join"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This class defines the generic join context manager, which allows custom hooks to be called after a process joins. These hooks should shadow the collective communications of non-joined processes to prevent hanging and erroring and to ensure algorithmic correctness. Refer to <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> for details about the hook definition.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The context manager requires each participating <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> to call the method <a class="reference internal" href="#torch.distributed.algorithms.Join.notify_join_context" title="torch.distributed.algorithms.Join.notify_join_context"><code>notify_join_context()</code></a> before its own per- iteration collective communications to ensure correctness.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The context manager requires that all <code>process_group</code> attributes in the <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> objects are the same. If there are multiple <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> objects, then the <code>device</code> of the first is used. The process group and device information is used for checking for non- joined processes and for notifying processes to throw an exception if <code>throw_on_early_termination</code> is enabled, both of which using an all- reduce.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>joinables</strong> (<em>List</em><em>[</em><a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable">Joinable</a><em>]</em>) – a list of the participating <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> s; their hooks are iterated over in the given order.</li> <li>
+<strong>enable</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – a flag enabling uneven input detection; setting to <code>False</code> disables the context manager’s functionality and should only be set when the user knows the inputs will not be uneven (default: <code>True</code>).</li> <li>
+<strong>throw_on_early_termination</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – a flag controlling whether to throw an exception upon detecting uneven inputs (default: <code>False</code>).</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed as dist
+&gt;&gt;&gt; import torch.multiprocessing as mp
+&gt;&gt;&gt; import torch.nn.parallel.DistributedDataParallel as DDP
+&gt;&gt;&gt; import torch.distributed.optim.ZeroRedundancyOptimizer as ZeRO
+&gt;&gt;&gt; from torch.distributed.algorithms.join import Join
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On each spawned worker
+&gt;&gt;&gt; def worker(rank):
+&gt;&gt;&gt;     dist.init_process_group("nccl", rank=rank, world_size=2)
+&gt;&gt;&gt;     model = DDP(torch.nn.Linear(1, 1).to(rank), device_ids=[rank])
+&gt;&gt;&gt;     optim = ZeRO(model.parameters(), torch.optim.Adam, lr=0.01)
+&gt;&gt;&gt;     # Rank 1 gets one more input than rank 0
+&gt;&gt;&gt;     inputs = [torch.tensor([1.]).to(rank) for _ in range(10 + rank)]
+&gt;&gt;&gt;     with Join([model, optim]):
+&gt;&gt;&gt;         for input in inputs:
+&gt;&gt;&gt;             loss = model(input).sum()
+&gt;&gt;&gt;             loss.backward()
+&gt;&gt;&gt;             optim.step()
+&gt;&gt;&gt;     # All ranks reach here without hanging/erroring
+</pre> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Join.notify_join_context">
+<code>static notify_join_context(joinable)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#Join.notify_join_context"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Notifies the join context manager that the calling process has not yet joined; then, if <code>throw_on_early_termination=True</code>, checks if uneven inputs have been detected (i.e. if one process has already joined) and throws an exception if so.</p> <p>This method should be called from a <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> object before its per-iteration collective communications. For example, this should be called at the beginning of the forward pass in <code>DistributedDataParallel</code>.</p> <p>Only the first <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> object passed into the context manager performs the collective communications in this method, and for the others, this method is vacuous.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>joinable</strong> (<a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable">Joinable</a>) – the <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> object calling this method.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>An async work handle for the all-reduce meant to notify the context manager that the process has not yet joined if <code>joinable</code> is the first one passed into the context manager; <code>None</code> otherwise.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Joinable">
+<code>class torch.distributed.algorithms.Joinable</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#Joinable"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This defines an abstract base class for joinable classes. A joinable class (inheriting from <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a>) should implement <a class="reference internal" href="#torch.distributed.algorithms.Joinable.join_hook" title="torch.distributed.algorithms.Joinable.join_hook"><code>join_hook()</code></a>, which returns a <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> instance, in addition to <a class="reference internal" href="#torch.distributed.algorithms.Joinable.join_device" title="torch.distributed.algorithms.Joinable.join_device"><code>join_device()</code></a> and <a class="reference internal" href="#torch.distributed.algorithms.Joinable.join_process_group" title="torch.distributed.algorithms.Joinable.join_process_group"><code>join_process_group()</code></a> that return device and process group information, respectively.</p> <dl class="py property"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Joinable.join_device">
+<code>abstract property join_device: device</code> </dt> <dd>
+<p>Returns the device from which to perform collective communications needed by the join context manager implementation itself.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Joinable.join_hook">
+<code>abstract join_hook(**kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#Joinable.join_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> instance for the given <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)">dict</a>) – a <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.12)"><code>dict</code></a> containing any keyword arguments to modify the behavior of the join hook at run time; all <a class="reference internal" href="#torch.distributed.algorithms.Joinable" title="torch.distributed.algorithms.Joinable"><code>Joinable</code></a> instances sharing the same join context manager are forwarded the same value for <code>kwargs</code>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.join.JoinHook">JoinHook</a></p> </dd> </dl> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.distributed.algorithms.Joinable.join_process_group">
+<code>abstract property join_process_group: Any</code> </dt> <dd>
+<p>Returns the process group for the collective communications needed by the join context manager itself.</p> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.algorithms.JoinHook">
+<code>class torch.distributed.algorithms.JoinHook</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#JoinHook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This defines a join hook, which provides two entry points in the join context manager: a main hook, which is called repeatedly while there exists a non-joined process, and a post-hook, which is called once all processes have joined.</p> <p>To implement a join hook for the generic join context manager, define a class that inherits from <a class="reference internal" href="#torch.distributed.algorithms.JoinHook" title="torch.distributed.algorithms.JoinHook"><code>JoinHook</code></a> and override <code>main_hook()</code> and <code>post_hook()</code> as appropriate.</p> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.algorithms.JoinHook.main_hook">
+<code>main_hook()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#JoinHook.main_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This hook is called repeatedly while there exists a non-joined process to shadow collective communications in one training iteration (i.e. in one forward pass, backward pass, and optimizer step).</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.algorithms.JoinHook.post_hook">
+<code>post_hook(is_last_joiner)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/algorithms/join.html#JoinHook.post_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This hook is called after all processes have joined. It is passed an additional <code>bool</code> argument <code>is_last_joiner</code>, which indicates if the rank is one of the last to join.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>is_last_joiner</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – <code>True</code> if the rank is one of the last to join; <code>False</code> otherwise.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/distributed.algorithms.join.html" class="_attribution-link">https://pytorch.org/docs/2.1/distributed.algorithms.join.html</a>
+  </p>
+</div>

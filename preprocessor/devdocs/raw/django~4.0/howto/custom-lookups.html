@@ -1,0 +1,88 @@
+<h1 id="how-to-write-custom-lookups">How to write custom lookups</h1> <p id="s-how-to-write-custom-lookups">Django offers a wide variety of <a class="reference internal" href="../ref/models/querysets#field-lookups"><span class="std std-ref">built-in lookups</span></a> for filtering (for example, <code>exact</code> and <code>icontains</code>). This documentation explains how to write custom lookups and how to alter the working of existing lookups. For the API references of lookups, see the <a class="reference internal" href="../ref/models/lookups"><span class="doc">Lookup API reference</span></a>.</p>  <h2 id="a-lookup-example">A lookup example</h2> <p id="s-a-lookup-example">Let’s start with a small custom lookup. We will write a custom lookup <code>ne</code> which works opposite to <code>exact</code>. <code>Author.objects.filter(name__ne='Jack')</code> will translate to the SQL:</p> <pre data-language="sql">"author"."name" &lt;&gt; 'Jack'
+</pre> <p>This SQL is backend independent, so we don’t need to worry about different databases.</p> <p>There are two steps to making this work. Firstly we need to implement the lookup, then we need to tell Django about it:</p> <pre data-language="python">from django.db.models import Lookup
+
+class NotEqual(Lookup):
+    lookup_name = 'ne'
+
+    def as_sql(self, compiler, connection):
+        lhs, lhs_params = self.process_lhs(compiler, connection)
+        rhs, rhs_params = self.process_rhs(compiler, connection)
+        params = lhs_params + rhs_params
+        return '%s &lt;&gt; %s' % (lhs, rhs), params
+</pre> <p>To register the <code>NotEqual</code> lookup we will need to call <code>register_lookup</code> on the field class we want the lookup to be available for. In this case, the lookup makes sense on all <code>Field</code> subclasses, so we register it with <code>Field</code> directly:</p> <pre data-language="python">from django.db.models import Field
+Field.register_lookup(NotEqual)
+</pre> <p>Lookup registration can also be done using a decorator pattern:</p> <pre data-language="python">from django.db.models import Field
+
+@Field.register_lookup
+class NotEqualLookup(Lookup):
+    # ...
+</pre> <p>We can now use <code>foo__ne</code> for any field <code>foo</code>. You will need to ensure that this registration happens before you try to create any querysets using it. You could place the implementation in a <code>models.py</code> file, or register the lookup in the <code>ready()</code> method of an <code>AppConfig</code>.</p> <p>Taking a closer look at the implementation, the first required attribute is <code>lookup_name</code>. This allows the ORM to understand how to interpret <code>name__ne</code> and use <code>NotEqual</code> to generate the SQL. By convention, these names are always lowercase strings containing only letters, but the only hard requirement is that it must not contain the string <code>__</code>.</p> <p>We then need to define the <code>as_sql</code> method. This takes a <code>SQLCompiler</code> object, called <code>compiler</code>, and the active database connection. <code>SQLCompiler</code> objects are not documented, but the only thing we need to know about them is that they have a <code>compile()</code> method which returns a tuple containing an SQL string, and the parameters to be interpolated into that string. In most cases, you don’t need to use it directly and can pass it on to <code>process_lhs()</code> and <code>process_rhs()</code>.</p> <p>A <code>Lookup</code> works against two values, <code>lhs</code> and <code>rhs</code>, standing for left-hand side and right-hand side. The left-hand side is usually a field reference, but it can be anything implementing the <a class="reference internal" href="../ref/models/lookups#query-expression"><span class="std std-ref">query expression API</span></a>. The right-hand is the value given by the user. In the example <code>Author.objects.filter(name__ne='Jack')</code>, the left-hand side is a reference to the <code>name</code> field of the <code>Author</code> model, and <code>'Jack'</code> is the right-hand side.</p> <p>We call <code>process_lhs</code> and <code>process_rhs</code> to convert them into the values we need for SQL using the <code>compiler</code> object described before. These methods return tuples containing some SQL and the parameters to be interpolated into that SQL, just as we need to return from our <code>as_sql</code> method. In the above example, <code>process_lhs</code> returns <code>('"author"."name"', [])</code> and <code>process_rhs</code> returns <code>('"%s"', ['Jack'])</code>. In this example there were no parameters for the left hand side, but this would depend on the object we have, so we still need to include them in the parameters we return.</p> <p>Finally we combine the parts into an SQL expression with <code>&lt;&gt;</code>, and supply all the parameters for the query. We then return a tuple containing the generated SQL string and the parameters.</p>   <h2 id="a-transformer-example">A transformer example</h2> <p id="s-a-transformer-example">The custom lookup above is great, but in some cases you may want to be able to chain lookups together. For example, let’s suppose we are building an application where we want to make use of the <code>abs()</code> operator. We have an <code>Experiment</code> model which records a start value, end value, and the change (start - end). We would like to find all experiments where the change was equal to a certain amount (<code>Experiment.objects.filter(change__abs=27)</code>), or where it did not exceed a certain amount (<code>Experiment.objects.filter(change__abs__lt=27)</code>).</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">This example is somewhat contrived, but it nicely demonstrates the range of functionality which is possible in a database backend independent manner, and without duplicating functionality already in Django.</p> </div> <p>We will start by writing an <code>AbsoluteValue</code> transformer. This will use the SQL function <code>ABS()</code> to transform the value before comparison:</p> <pre data-language="python">from django.db.models import Transform
+
+class AbsoluteValue(Transform):
+    lookup_name = 'abs'
+    function = 'ABS'
+</pre> <p>Next, let’s register it for <code>IntegerField</code>:</p> <pre data-language="python">from django.db.models import IntegerField
+IntegerField.register_lookup(AbsoluteValue)
+</pre> <p>We can now run the queries we had before. <code>Experiment.objects.filter(change__abs=27)</code> will generate the following SQL:</p> <pre data-language="sql">SELECT ... WHERE ABS("experiments"."change") = 27
+</pre> <p>By using <code>Transform</code> instead of <code>Lookup</code> it means we are able to chain further lookups afterward. So <code>Experiment.objects.filter(change__abs__lt=27)</code> will generate the following SQL:</p> <pre data-language="sql">SELECT ... WHERE ABS("experiments"."change") &lt; 27
+</pre> <p>Note that in case there is no other lookup specified, Django interprets <code>change__abs=27</code> as <code>change__abs__exact=27</code>.</p> <p>This also allows the result to be used in <code>ORDER BY</code> and <code>DISTINCT ON</code> clauses. For example <code>Experiment.objects.order_by('change__abs')</code> generates:</p> <pre data-language="sql">SELECT ... ORDER BY ABS("experiments"."change") ASC
+</pre> <p>And on databases that support distinct on fields (such as PostgreSQL), <code>Experiment.objects.distinct('change__abs')</code> generates:</p> <pre data-language="sql">SELECT ... DISTINCT ON ABS("experiments"."change")
+</pre> <p>When looking for which lookups are allowable after the <code>Transform</code> has been applied, Django uses the <code>output_field</code> attribute. We didn’t need to specify this here as it didn’t change, but supposing we were applying <code>AbsoluteValue</code> to some field which represents a more complex type (for example a point relative to an origin, or a complex number) then we may have wanted to specify that the transform returns a <code>FloatField</code> type for further lookups. This can be done by adding an <code>output_field</code> attribute to the transform:</p> <pre data-language="python">from django.db.models import FloatField, Transform
+
+class AbsoluteValue(Transform):
+    lookup_name = 'abs'
+    function = 'ABS'
+
+    @property
+    def output_field(self):
+        return FloatField()
+</pre> <p>This ensures that further lookups like <code>abs__lte</code> behave as they would for a <code>FloatField</code>.</p>   <h2 id="writing-an-efficient-abs-lt-lookup">Writing an efficient <code>abs__lt</code> lookup</h2> <p id="s-writing-an-efficient-abs-lt-lookup">When using the above written <code>abs</code> lookup, the SQL produced will not use indexes efficiently in some cases. In particular, when we use <code>change__abs__lt=27</code>, this is equivalent to <code>change__gt=-27</code> AND <code>change__lt=27</code>. (For the <code>lte</code> case we could use the SQL <code>BETWEEN</code>).</p> <p>So we would like <code>Experiment.objects.filter(change__abs__lt=27)</code> to generate the following SQL:</p> <pre data-language="sql">SELECT .. WHERE "experiments"."change" &lt; 27 AND "experiments"."change" &gt; -27
+</pre> <p>The implementation is:</p> <pre data-language="python">from django.db.models import Lookup
+
+class AbsoluteValueLessThan(Lookup):
+    lookup_name = 'lt'
+
+    def as_sql(self, compiler, connection):
+        lhs, lhs_params = compiler.compile(self.lhs.lhs)
+        rhs, rhs_params = self.process_rhs(compiler, connection)
+        params = lhs_params + rhs_params + lhs_params + rhs_params
+        return '%s &lt; %s AND %s &gt; -%s' % (lhs, rhs, lhs, rhs), params
+
+AbsoluteValue.register_lookup(AbsoluteValueLessThan)
+</pre> <p>There are a couple of notable things going on. First, <code>AbsoluteValueLessThan</code> isn’t calling <code>process_lhs()</code>. Instead it skips the transformation of the <code>lhs</code> done by <code>AbsoluteValue</code> and uses the original <code>lhs</code>. That is, we want to get <code>"experiments"."change"</code> not <code>ABS("experiments"."change")</code>. Referring directly to <code>self.lhs.lhs</code> is safe as <code>AbsoluteValueLessThan</code> can be accessed only from the <code>AbsoluteValue</code> lookup, that is the <code>lhs</code> is always an instance of <code>AbsoluteValue</code>.</p> <p>Notice also that as both sides are used multiple times in the query the params need to contain <code>lhs_params</code> and <code>rhs_params</code> multiple times.</p> <p>The final query does the inversion (<code>27</code> to <code>-27</code>) directly in the database. The reason for doing this is that if the <code>self.rhs</code> is something else than a plain integer value (for example an <code>F()</code> reference) we can’t do the transformations in Python.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">In fact, most lookups with <code>__abs</code> could be implemented as range queries like this, and on most database backends it is likely to be more sensible to do so as you can make use of the indexes. However with PostgreSQL you may want to add an index on <code>abs(change)</code> which would allow these queries to be very efficient.</p> </div>   <h2 id="a-bilateral-transformer-example">A bilateral transformer example</h2> <p id="s-a-bilateral-transformer-example">The <code>AbsoluteValue</code> example we discussed previously is a transformation which applies to the left-hand side of the lookup. There may be some cases where you want the transformation to be applied to both the left-hand side and the right-hand side. For instance, if you want to filter a queryset based on the equality of the left and right-hand side insensitively to some SQL function.</p> <p>Let’s examine case-insensitive transformations here. This transformation isn’t very useful in practice as Django already comes with a bunch of built-in case-insensitive lookups, but it will be a nice demonstration of bilateral transformations in a database-agnostic way.</p> <p>We define an <code>UpperCase</code> transformer which uses the SQL function <code>UPPER()</code> to transform the values before comparison. We define <a class="reference internal" href="../ref/models/lookups#django.db.models.Transform.bilateral" title="django.db.models.Transform.bilateral"><code>bilateral = True</code></a> to indicate that this transformation should apply to both <code>lhs</code> and <code>rhs</code>:</p> <pre data-language="python">from django.db.models import Transform
+
+class UpperCase(Transform):
+    lookup_name = 'upper'
+    function = 'UPPER'
+    bilateral = True
+</pre> <p>Next, let’s register it:</p> <pre data-language="python">from django.db.models import CharField, TextField
+CharField.register_lookup(UpperCase)
+TextField.register_lookup(UpperCase)
+</pre> <p>Now, the queryset <code>Author.objects.filter(name__upper="doe")</code> will generate a case insensitive query like this:</p> <pre data-language="sql">SELECT ... WHERE UPPER("author"."name") = UPPER('doe')
+</pre>   <h2 id="writing-alternative-implementations-for-existing-lookups">Writing alternative implementations for existing lookups</h2> <p id="s-writing-alternative-implementations-for-existing-lookups">Sometimes different database vendors require different SQL for the same operation. For this example we will rewrite a custom implementation for MySQL for the NotEqual operator. Instead of <code>&lt;&gt;</code> we will be using <code>!=</code> operator. (Note that in reality almost all databases support both, including all the official databases supported by Django).</p> <p>We can change the behavior on a specific backend by creating a subclass of <code>NotEqual</code> with an <code>as_mysql</code> method:</p> <pre data-language="python">class MySQLNotEqual(NotEqual):
+    def as_mysql(self, compiler, connection, **extra_context):
+        lhs, lhs_params = self.process_lhs(compiler, connection)
+        rhs, rhs_params = self.process_rhs(compiler, connection)
+        params = lhs_params + rhs_params
+        return '%s != %s' % (lhs, rhs), params
+
+Field.register_lookup(MySQLNotEqual)
+</pre> <p>We can then register it with <code>Field</code>. It takes the place of the original <code>NotEqual</code> class as it has the same <code>lookup_name</code>.</p> <p>When compiling a query, Django first looks for <code>as_%s % connection.vendor</code> methods, and then falls back to <code>as_sql</code>. The vendor names for the in-built backends are <code>sqlite</code>, <code>postgresql</code>, <code>oracle</code> and <code>mysql</code>.</p>   <h2 id="how-django-determines-the-lookups-and-transforms-which-are-used">How Django determines the lookups and transforms which are used</h2> <p id="s-how-django-determines-the-lookups-and-transforms-which-are-used">In some cases you may wish to dynamically change which <code>Transform</code> or <code>Lookup</code> is returned based on the name passed in, rather than fixing it. As an example, you could have a field which stores coordinates or an arbitrary dimension, and wish to allow a syntax like <code>.filter(coords__x7=4)</code> to return the objects where the 7th coordinate has value 4. In order to do this, you would override <code>get_lookup</code> with something like:</p> <pre data-language="python">class CoordinatesField(Field):
+    def get_lookup(self, lookup_name):
+        if lookup_name.startswith('x'):
+            try:
+                dimension = int(lookup_name[1:])
+            except ValueError:
+                pass
+            else:
+                return get_coordinate_lookup(dimension)
+        return super().get_lookup(lookup_name)
+</pre> <p>You would then define <code>get_coordinate_lookup</code> appropriately to return a <code>Lookup</code> subclass which handles the relevant value of <code>dimension</code>.</p> <p>There is a similarly named method called <code>get_transform()</code>. <code>get_lookup()</code> should always return a <code>Lookup</code> subclass, and <code>get_transform()</code> a <code>Transform</code> subclass. It is important to remember that <code>Transform</code> objects can be further filtered on, and <code>Lookup</code> objects cannot.</p> <p>When filtering, if there is only one lookup name remaining to be resolved, we will look for a <code>Lookup</code>. If there are multiple names, it will look for a <code>Transform</code>. In the situation where there is only one name and a <code>Lookup</code> is not found, we look for a <code>Transform</code> and then the <code>exact</code> lookup on that <code>Transform</code>. All call sequences always end with a <code>Lookup</code>. To clarify:</p> <ul class="simple"> <li>
+<code>.filter(myfield__mylookup)</code> will call <code>myfield.get_lookup('mylookup')</code>.</li> <li>
+<code>.filter(myfield__mytransform__mylookup)</code> will call <code>myfield.get_transform('mytransform')</code>, and then <code>mytransform.get_lookup('mylookup')</code>.</li> <li>
+<code>.filter(myfield__mytransform)</code> will first call <code>myfield.get_lookup('mytransform')</code>, which will fail, so it will fall back to calling <code>myfield.get_transform('mytransform')</code> and then <code>mytransform.get_lookup('exact')</code>.</li> </ul><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/howto/custom-lookups/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/howto/custom-lookups/</a>
+  </p>
+</div>

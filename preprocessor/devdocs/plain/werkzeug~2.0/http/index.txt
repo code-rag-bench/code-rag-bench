@@ -1,0 +1,923 @@
+# HTTP Utilities
+
+Werkzeug provides a couple of functions to parse and generate HTTP headers
+that are useful when implementing WSGI middlewares or whenever you are
+operating on a lower level layer. All this functionality is also exposed from
+request and response objects.
+
+## Datetime Functions
+
+These functions simplify working with times in an HTTP context. Werkzeug
+produces timezone-aware `datetime` objects in UTC. When passing datetime
+objects to Werkzeug, it assumes any naive datetime is in UTC.
+
+When comparing datetime values from Werkzeug, your own datetime objects must
+also be timezone-aware, or you must make the values from Werkzeug naive.
+
+  * `dt = datetime.now(timezone.utc)` gets the current time in UTC.
+  * `dt = datetime(..., tzinfo=timezone.utc)` creates a time in UTC.
+  * `dt = dt.replace(tzinfo=timezone.utc)` makes a naive object aware by assuming it’s in UTC.
+  * `dt = dt.replace(tzinfo=None)` makes an aware object naive.
+
+`werkzeug.http.parse_date(value)`
+
+    
+Parse an RFC 2822 date into a timezone-aware `datetime.datetime` object, or
+`None` if parsing fails.
+
+This is a wrapper for `email.utils.parsedate_to_datetime()`. It returns `None`
+if parsing fails instead of raising an exception, and always returns a
+timezone-aware datetime object. If the string doesn’t have timezone
+information, it is assumed to be UTC.
+
+Parameters
+
+    
+value (Optional[str]) – A string with a supported date format.
+
+Return type
+
+    
+Optional[datetime.datetime]
+
+Changed in version 2.0: Return a timezone-aware datetime object. Use
+`email.utils.parsedate_to_datetime`.
+
+`werkzeug.http.http_date(timestamp=None)`
+
+    
+Format a datetime object or timestamp into an RFC 2822 date string.
+
+This is a wrapper for `email.utils.format_datetime()`. It assumes naive
+datetime objects are in UTC instead of raising an exception.
+
+Parameters
+
+    
+timestamp (Optional[Union[datetime.datetime, datetime.date, int, float,
+time.struct_time]]) – The datetime or timestamp to format. Defaults to the
+current time.
+
+Return type
+
+    
+str
+
+Changed in version 2.0: Use `email.utils.format_datetime`. Accept `date`
+objects.
+
+`werkzeug.http.cookie_date(expires=None)`
+
+    
+Format a datetime object or timestamp into an RFC 2822 date string for `Set-
+Cookie expires`.
+
+Deprecated since version 2.0: Will be removed in Werkzeug 2.1. Use
+`http_date()` instead.
+
+Parameters
+
+    
+expires (Optional[Union[datetime.datetime, datetime.date, int, float,
+time.struct_time]]) –
+
+Return type
+
+    
+str
+
+## Header Parsing
+
+The following functions can be used to parse incoming HTTP headers. Because
+Python does not provide data structures with the semantics required by RFC
+2616, Werkzeug implements some custom data structures that are documented
+separately.
+
+`werkzeug.http.parse_options_header(value, multiple=False)`
+
+    
+Parse a `Content-Type` like header into a tuple with the content type and the
+options:
+
+    
+    >>> parse_options_header('text/html; charset=utf8')
+    ('text/html', {'charset': 'utf8'})
+    
+This should not be used to parse `Cache-Control` like headers that use a
+slightly different format. For these headers use the `parse_dict_header()`
+function.
+
+Changelog
+
+Changed in version 0.15: RFC 2231 parameter continuations are handled.
+
+New in version 0.5.
+
+Parameters
+
+    
+  * value (Optional[str]) – the header to parse.
+  * multiple (bool) – Whether try to parse and return multiple MIME types
+
+Returns
+
+    
+(mimetype, options) or (mimetype, options, mimetype, options, …) if
+multiple=True
+
+Return type
+
+    
+Union[Tuple[str, Dict[str, str]], Tuple[Any, …]]
+
+`werkzeug.http.parse_set_header(value, on_update=None)`
+
+    
+Parse a set-like header and return a `HeaderSet` object:
+
+    
+    >>> hs = parse_set_header('token, "quoted value"')
+    
+The return value is an object that treats the items case-insensitively and
+keeps the order of the items:
+
+    
+    >>> 'TOKEN' in hs
+    True
+    >>> hs.index('quoted value')
+    1
+    >>> hs
+    HeaderSet(['token', 'quoted value'])
+    
+To create a header from the `HeaderSet` again, use the `dump_header()`
+function.
+
+Parameters
+
+    
+  * value (Optional[str]) – a set header to be parsed.
+  * on_update (Optional[Callable[[werkzeug.datastructures.HeaderSet], None]]) – an optional callable that is called every time a value on the `HeaderSet` object is changed.
+
+Returns
+
+    
+a `HeaderSet`
+
+Return type
+
+    
+werkzeug.datastructures.HeaderSet
+
+`werkzeug.http.parse_list_header(value)`
+
+    
+Parse lists as described by RFC 2068 Section 2.
+
+In particular, parse comma-separated lists where the elements of the list may
+include quoted-strings. A quoted-string could contain a comma. A non-quoted
+string could have quotes in the middle. Quotes are removed automatically after
+parsing.
+
+It basically works like `parse_set_header()` just that items may appear
+multiple times and case sensitivity is preserved.
+
+The return value is a standard `list`:
+
+    
+    >>> parse_list_header('token, "quoted value"')
+    ['token', 'quoted value']
+    
+To create a header from the `list` again, use the `dump_header()` function.
+
+Parameters
+
+    
+value (str) – a string with a list header.
+
+Returns
+
+    
+`list`
+
+Return type
+
+    
+List[str]
+
+`werkzeug.http.parse_dict_header(value, cls=<class 'dict'>)`
+
+    
+Parse lists of key, value pairs as described by RFC 2068 Section 2 and convert
+them into a python dict (or any other mapping object created from the type
+with a dict like interface provided by the `cls` argument):
+
+    
+    >>> d = parse_dict_header('foo="is a fish", bar="as well"')
+    >>> type(d) is dict
+    True
+    >>> sorted(d.items())
+    [('bar', 'as well'), ('foo', 'is a fish')]
+    
+If there is no value for a key it will be `None`:
+
+    
+    >>> parse_dict_header('key_without_value')
+    {'key_without_value': None}
+    
+To create a header from the `dict` again, use the `dump_header()` function.
+
+Changelog
+
+Changed in version 0.9: Added support for `cls` argument.
+
+Parameters
+
+    
+  * value (str) – a string with a dict header.
+  * cls (Type[dict]) – callable to use for storage of parsed results.
+
+Returns
+
+    
+an instance of `cls`
+
+Return type
+
+    
+Dict[str, str]
+
+`werkzeug.http.parse_accept_header(value[, class])`
+
+    
+Parses an HTTP Accept-* header. This does not implement a complete valid
+algorithm but one that supports at least value and quality extraction.
+
+Returns a new `Accept` object (basically a list of `(value, quality)` tuples
+sorted by the quality with some additional accessor methods).
+
+The second parameter can be a subclass of `Accept` that is created with the
+parsed values and returned.
+
+Parameters
+
+    
+  * value (Optional[str]) – the accept header string to be parsed.
+  * cls (Optional[Type[werkzeug.http._TAnyAccept]]) – the wrapper class for the return value (can be `Accept` or a subclass thereof)
+
+Returns
+
+    
+an instance of `cls`.
+
+Return type
+
+    
+werkzeug.http._TAnyAccept
+
+`werkzeug.http.parse_cache_control_header(value, on_update=None, cls=None)`
+
+    
+Parse a cache control header. The RFC differs between response and request
+cache control, this method does not. It’s your responsibility to not use the
+wrong control statements.
+
+Changelog
+
+New in version 0.5: The `cls` was added. If not specified an immutable
+`RequestCacheControl` is returned.
+
+Parameters
+
+    
+  * value (Optional[str]) – a cache control header to be parsed.
+  * on_update (Optional[Callable[[werkzeug.http._TAnyCC], None]]) – an optional callable that is called every time a value on the `CacheControl` object is changed.
+  * cls (Optional[Type[werkzeug.http._TAnyCC]]) – the class for the returned object. By default `RequestCacheControl` is used.
+
+Returns
+
+    
+a `cls` object.
+
+Return type
+
+    
+werkzeug.http._TAnyCC
+
+`werkzeug.http.parse_authorization_header(value)`
+
+    
+Parse an HTTP basic/digest authorization header transmitted by the web
+browser. The return value is either `None` if the header was invalid or not
+given, otherwise an `Authorization` object.
+
+Parameters
+
+    
+value (Optional[str]) – the authorization header to parse.
+
+Returns
+
+    
+a `Authorization` object or `None`.
+
+Return type
+
+    
+Optional[werkzeug.datastructures.Authorization]
+
+`werkzeug.http.parse_www_authenticate_header(value, on_update=None)`
+
+    
+Parse an HTTP WWW-Authenticate header into a `WWWAuthenticate` object.
+
+Parameters
+
+    
+  * value (Optional[str]) – a WWW-Authenticate header to parse.
+  * on_update (Optional[Callable[[werkzeug.datastructures.WWWAuthenticate], None]]) – an optional callable that is called every time a value on the `WWWAuthenticate` object is changed.
+
+Returns
+
+    
+a `WWWAuthenticate` object.
+
+Return type
+
+    
+werkzeug.datastructures.WWWAuthenticate
+
+`werkzeug.http.parse_if_range_header(value)`
+
+    
+Parses an if-range header which can be an etag or a date. Returns a `IfRange`
+object.
+
+Changed in version 2.0: If the value represents a datetime, it is timezone-
+aware.
+
+Changelog
+
+New in version 0.7.
+
+Parameters
+
+    
+value (Optional[str]) –
+
+Return type
+
+    
+werkzeug.datastructures.IfRange
+
+`werkzeug.http.parse_range_header(value, make_inclusive=True)`
+
+    
+Parses a range header into a `Range` object. If the header is missing or
+malformed `None` is returned. `ranges` is a list of `(start, stop)` tuples
+where the ranges are non-inclusive.
+
+Changelog
+
+New in version 0.7.
+
+Parameters
+
+    
+  * value (Optional[str]) – 
+  * make_inclusive (bool) – 
+
+Return type
+
+    
+Optional[werkzeug.datastructures.Range]
+
+`werkzeug.http.parse_content_range_header(value, on_update=None)`
+
+    
+Parses a range header into a `ContentRange` object or `None` if parsing is not
+possible.
+
+Changelog
+
+New in version 0.7.
+
+Parameters
+
+    
+  * value (Optional[str]) – a content range header to be parsed.
+  * on_update (Optional[Callable[[werkzeug.datastructures.ContentRange], None]]) – an optional callable that is called every time a value on the `ContentRange` object is changed.
+
+Return type
+
+    
+Optional[werkzeug.datastructures.ContentRange]
+
+## Header Utilities
+
+The following utilities operate on HTTP headers well but do not parse them.
+They are useful if you’re dealing with conditional responses or if you want to
+proxy arbitrary requests but want to remove WSGI-unsupported hop-by-hop
+headers. Also there is a function to create HTTP header strings from the
+parsed data.
+
+`werkzeug.http.is_entity_header(header)`
+
+    
+Check if a header is an entity header.
+
+Changelog
+
+New in version 0.5.
+
+Parameters
+
+    
+header (str) – the header to test.
+
+Returns
+
+    
+`True` if it’s an entity header, `False` otherwise.
+
+Return type
+
+    
+bool
+
+`werkzeug.http.is_hop_by_hop_header(header)`
+
+    
+Check if a header is an HTTP/1.1 “Hop-by-Hop” header.
+
+Changelog
+
+New in version 0.5.
+
+Parameters
+
+    
+header (str) – the header to test.
+
+Returns
+
+    
+`True` if it’s an HTTP/1.1 “Hop-by-Hop” header, `False` otherwise.
+
+Return type
+
+    
+bool
+
+`werkzeug.http.remove_entity_headers(headers, allowed=('expires', 'content-
+location'))`
+
+    
+Remove all entity headers from a list or `Headers` object. This operation
+works in-place. `Expires` and `Content-Location` headers are by default not
+removed. The reason for this is RFC 2616 section 10.3.5 which specifies some
+entity headers that should be sent.
+
+Changelog
+
+Changed in version 0.5: added `allowed` parameter.
+
+Parameters
+
+    
+  * headers (Union[werkzeug.datastructures.Headers, List[Tuple[str, str]]]) – a list or `Headers` object.
+  * allowed (Iterable[str]) – a list of headers that should still be allowed even though they are entity headers.
+
+Return type
+
+    
+None
+
+`werkzeug.http.remove_hop_by_hop_headers(headers)`
+
+    
+Remove all HTTP/1.1 “Hop-by-Hop” headers from a list or `Headers` object. This
+operation works in-place.
+
+Changelog
+
+New in version 0.5.
+
+Parameters
+
+    
+headers (Union[werkzeug.datastructures.Headers, List[Tuple[str, str]]]) – a
+list or `Headers` object.
+
+Return type
+
+    
+None
+
+`werkzeug.http.is_byte_range_valid(start, stop, length)`
+
+    
+Checks if a given byte content range is valid for the given length.
+
+Changelog
+
+New in version 0.7.
+
+Parameters
+
+    
+  * start (Optional[int]) – 
+  * stop (Optional[int]) – 
+  * length (Optional[int]) – 
+
+Return type
+
+    
+bool
+
+`werkzeug.http.quote_header_value(value, extra_chars='', allow_token=True)`
+
+    
+Quote a header value if necessary.
+
+Changelog
+
+New in version 0.5.
+
+Parameters
+
+    
+  * value (Union[str, int]) – the value to quote.
+  * extra_chars (str) – a list of extra characters to skip quoting.
+  * allow_token (bool) – if this is enabled token values are returned unchanged.
+
+Return type
+
+    
+str
+
+`werkzeug.http.unquote_header_value(value, is_filename=False)`
+
+    
+Unquotes a header value. (Reversal of `quote_header_value()`). This does not
+use the real unquoting but what browsers are actually using for quoting.
+
+Changelog
+
+New in version 0.5.
+
+Parameters
+
+    
+  * value (str) – the header value to unquote.
+  * is_filename (bool) – The value represents a filename or path.
+
+Return type
+
+    
+str
+
+`werkzeug.http.dump_header(iterable, allow_token=True)`
+
+    
+Dump an HTTP header again. This is the reversal of `parse_list_header()`,
+`parse_set_header()` and `parse_dict_header()`. This also quotes strings that
+include an equals sign unless you pass it as dict of key, value pairs.
+
+    
+    >>> dump_header({'foo': 'bar baz'})
+    'foo="bar baz"'
+    >>> dump_header(('foo', 'bar baz'))
+    'foo, "bar baz"'
+    
+Parameters
+
+    
+  * iterable (Union[Dict[str, Union[str, int]], Iterable[str]]) – the iterable or dict of values to quote.
+  * allow_token (bool) – if set to `False` tokens as values are disallowed. See `quote_header_value()` for more details.
+
+Return type
+
+    
+str
+
+## Cookies
+
+`werkzeug.http.parse_cookie(header, charset='utf-8', errors='replace',
+cls=None)`
+
+    
+Parse a cookie from a string or WSGI environ.
+
+The same key can be provided multiple times, the values are stored in-order.
+The default `MultiDict` will have the first value first, and all values can be
+retrieved with `MultiDict.getlist()`.
+
+Parameters
+
+    
+  * header (Optional[Union[WSGIEnvironment, str, bytes]]) – The cookie header as a string, or a WSGI environ dict with a `HTTP_COOKIE` key.
+  * charset (str) – The charset for the cookie values.
+  * errors (str) – The error behavior for the charset decoding.
+  * cls (Optional[Type[ds.MultiDict]]) – A dict-like class to store the parsed cookies in. Defaults to `MultiDict`.
+
+Return type
+
+    
+ds.MultiDict[str, str]
+
+Changelog
+
+Changed in version 1.0.0: Returns a `MultiDict` instead of a
+`TypeConversionDict`.
+
+Changed in version 0.5: Returns a `TypeConversionDict` instead of a regular
+dict. The `cls` parameter was added.
+
+`werkzeug.http.dump_cookie(key, value='', max_age=None, expires=None,
+path='/', domain=None, secure=False, httponly=False, charset='utf-8',
+sync_expires=True, max_size=4093, samesite=None)`
+
+    
+Create a Set-Cookie header without the `Set-Cookie` prefix.
+
+The return value is usually restricted to ascii as the vast majority of values
+are properly escaped, but that is no guarantee. It’s tunneled through latin1
+as required by PEP 3333.
+
+The return value is not ASCII safe if the key contains unicode characters.
+This is technically against the specification but happens in the wild. It’s
+strongly recommended to not use non-ASCII values for the keys.
+
+Parameters
+
+    
+  * max_age (Optional[Union[datetime.timedelta, int]]) – should be a number of seconds, or `None` (default) if the cookie should last only as long as the client’s browser session. Additionally `timedelta` objects are accepted, too.
+  * expires (Optional[Union[str, datetime.datetime, int, float]]) – should be a `datetime` object or unix timestamp.
+  * path (Optional[str]) – limits the cookie to a given path, per default it will span the whole domain.
+  * domain (Optional[str]) – Use this if you want to set a cross-domain cookie. For example, `domain=".example.com"` will set a cookie that is readable by the domain `www.example.com`, `foo.example.com` etc. Otherwise, a cookie will only be readable by the domain that set it.
+  * secure (bool) – The cookie will only be available via HTTPS
+  * httponly (bool) – disallow JavaScript to access the cookie. This is an extension to the cookie standard and probably not supported by all browsers.
+  * charset (str) – the encoding for string values.
+  * sync_expires (bool) – automatically set expires if max_age is defined but expires not.
+  * max_size (int) – Warn if the final header value exceeds this size. The default, 4093, should be safely supported by most browsers. Set to 0 to disable this check.
+  * samesite (Optional[str]) – Limits the scope of the cookie such that it will only be attached to requests if those requests are same-site.
+  * key (str) – 
+  * value (Union[bytes, str]) – 
+
+Return type
+
+    
+str
+
+Changelog
+
+Changed in version 1.0.0: The string `'None'` is accepted for `samesite`.
+
+## Conditional Response Helpers
+
+For conditional responses the following functions might be useful:
+
+`werkzeug.http.parse_etags(value)`
+
+    
+Parse an etag header.
+
+Parameters
+
+    
+value (Optional[str]) – the tag header to parse
+
+Returns
+
+    
+an `ETags` object.
+
+Return type
+
+    
+werkzeug.datastructures.ETags
+
+`werkzeug.http.quote_etag(etag, weak=False)`
+
+    
+Quote an etag.
+
+Parameters
+
+    
+  * etag (str) – the etag to quote.
+  * weak (bool) – set to `True` to tag it “weak”.
+
+Return type
+
+    
+str
+
+`werkzeug.http.unquote_etag(etag)`
+
+    
+Unquote a single etag:
+
+    
+    >>> unquote_etag('W/"bar"')
+    ('bar', True)
+    >>> unquote_etag('"bar"')
+    ('bar', False)
+    
+Parameters
+
+    
+etag (Optional[str]) – the etag identifier to unquote.
+
+Returns
+
+    
+a `(etag, weak)` tuple.
+
+Return type
+
+    
+Union[Tuple[str, bool], Tuple[None, None]]
+
+`werkzeug.http.generate_etag(data)`
+
+    
+Generate an etag for some data.
+
+Changed in version 2.0: Use SHA-1. MD5 may not be available in some
+environments.
+
+Parameters
+
+    
+data (bytes) –
+
+Return type
+
+    
+str
+
+`werkzeug.http.is_resource_modified(environ, etag=None, data=None,
+last_modified=None, ignore_if_range=True)`
+
+    
+Convenience method for conditional requests.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – the WSGI environment of the request to be checked.
+  * etag (Optional[str]) – the etag for the response for comparison.
+  * data (Optional[bytes]) – or alternatively the data of the response to automatically generate an etag using `generate_etag()`.
+  * last_modified (Optional[Union[datetime.datetime, str]]) – an optional date of the last modification.
+  * ignore_if_range (bool) – If `False`, `If-Range` header will be taken into account.
+
+Returns
+
+    
+`True` if the resource was modified, otherwise `False`.
+
+Return type
+
+    
+bool
+
+Changed in version 2.0: SHA-1 is used to generate an etag value for the data.
+MD5 may not be available in some environments.
+
+Changelog
+
+Changed in version 1.0.0: The check is run for methods other than `GET` and
+`HEAD`.
+
+## Constants
+
+`werkzeug.http.HTTP_STATUS_CODES`
+
+    
+A dict of status code -> default status message pairs. This is used by the
+wrappers and other places where an integer status code is expanded to a string
+throughout Werkzeug.
+
+## Form Data Parsing
+
+Werkzeug provides the form parsing functions separately from the request
+object so that you can access form data from a plain WSGI environment.
+
+The following formats are currently supported by the form data parser:
+
+  * `application/x-www-form-urlencoded`
+  * `multipart/form-data`
+
+Nested multipart is not currently supported (Werkzeug 0.9), but it isn’t used
+by any of the modern web browsers.
+
+Usage example:
+
+    
+    >>> from io import BytesIO
+    >>> from werkzeug.formparser import parse_form_data
+    >>> data = (
+    ...     b'--foo\r\nContent-Disposition: form-data; name="test"\r\n'
+    ...     b"\r\nHello World!\r\n--foo--"
+    ... )
+    >>> environ = {
+    ...     "wsgi.input": BytesIO(data),
+    ...     "CONTENT_LENGTH": str(len(data)),
+    ...     "CONTENT_TYPE": "multipart/form-data; boundary=foo",
+    ...     "REQUEST_METHOD": "POST",
+    ... }
+    >>> stream, form, files = parse_form_data(environ)
+    >>> stream.read()
+    b''
+    >>> form['test']
+    'Hello World!'
+    >>> not files
+    True
+    
+Normally the WSGI environment is provided by the WSGI gateway with the
+incoming data as part of it. If you want to generate such fake-WSGI
+environments for unittesting you might want to use the `create_environ()`
+function or the `EnvironBuilder` instead.
+
+`class werkzeug.formparser.FormDataParser(stream_factory=None,
+charset='utf-8', errors='replace', max_form_memory_size=None,
+max_content_length=None, cls=None, silent=True)`
+
+    
+This class implements parsing of form data for Werkzeug. By itself it can
+parse multipart and url encoded form data. It can be subclassed and extended
+but for most mimetypes it is a better idea to use the untouched stream and
+expose it as separate attributes on a request object.
+
+Changelog
+
+New in version 0.8.
+
+Parameters
+
+    
+  * stream_factory (Optional[TStreamFactory]) – An optional callable that returns a new read and writeable file descriptor. This callable works the same as `Response._get_file_stream()`.
+  * charset (str) – The character set for URL and url encoded form data.
+  * errors (str) – The encoding error behavior.
+  * max_form_memory_size (Optional[int]) – the maximum number of bytes to be accepted for in-memory stored form data. If the data exceeds the value specified an `RequestEntityTooLarge` exception is raised.
+  * max_content_length (Optional[int]) – If this is provided and the transmitted data is longer than this value an `RequestEntityTooLarge` exception is raised.
+  * cls (Optional[Type[werkzeug.datastructures.MultiDict]]) – an optional dict class to use. If this is not specified or `None` the default `MultiDict` is used.
+  * silent (bool) – If set to False parsing errors will not be caught.
+
+Return type
+
+    
+None
+
+`werkzeug.formparser.parse_form_data(environ, stream_factory=None,
+charset='utf-8', errors='replace', max_form_memory_size=None,
+max_content_length=None, cls=None, silent=True)`
+
+    
+Parse the form data in the environ and return it as tuple in the form
+`(stream, form, files)`. You should only call this method if the transport
+method is `POST`, `PUT`, or `PATCH`.
+
+If the mimetype of the data transmitted is `multipart/form-data` the files
+multidict will be filled with `FileStorage` objects. If the mimetype is
+unknown the input stream is wrapped and returned as first argument, else the
+stream is empty.
+
+This is a shortcut for the common usage of `FormDataParser`.
+
+Have a look at Dealing with Request Data for more details.
+
+Changelog
+
+New in version 0.5.1: The optional `silent` flag was added.
+
+New in version 0.5: The `max_form_memory_size`, `max_content_length` and `cls`
+parameters were added.
+
+Parameters
+
+    
+  * environ (WSGIEnvironment) – the WSGI environment to be used for parsing.
+  * stream_factory (Optional[TStreamFactory]) – An optional callable that returns a new read and writeable file descriptor. This callable works the same as `Response._get_file_stream()`.
+  * charset (str) – The character set for URL and url encoded form data.
+  * errors (str) – The encoding error behavior.
+  * max_form_memory_size (Optional[int]) – the maximum number of bytes to be accepted for in-memory stored form data. If the data exceeds the value specified an `RequestEntityTooLarge` exception is raised.
+  * max_content_length (Optional[int]) – If this is provided and the transmitted data is longer than this value an `RequestEntityTooLarge` exception is raised.
+  * cls (Optional[Type[werkzeug.datastructures.MultiDict]]) – an optional dict class to use. If this is not specified or `None` the default `MultiDict` is used.
+  * silent (bool) – If set to False parsing errors will not be caught.
+
+Returns
+
+    
+A tuple in the form `(stream, form, files)`.
+
+Return type
+
+    
+t_parse_result
+
+© 2007–2021 Pallets  
+Licensed under the BSD 3-clause License.  
+https://werkzeug.palletsprojects.com/en/2.0.x/http/
+

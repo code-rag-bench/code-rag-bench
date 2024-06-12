@@ -1,0 +1,178 @@
+<h1 id="aggregation">Aggregation</h1> <p id="s-aggregation">The topic guide on <a class="reference internal" href="queries"><span class="doc">Django’s database-abstraction API</span></a> described the way that you can use Django queries that create, retrieve, update and delete individual objects. However, sometimes you will need to retrieve values that are derived by summarizing or <em>aggregating</em> a collection of objects. This topic guide describes the ways that aggregate values can be generated and returned using Django queries.</p> <p>Throughout this guide, we’ll refer to the following models. These models are used to track the inventory for a series of online bookstores:</p> <pre data-language="python">from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+    age = models.IntegerField()
+
+class Publisher(models.Model):
+    name = models.CharField(max_length=300)
+
+class Book(models.Model):
+    name = models.CharField(max_length=300)
+    pages = models.IntegerField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    rating = models.FloatField()
+    authors = models.ManyToManyField(Author)
+    publisher = models.ForeignKey(Publisher, on_delete=models.CASCADE)
+    pubdate = models.DateField()
+
+class Store(models.Model):
+    name = models.CharField(max_length=300)
+    books = models.ManyToManyField(Book)
+</pre>  <h2 id="cheat-sheet">Cheat sheet</h2> <p id="s-cheat-sheet">In a hurry? Here’s how to do common aggregate queries, assuming the models above:</p> <pre data-language="python"># Total number of books.
+&gt;&gt;&gt; Book.objects.count()
+2452
+
+# Total number of books with publisher=BaloneyPress
+&gt;&gt;&gt; Book.objects.filter(publisher__name='BaloneyPress').count()
+73
+
+# Average price across all books.
+&gt;&gt;&gt; from django.db.models import Avg
+&gt;&gt;&gt; Book.objects.all().aggregate(Avg('price'))
+{'price__avg': 34.35}
+
+# Max price across all books.
+&gt;&gt;&gt; from django.db.models import Max
+&gt;&gt;&gt; Book.objects.all().aggregate(Max('price'))
+{'price__max': Decimal('81.20')}
+
+# Difference between the highest priced book and the average price of all books.
+&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; Book.objects.aggregate(
+...     price_diff=Max('price', output_field=FloatField()) - Avg('price'))
+{'price_diff': 46.85}
+
+# All the following queries involve traversing the Book&lt;-&gt;Publisher
+# foreign key relationship backwards.
+
+# Each publisher, each with a count of books as a "num_books" attribute.
+&gt;&gt;&gt; from django.db.models import Count
+&gt;&gt;&gt; pubs = Publisher.objects.annotate(num_books=Count('book'))
+&gt;&gt;&gt; pubs
+&lt;QuerySet [&lt;Publisher: BaloneyPress&gt;, &lt;Publisher: SalamiPress&gt;, ...]&gt;
+&gt;&gt;&gt; pubs[0].num_books
+73
+
+# Each publisher, with a separate count of books with a rating above and below 5
+&gt;&gt;&gt; from django.db.models import Q
+&gt;&gt;&gt; above_5 = Count('book', filter=Q(book__rating__gt=5))
+&gt;&gt;&gt; below_5 = Count('book', filter=Q(book__rating__lte=5))
+&gt;&gt;&gt; pubs = Publisher.objects.annotate(below_5=below_5).annotate(above_5=above_5)
+&gt;&gt;&gt; pubs[0].above_5
+23
+&gt;&gt;&gt; pubs[0].below_5
+12
+
+# The top 5 publishers, in order by number of books.
+&gt;&gt;&gt; pubs = Publisher.objects.annotate(num_books=Count('book')).order_by('-num_books')[:5]
+&gt;&gt;&gt; pubs[0].num_books
+1323
+</pre>   <h2 id="generating-aggregates-over-a-queryset">Generating aggregates over a <code>QuerySet</code>
+</h2> <p id="s-generating-aggregates-over-a-queryset">Django provides two ways to generate aggregates. The first way is to generate summary values over an entire <code>QuerySet</code>. For example, say you wanted to calculate the average price of all books available for sale. Django’s query syntax provides a means for describing the set of all books:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.all()
+</pre> <p>What we need is a way to calculate summary values over the objects that belong to this <code>QuerySet</code>. This is done by appending an <code>aggregate()</code> clause onto the <code>QuerySet</code>:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Avg
+&gt;&gt;&gt; Book.objects.all().aggregate(Avg('price'))
+{'price__avg': 34.35}
+</pre> <p>The <code>all()</code> is redundant in this example, so this could be simplified to:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.aggregate(Avg('price'))
+{'price__avg': 34.35}
+</pre> <p>The argument to the <code>aggregate()</code> clause describes the aggregate value that we want to compute - in this case, the average of the <code>price</code> field on the <code>Book</code> model. A list of the aggregate functions that are available can be found in the <a class="reference internal" href="../../ref/models/querysets#aggregation-functions"><span class="std std-ref">QuerySet reference</span></a>.</p> <p><code>aggregate()</code> is a terminal clause for a <code>QuerySet</code> that, when invoked, returns a dictionary of name-value pairs. The name is an identifier for the aggregate value; the value is the computed aggregate. The name is automatically generated from the name of the field and the aggregate function. If you want to manually specify a name for the aggregate value, you can do so by providing that name when you specify the aggregate clause:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.aggregate(average_price=Avg('price'))
+{'average_price': 34.35}
+</pre> <p>If you want to generate more than one aggregate, you add another argument to the <code>aggregate()</code> clause. So, if we also wanted to know the maximum and minimum price of all books, we would issue the query:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Avg, Max, Min
+&gt;&gt;&gt; Book.objects.aggregate(Avg('price'), Max('price'), Min('price'))
+{'price__avg': 34.35, 'price__max': Decimal('81.20'), 'price__min': Decimal('12.99')}
+</pre>   <h2 id="generating-aggregates-for-each-item-in-a-queryset">Generating aggregates for each item in a <code>QuerySet</code>
+</h2> <p id="s-generating-aggregates-for-each-item-in-a-queryset">The second way to generate summary values is to generate an independent summary for each object in a <a class="reference internal" href="../../ref/models/querysets#django.db.models.query.QuerySet" title="django.db.models.query.QuerySet"><code>QuerySet</code></a>. For example, if you are retrieving a list of books, you may want to know how many authors contributed to each book. Each Book has a many-to-many relationship with the Author; we want to summarize this relationship for each book in the <code>QuerySet</code>.</p> <p>Per-object summaries can be generated using the <a class="reference internal" href="../../ref/models/querysets#django.db.models.query.QuerySet.annotate" title="django.db.models.query.QuerySet.annotate"><code>annotate()</code></a> clause. When an <code>annotate()</code> clause is specified, each object in the <code>QuerySet</code> will be annotated with the specified values.</p> <p>The syntax for these annotations is identical to that used for the <a class="reference internal" href="../../ref/models/querysets#django.db.models.query.QuerySet.aggregate" title="django.db.models.query.QuerySet.aggregate"><code>aggregate()</code></a> clause. Each argument to <code>annotate()</code> describes an aggregate that is to be calculated. For example, to annotate books with the number of authors:</p> <pre data-language="python"># Build an annotated queryset
+&gt;&gt;&gt; from django.db.models import Count
+&gt;&gt;&gt; q = Book.objects.annotate(Count('authors'))
+# Interrogate the first object in the queryset
+&gt;&gt;&gt; q[0]
+&lt;Book: The Definitive Guide to Django&gt;
+&gt;&gt;&gt; q[0].authors__count
+2
+# Interrogate the second object in the queryset
+&gt;&gt;&gt; q[1]
+&lt;Book: Practical Django Projects&gt;
+&gt;&gt;&gt; q[1].authors__count
+1
+</pre> <p>As with <code>aggregate()</code>, the name for the annotation is automatically derived from the name of the aggregate function and the name of the field being aggregated. You can override this default name by providing an alias when you specify the annotation:</p> <pre data-language="python">&gt;&gt;&gt; q = Book.objects.annotate(num_authors=Count('authors'))
+&gt;&gt;&gt; q[0].num_authors
+2
+&gt;&gt;&gt; q[1].num_authors
+1
+</pre> <p>Unlike <code>aggregate()</code>, <code>annotate()</code> is <em>not</em> a terminal clause. The output of the <code>annotate()</code> clause is a <code>QuerySet</code>; this <code>QuerySet</code> can be modified using any other <code>QuerySet</code> operation, including <code>filter()</code>, <code>order_by()</code>, or even additional calls to <code>annotate()</code>.</p>  <h3 id="id1">Combining multiple aggregations</h3> <p id="s-combining-multiple-aggregations">Combining multiple aggregations with <code>annotate()</code> will <a class="reference external" href="https://code.djangoproject.com/ticket/10060">yield the wrong results</a> because joins are used instead of subqueries:</p> <pre data-language="python">&gt;&gt;&gt; book = Book.objects.first()
+&gt;&gt;&gt; book.authors.count()
+2
+&gt;&gt;&gt; book.store_set.count()
+3
+&gt;&gt;&gt; q = Book.objects.annotate(Count('authors'), Count('store'))
+&gt;&gt;&gt; q[0].authors__count
+6
+&gt;&gt;&gt; q[0].store__count
+6
+</pre> <p>For most aggregates, there is no way to avoid this problem, however, the <a class="reference internal" href="../../ref/models/querysets#django.db.models.Count" title="django.db.models.Count"><code>Count</code></a> aggregate has a <code>distinct</code> parameter that may help:</p> <pre data-language="python">&gt;&gt;&gt; q = Book.objects.annotate(Count('authors', distinct=True), Count('store', distinct=True))
+&gt;&gt;&gt; q[0].authors__count
+2
+&gt;&gt;&gt; q[0].store__count
+3
+</pre> <div class="admonition-if-in-doubt-inspect-the-sql-query admonition"> <p class="first admonition-title">If in doubt, inspect the SQL query!</p> <p class="last">In order to understand what happens in your query, consider inspecting the <code>query</code> property of your <code>QuerySet</code>.</p> </div>    <h2 id="joins-and-aggregates">Joins and aggregates</h2> <p id="s-joins-and-aggregates">So far, we have dealt with aggregates over fields that belong to the model being queried. However, sometimes the value you want to aggregate will belong to a model that is related to the model you are querying.</p> <p>When specifying the field to be aggregated in an aggregate function, Django will allow you to use the same <a class="reference internal" href="queries#field-lookups-intro"><span class="std std-ref">double underscore notation</span></a> that is used when referring to related fields in filters. Django will then handle any table joins that are required to retrieve and aggregate the related value.</p> <p>For example, to find the price range of books offered in each store, you could use the annotation:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Max, Min
+&gt;&gt;&gt; Store.objects.annotate(min_price=Min('books__price'), max_price=Max('books__price'))
+</pre> <p>This tells Django to retrieve the <code>Store</code> model, join (through the many-to-many relationship) with the <code>Book</code> model, and aggregate on the price field of the book model to produce a minimum and maximum value.</p> <p>The same rules apply to the <code>aggregate()</code> clause. If you wanted to know the lowest and highest price of any book that is available for sale in any of the stores, you could use the aggregate:</p> <pre data-language="python">&gt;&gt;&gt; Store.objects.aggregate(min_price=Min('books__price'), max_price=Max('books__price'))
+</pre> <p>Join chains can be as deep as you require. For example, to extract the age of the youngest author of any book available for sale, you could issue the query:</p> <pre data-language="python">&gt;&gt;&gt; Store.objects.aggregate(youngest_age=Min('books__authors__age'))
+</pre>  <h3 id="following-relationships-backwards">Following relationships backwards</h3> <p id="s-following-relationships-backwards">In a way similar to <a class="reference internal" href="queries#lookups-that-span-relationships"><span class="std std-ref">Lookups that span relationships</span></a>, aggregations and annotations on fields of models or models that are related to the one you are querying can include traversing “reverse” relationships. The lowercase name of related models and double-underscores are used here too.</p> <p>For example, we can ask for all publishers, annotated with their respective total book stock counters (note how we use <code>'book'</code> to specify the <code>Publisher</code> -&gt; <code>Book</code> reverse foreign key hop):</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Avg, Count, Min, Sum
+&gt;&gt;&gt; Publisher.objects.annotate(Count('book'))
+</pre> <p>(Every <code>Publisher</code> in the resulting <code>QuerySet</code> will have an extra attribute called <code>book__count</code>.)</p> <p>We can also ask for the oldest book of any of those managed by every publisher:</p> <pre data-language="python">&gt;&gt;&gt; Publisher.objects.aggregate(oldest_pubdate=Min('book__pubdate'))
+</pre> <p>(The resulting dictionary will have a key called <code>'oldest_pubdate'</code>. If no such alias were specified, it would be the rather long <code>'book__pubdate__min'</code>.)</p> <p>This doesn’t apply just to foreign keys. It also works with many-to-many relations. For example, we can ask for every author, annotated with the total number of pages considering all the books the author has (co-)authored (note how we use <code>'book'</code> to specify the <code>Author</code> -&gt; <code>Book</code> reverse many-to-many hop):</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.annotate(total_pages=Sum('book__pages'))
+</pre> <p>(Every <code>Author</code> in the resulting <code>QuerySet</code> will have an extra attribute called <code>total_pages</code>. If no such alias were specified, it would be the rather long <code>book__pages__sum</code>.)</p> <p>Or ask for the average rating of all the books written by author(s) we have on file:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.aggregate(average_rating=Avg('book__rating'))
+</pre> <p>(The resulting dictionary will have a key called <code>'average_rating'</code>. If no such alias were specified, it would be the rather long <code>'book__rating__avg'</code>.)</p>    <h2 id="aggregations-and-other-queryset-clauses">Aggregations and other <code>QuerySet</code> clauses</h2>  <h3 id="filter-and-exclude">
+<code>filter()</code> and <code>exclude()</code>
+</h3> <p id="s-aggregations-and-other-queryset-clauses">Aggregates can also participate in filters. Any <code>filter()</code> (or <code>exclude()</code>) applied to normal model fields will have the effect of constraining the objects that are considered for aggregation.</p> <p>When used with an <code>annotate()</code> clause, a filter has the effect of constraining the objects for which an annotation is calculated. For example, you can generate an annotated list of all books that have a title starting with “Django” using the query:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Avg, Count
+&gt;&gt;&gt; Book.objects.filter(name__startswith="Django").annotate(num_authors=Count('authors'))
+</pre> <p>When used with an <code>aggregate()</code> clause, a filter has the effect of constraining the objects over which the aggregate is calculated. For example, you can generate the average price of all books with a title that starts with “Django” using the query:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.filter(name__startswith="Django").aggregate(Avg('price'))
+</pre>  <h4 id="id2">Filtering on annotations</h4> <p id="s-filtering-on-annotations">Annotated values can also be filtered. The alias for the annotation can be used in <code>filter()</code> and <code>exclude()</code> clauses in the same way as any other model field.</p> <p>For example, to generate a list of books that have more than one author, you can issue the query:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.annotate(num_authors=Count('authors')).filter(num_authors__gt=1)
+</pre> <p>This query generates an annotated result set, and then generates a filter based upon that annotation.</p> <p>If you need two annotations with two separate filters you can use the <code>filter</code> argument with any aggregate. For example, to generate a list of authors with a count of highly rated books:</p> <pre data-language="python">&gt;&gt;&gt; highly_rated = Count('book', filter=Q(book__rating__gte=7))
+&gt;&gt;&gt; Author.objects.annotate(num_books=Count('book'), highly_rated_books=highly_rated)
+</pre> <p>Each <code>Author</code> in the result set will have the <code>num_books</code> and <code>highly_rated_books</code> attributes. See also <a class="reference internal" href="../../ref/models/conditional-expressions#conditional-aggregation"><span class="std std-ref">Conditional aggregation</span></a>.</p> <div class="admonition-choosing-between-filter-and-queryset-filter admonition"> <p class="first admonition-title">Choosing between <code>filter</code> and <code>QuerySet.filter()</code></p> <p class="last">Avoid using the <code>filter</code> argument with a single annotation or aggregation. It’s more efficient to use <code>QuerySet.filter()</code> to exclude rows. The aggregation <code>filter</code> argument is only useful when using two or more aggregations over the same relations with different conditionals.</p> </div>   <h4 id="order-of-annotate-and-filter-clauses">Order of <code>annotate()</code> and <code>filter()</code> clauses</h4> <p id="s-order-of-annotate-and-filter-clauses">When developing a complex query that involves both <code>annotate()</code> and <code>filter()</code> clauses, pay particular attention to the order in which the clauses are applied to the <code>QuerySet</code>.</p> <p>When an <code>annotate()</code> clause is applied to a query, the annotation is computed over the state of the query up to the point where the annotation is requested. The practical implication of this is that <code>filter()</code> and <code>annotate()</code> are not commutative operations.</p> <p>Given:</p> <ul class="simple"> <li>Publisher A has two books with ratings 4 and 5.</li> <li>Publisher B has two books with ratings 1 and 4.</li> <li>Publisher C has one book with rating 1.</li> </ul> <p>Here’s an example with the <code>Count</code> aggregate:</p> <pre data-language="python">&gt;&gt;&gt; a, b = Publisher.objects.annotate(num_books=Count('book', distinct=True)).filter(book__rating__gt=3.0)
+&gt;&gt;&gt; a, a.num_books
+(&lt;Publisher: A&gt;, 2)
+&gt;&gt;&gt; b, b.num_books
+(&lt;Publisher: B&gt;, 2)
+
+&gt;&gt;&gt; a, b = Publisher.objects.filter(book__rating__gt=3.0).annotate(num_books=Count('book'))
+&gt;&gt;&gt; a, a.num_books
+(&lt;Publisher: A&gt;, 2)
+&gt;&gt;&gt; b, b.num_books
+(&lt;Publisher: B&gt;, 1)
+</pre> <p>Both queries return a list of publishers that have at least one book with a rating exceeding 3.0, hence publisher C is excluded.</p> <p>In the first query, the annotation precedes the filter, so the filter has no effect on the annotation. <code>distinct=True</code> is required to avoid a <a class="reference internal" href="#combining-multiple-aggregations"><span class="std std-ref">query bug</span></a>.</p> <p>The second query counts the number of books that have a rating exceeding 3.0 for each publisher. The filter precedes the annotation, so the filter constrains the objects considered when calculating the annotation.</p> <p>Here’s another example with the <code>Avg</code> aggregate:</p> <pre data-language="python">&gt;&gt;&gt; a, b = Publisher.objects.annotate(avg_rating=Avg('book__rating')).filter(book__rating__gt=3.0)
+&gt;&gt;&gt; a, a.avg_rating
+(&lt;Publisher: A&gt;, 4.5)  # (5+4)/2
+&gt;&gt;&gt; b, b.avg_rating
+(&lt;Publisher: B&gt;, 2.5)  # (1+4)/2
+
+&gt;&gt;&gt; a, b = Publisher.objects.filter(book__rating__gt=3.0).annotate(avg_rating=Avg('book__rating'))
+&gt;&gt;&gt; a, a.avg_rating
+(&lt;Publisher: A&gt;, 4.5)  # (5+4)/2
+&gt;&gt;&gt; b, b.avg_rating
+(&lt;Publisher: B&gt;, 4.0)  # 4/1 (book with rating 1 excluded)
+</pre> <p>The first query asks for the average rating of all a publisher’s books for publisher’s that have at least one book with a rating exceeding 3.0. The second query asks for the average of a publisher’s book’s ratings for only those ratings exceeding 3.0.</p> <p>It’s difficult to intuit how the ORM will translate complex querysets into SQL queries so when in doubt, inspect the SQL with <code>str(queryset.query)</code> and write plenty of tests.</p>    <h3 id="order-by"><code>order_by()</code></h3> <p id="s-order-by">Annotations can be used as a basis for ordering. When you define an <code>order_by()</code> clause, the aggregates you provide can reference any alias defined as part of an <code>annotate()</code> clause in the query.</p> <p>For example, to order a <code>QuerySet</code> of books by the number of authors that have contributed to the book, you could use the following query:</p> <pre data-language="python">&gt;&gt;&gt; Book.objects.annotate(num_authors=Count('authors')).order_by('num_authors')
+</pre>   <h3 id="values"><code>values()</code></h3> <p id="s-values">Ordinarily, annotations are generated on a per-object basis - an annotated <code>QuerySet</code> will return one result for each object in the original <code>QuerySet</code>. However, when a <code>values()</code> clause is used to constrain the columns that are returned in the result set, the method for evaluating annotations is slightly different. Instead of returning an annotated result for each result in the original <code>QuerySet</code>, the original results are grouped according to the unique combinations of the fields specified in the <code>values()</code> clause. An annotation is then provided for each unique group; the annotation is computed over all members of the group.</p> <p>For example, consider an author query that attempts to find out the average rating of books written by each author:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.annotate(average_rating=Avg('book__rating'))
+</pre> <p>This will return one result for each author in the database, annotated with their average book rating.</p> <p>However, the result will be slightly different if you use a <code>values()</code> clause:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.values('name').annotate(average_rating=Avg('book__rating'))
+</pre> <p>In this example, the authors will be grouped by name, so you will only get an annotated result for each <em>unique</em> author name. This means if you have two authors with the same name, their results will be merged into a single result in the output of the query; the average will be computed as the average over the books written by both authors.</p>  <h4 id="order-of-annotate-and-values-clauses">Order of <code>annotate()</code> and <code>values()</code> clauses</h4> <p id="s-order-of-annotate-and-values-clauses">As with the <code>filter()</code> clause, the order in which <code>annotate()</code> and <code>values()</code> clauses are applied to a query is significant. If the <code>values()</code> clause precedes the <code>annotate()</code>, the annotation will be computed using the grouping described by the <code>values()</code> clause.</p> <p>However, if the <code>annotate()</code> clause precedes the <code>values()</code> clause, the annotations will be generated over the entire query set. In this case, the <code>values()</code> clause only constrains the fields that are generated on output.</p> <p>For example, if we reverse the order of the <code>values()</code> and <code>annotate()</code> clause from our previous example:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.annotate(average_rating=Avg('book__rating')).values('name', 'average_rating')
+</pre> <p>This will now yield one unique result for each author; however, only the author’s name and the <code>average_rating</code> annotation will be returned in the output data.</p> <p>You should also note that <code>average_rating</code> has been explicitly included in the list of values to be returned. This is required because of the ordering of the <code>values()</code> and <code>annotate()</code> clause.</p> <p>If the <code>values()</code> clause precedes the <code>annotate()</code> clause, any annotations will be automatically added to the result set. However, if the <code>values()</code> clause is applied after the <code>annotate()</code> clause, you need to explicitly include the aggregate column.</p>   <h4 id="aggregation-ordering-interaction">Interaction with <code>order_by()</code>
+</h4> <p id="s-interaction-with-order-by">Fields that are mentioned in the <code>order_by()</code> part of a queryset are used when selecting the output data, even if they are not otherwise specified in the <code>values()</code> call. These extra fields are used to group “like” results together and they can make otherwise identical result rows appear to be separate. This shows up, particularly, when counting things.</p> <p>By way of example, suppose you have a model like this:</p> <pre data-language="python">from django.db import models
+
+class Item(models.Model):
+    name = models.CharField(max_length=10)
+    data = models.IntegerField()
+</pre> <p>If you want to count how many times each distinct <code>data</code> value appears in an ordered queryset, you might try this:</p> <pre data-language="python">items = Item.objects.order_by('name')
+# Warning: not quite correct!
+items.values('data').annotate(Count('id'))
+</pre> <p>…which will group the <code>Item</code> objects by their common <code>data</code> values and then count the number of <code>id</code> values in each group. Except that it won’t quite work. The ordering by <code>name</code> will also play a part in the grouping, so this query will group by distinct <code>(data, name)</code> pairs, which isn’t what you want. Instead, you should construct this queryset:</p> <pre data-language="python">items.values('data').annotate(Count('id')).order_by()
+</pre> <p>…clearing any ordering in the query. You could also order by, say, <code>data</code> without any harmful effects, since that is already playing a role in the query.</p> <p>This behavior is the same as that noted in the queryset documentation for <a class="reference internal" href="../../ref/models/querysets#django.db.models.query.QuerySet.distinct" title="django.db.models.query.QuerySet.distinct"><code>distinct()</code></a> and the general rule is the same: normally you won’t want extra columns playing a part in the result, so clear out the ordering, or at least make sure it’s restricted only to those fields you also select in a <code>values()</code> call.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">You might reasonably ask why Django doesn’t remove the extraneous columns for you. The main reason is consistency with <code>distinct()</code> and other places: Django <strong>never</strong> removes ordering constraints that you have specified (and we can’t change those other methods’ behavior, as that would violate our <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/misc/api-stability/"><span class="doc">API stability</span></a> policy).</p> </div>    <h3 id="aggregating-annotations">Aggregating annotations</h3> <p id="s-aggregating-annotations">You can also generate an aggregate on the result of an annotation. When you define an <code>aggregate()</code> clause, the aggregates you provide can reference any alias defined as part of an <code>annotate()</code> clause in the query.</p> <p>For example, if you wanted to calculate the average number of authors per book you first annotate the set of books with the author count, then aggregate that author count, referencing the annotation field:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Avg, Count
+&gt;&gt;&gt; Book.objects.annotate(num_authors=Count('authors')).aggregate(Avg('num_authors'))
+{'num_authors__avg': 1.66}
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/db/aggregation/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/db/aggregation/</a>
+  </p>
+</div>

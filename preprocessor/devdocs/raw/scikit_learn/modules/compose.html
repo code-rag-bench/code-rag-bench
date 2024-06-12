@@ -1,0 +1,233 @@
+<h1 id="combining-estimators">6.1. Pipelines and composite estimators</h1> <p>Transformers are usually combined with classifiers, regressors or other estimators to build a composite estimator. The most common tool is a <a class="reference internal" href="#pipeline"><span class="std std-ref">Pipeline</span></a>. Pipeline is often used in combination with <a class="reference internal" href="#feature-union"><span class="std std-ref">FeatureUnion</span></a> which concatenates the output of transformers into a composite feature space. <a class="reference internal" href="#transformed-target-regressor"><span class="std std-ref">TransformedTargetRegressor</span></a> deals with transforming the <a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-target"><span class="xref std std-term">target</span></a> (i.e. log-transform <a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-y"><span class="xref std std-term">y</span></a>). In contrast, Pipelines only transform the observed data (<a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-X"><span class="xref std std-term">X</span></a>).</p>  <h2 id="pipeline">
+<span class="section-number">6.1.1. </span>Pipeline: chaining estimators</h2> <p id="pipeline-chaining-estimators"><a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> can be used to chain multiple estimators into one. This is useful as there is often a fixed sequence of steps in processing the data, for example feature selection, normalization and classification. <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> serves multiple purposes here:</p> <dl class="simple"> <dt>Convenience and encapsulation</dt>
+<dd>
+<p>You only have to call <a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-fit"><span class="xref std std-term">fit</span></a> and <a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-predict"><span class="xref std std-term">predict</span></a> once on your data to fit a whole sequence of estimators.</p> </dd> <dt>Joint parameter selection</dt>
+<dd>
+<p>You can <a class="reference internal" href="grid_search#grid-search"><span class="std std-ref">grid search</span></a> over parameters of all estimators in the pipeline at once.</p> </dd> <dt>Safety</dt>
+<dd>
+<p>Pipelines help avoid leaking statistics from your test data into the trained model in cross-validation, by ensuring that the same samples are used to train the transformers and predictors.</p> </dd> </dl> <p>All estimators in a pipeline, except the last one, must be transformers (i.e. must have a <a class="reference internal" href="https://scikit-learn.org/0.24/glossary.html#term-transform"><span class="xref std std-term">transform</span></a> method). The last estimator may be any type (transformer, classifier, etc.).</p>  <h3 id="usage">
+<span class="section-number">6.1.1.1. </span>Usage</h3>  <h4 id="construction">
+<span class="section-number">6.1.1.1.1. </span>Construction</h4> <p>The <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> is built using a list of <code>(key, value)</code> pairs, where the <code>key</code> is a string containing the name you want to give this step and <code>value</code> is an estimator object:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.pipeline import Pipeline
+&gt;&gt;&gt; from sklearn.svm import SVC
+&gt;&gt;&gt; from sklearn.decomposition import PCA
+&gt;&gt;&gt; estimators = [('reduce_dim', PCA()), ('clf', SVC())]
+&gt;&gt;&gt; pipe = Pipeline(estimators)
+&gt;&gt;&gt; pipe
+Pipeline(steps=[('reduce_dim', PCA()), ('clf', SVC())])
+</pre> <p>The utility function <a class="reference internal" href="generated/sklearn.pipeline.make_pipeline#sklearn.pipeline.make_pipeline" title="sklearn.pipeline.make_pipeline"><code>make_pipeline</code></a> is a shorthand for constructing pipelines; it takes a variable number of estimators and returns a pipeline, filling in the names automatically:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.pipeline import make_pipeline
+&gt;&gt;&gt; from sklearn.naive_bayes import MultinomialNB
+&gt;&gt;&gt; from sklearn.preprocessing import Binarizer
+&gt;&gt;&gt; make_pipeline(Binarizer(), MultinomialNB())
+Pipeline(steps=[('binarizer', Binarizer()), ('multinomialnb', MultinomialNB())])
+</pre>   <h4 id="accessing-steps">
+<span class="section-number">6.1.1.1.2. </span>Accessing steps</h4> <p>The estimators of a pipeline are stored as a list in the <code>steps</code> attribute, but can be accessed by index or name by indexing (with <code>[idx]</code>) the Pipeline:</p> <pre data-language="python">&gt;&gt;&gt; pipe.steps[0]
+('reduce_dim', PCA())
+&gt;&gt;&gt; pipe[0]
+PCA()
+&gt;&gt;&gt; pipe['reduce_dim']
+PCA()
+</pre> <p>Pipeline’s <code>named_steps</code> attribute allows accessing steps by name with tab completion in interactive environments:</p> <pre data-language="python">&gt;&gt;&gt; pipe.named_steps.reduce_dim is pipe['reduce_dim']
+True
+</pre> <p>A sub-pipeline can also be extracted using the slicing notation commonly used for Python Sequences such as lists or strings (although only a step of 1 is permitted). This is convenient for performing only some of the transformations (or their inverse):</p> <pre data-language="python">&gt;&gt;&gt; pipe[:1]
+Pipeline(steps=[('reduce_dim', PCA())])
+&gt;&gt;&gt; pipe[-1:]
+Pipeline(steps=[('clf', SVC())])
+</pre>   <h4 id="pipeline-nested-parameters">
+<span class="section-number">6.1.1.1.3. </span>Nested parameters</h4> <p id="nested-parameters">Parameters of the estimators in the pipeline can be accessed using the <code>&lt;estimator&gt;__&lt;parameter&gt;</code> syntax:</p> <pre data-language="python">&gt;&gt;&gt; pipe.set_params(clf__C=10)
+Pipeline(steps=[('reduce_dim', PCA()), ('clf', SVC(C=10))])
+</pre> <p>This is particularly important for doing grid searches:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.model_selection import GridSearchCV
+&gt;&gt;&gt; param_grid = dict(reduce_dim__n_components=[2, 5, 10],
+...                   clf__C=[0.1, 10, 100])
+&gt;&gt;&gt; grid_search = GridSearchCV(pipe, param_grid=param_grid)
+</pre> <p>Individual steps may also be replaced as parameters, and non-final steps may be ignored by setting them to <code>'passthrough'</code>:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.linear_model import LogisticRegression
+&gt;&gt;&gt; param_grid = dict(reduce_dim=['passthrough', PCA(5), PCA(10)],
+...                   clf=[SVC(), LogisticRegression()],
+...                   clf__C=[0.1, 10, 100])
+&gt;&gt;&gt; grid_search = GridSearchCV(pipe, param_grid=param_grid)
+</pre> <p>The estimators of the pipeline can be retrieved by index:</p> <pre data-language="python">&gt;&gt;&gt; pipe[0]
+PCA()
+</pre> <p>or by name:</p> <pre data-language="python">&gt;&gt;&gt; pipe['reduce_dim']
+PCA()
+</pre> <div class="topic"> <p class="topic-title">Examples:</p> <ul class="simple"> <li><a class="reference internal" href="../auto_examples/feature_selection/plot_feature_selection_pipeline#sphx-glr-auto-examples-feature-selection-plot-feature-selection-pipeline-py"><span class="std std-ref">Pipeline Anova SVM</span></a></li> <li><a class="reference internal" href="../auto_examples/model_selection/grid_search_text_feature_extraction#sphx-glr-auto-examples-model-selection-grid-search-text-feature-extraction-py"><span class="std std-ref">Sample pipeline for text feature extraction and evaluation</span></a></li> <li><a class="reference internal" href="../auto_examples/compose/plot_digits_pipe#sphx-glr-auto-examples-compose-plot-digits-pipe-py"><span class="std std-ref">Pipelining: chaining a PCA and a logistic regression</span></a></li> <li><a class="reference internal" href="../auto_examples/miscellaneous/plot_kernel_approximation#sphx-glr-auto-examples-miscellaneous-plot-kernel-approximation-py"><span class="std std-ref">Explicit feature map approximation for RBF kernels</span></a></li> <li><a class="reference internal" href="../auto_examples/svm/plot_svm_anova#sphx-glr-auto-examples-svm-plot-svm-anova-py"><span class="std std-ref">SVM-Anova: SVM with univariate feature selection</span></a></li> <li><a class="reference internal" href="../auto_examples/compose/plot_compare_reduction#sphx-glr-auto-examples-compose-plot-compare-reduction-py"><span class="std std-ref">Selecting dimensionality reduction with Pipeline and GridSearchCV</span></a></li> </ul> </div> <div class="topic"> <p class="topic-title">See Also:</p> <ul class="simple"> <li><a class="reference internal" href="grid_search#composite-grid-search"><span class="std std-ref">Composite estimators and parameter spaces</span></a></li> </ul> </div>    <h3 id="notes">
+<span class="section-number">6.1.1.2. </span>Notes</h3> <p>Calling <code>fit</code> on the pipeline is the same as calling <code>fit</code> on each estimator in turn, <code>transform</code> the input and pass it on to the next step. The pipeline has all the methods that the last estimator in the pipeline has, i.e. if the last estimator is a classifier, the <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> can be used as a classifier. If the last estimator is a transformer, again, so is the pipeline.</p>   <h3 id="pipeline-cache">
+<span class="section-number">6.1.1.3. </span>Caching transformers: avoid repeated computation</h3> <p id="caching-transformers-avoid-repeated-computation">Fitting transformers may be computationally expensive. With its <code>memory</code> parameter set, <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> will cache each transformer after calling <code>fit</code>. This feature is used to avoid computing the fit transformers within a pipeline if the parameters and input data are identical. A typical example is the case of a grid search in which the transformers can be fitted only once and reused for each configuration.</p> <p>The parameter <code>memory</code> is needed in order to cache the transformers. <code>memory</code> can be either a string containing the directory where to cache the transformers or a <a class="reference external" href="https://pythonhosted.org/joblib/memory.html">joblib.Memory</a> object:</p> <pre data-language="python">&gt;&gt;&gt; from tempfile import mkdtemp
+&gt;&gt;&gt; from shutil import rmtree
+&gt;&gt;&gt; from sklearn.decomposition import PCA
+&gt;&gt;&gt; from sklearn.svm import SVC
+&gt;&gt;&gt; from sklearn.pipeline import Pipeline
+&gt;&gt;&gt; estimators = [('reduce_dim', PCA()), ('clf', SVC())]
+&gt;&gt;&gt; cachedir = mkdtemp()
+&gt;&gt;&gt; pipe = Pipeline(estimators, memory=cachedir)
+&gt;&gt;&gt; pipe
+Pipeline(memory=...,
+         steps=[('reduce_dim', PCA()), ('clf', SVC())])
+&gt;&gt;&gt; # Clear the cache directory when you don't need it anymore
+&gt;&gt;&gt; rmtree(cachedir)
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><strong>Side effect of caching transformers</strong></p> <p>Using a <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> without cache enabled, it is possible to inspect the original instance such as:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.datasets import load_digits
+&gt;&gt;&gt; X_digits, y_digits = load_digits(return_X_y=True)
+&gt;&gt;&gt; pca1 = PCA()
+&gt;&gt;&gt; svm1 = SVC()
+&gt;&gt;&gt; pipe = Pipeline([('reduce_dim', pca1), ('clf', svm1)])
+&gt;&gt;&gt; pipe.fit(X_digits, y_digits)
+Pipeline(steps=[('reduce_dim', PCA()), ('clf', SVC())])
+&gt;&gt;&gt; # The pca instance can be inspected directly
+&gt;&gt;&gt; print(pca1.components_)
+    [[-1.77484909e-19  ... 4.07058917e-18]]
+</pre> <p>Enabling caching triggers a clone of the transformers before fitting. Therefore, the transformer instance given to the pipeline cannot be inspected directly. In following example, accessing the <code>PCA</code> instance <code>pca2</code> will raise an <code>AttributeError</code> since <code>pca2</code> will be an unfitted transformer. Instead, use the attribute <code>named_steps</code> to inspect estimators within the pipeline:</p> <pre data-language="python">&gt;&gt;&gt; cachedir = mkdtemp()
+&gt;&gt;&gt; pca2 = PCA()
+&gt;&gt;&gt; svm2 = SVC()
+&gt;&gt;&gt; cached_pipe = Pipeline([('reduce_dim', pca2), ('clf', svm2)],
+...                        memory=cachedir)
+&gt;&gt;&gt; cached_pipe.fit(X_digits, y_digits)
+Pipeline(memory=...,
+        steps=[('reduce_dim', PCA()), ('clf', SVC())])
+&gt;&gt;&gt; print(cached_pipe.named_steps['reduce_dim'].components_)
+    [[-1.77484909e-19  ... 4.07058917e-18]]
+&gt;&gt;&gt; # Remove the cache directory
+&gt;&gt;&gt; rmtree(cachedir)
+</pre> </div> <div class="topic"> <p class="topic-title">Examples:</p> <ul class="simple"> <li><a class="reference internal" href="../auto_examples/compose/plot_compare_reduction#sphx-glr-auto-examples-compose-plot-compare-reduction-py"><span class="std std-ref">Selecting dimensionality reduction with Pipeline and GridSearchCV</span></a></li> </ul> </div>    <h2 id="transformed-target-regressor">
+<span class="section-number">6.1.2. </span>Transforming target in regression</h2> <p id="transforming-target-in-regression"><a class="reference internal" href="generated/sklearn.compose.transformedtargetregressor#sklearn.compose.TransformedTargetRegressor" title="sklearn.compose.TransformedTargetRegressor"><code>TransformedTargetRegressor</code></a> transforms the targets <code>y</code> before fitting a regression model. The predictions are mapped back to the original space via an inverse transform. It takes as an argument the regressor that will be used for prediction, and the transformer that will be applied to the target variable:</p> <pre data-language="python">&gt;&gt;&gt; import numpy as np
+&gt;&gt;&gt; from sklearn.datasets import fetch_california_housing
+&gt;&gt;&gt; from sklearn.compose import TransformedTargetRegressor
+&gt;&gt;&gt; from sklearn.preprocessing import QuantileTransformer
+&gt;&gt;&gt; from sklearn.linear_model import LinearRegression
+&gt;&gt;&gt; from sklearn.model_selection import train_test_split
+&gt;&gt;&gt; X, y = fetch_california_housing(return_X_y=True)
+&gt;&gt;&gt; X, y = X[:2000, :], y[:2000]  # select a subset of data
+&gt;&gt;&gt; transformer = QuantileTransformer(output_distribution='normal')
+&gt;&gt;&gt; regressor = LinearRegression()
+&gt;&gt;&gt; regr = TransformedTargetRegressor(regressor=regressor,
+...                                   transformer=transformer)
+&gt;&gt;&gt; X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
+&gt;&gt;&gt; regr.fit(X_train, y_train)
+TransformedTargetRegressor(...)
+&gt;&gt;&gt; print('R2 score: {0:.2f}'.format(regr.score(X_test, y_test)))
+R2 score: 0.61
+&gt;&gt;&gt; raw_target_regr = LinearRegression().fit(X_train, y_train)
+&gt;&gt;&gt; print('R2 score: {0:.2f}'.format(raw_target_regr.score(X_test, y_test)))
+R2 score: 0.59
+</pre> <p>For simple transformations, instead of a Transformer object, a pair of functions can be passed, defining the transformation and its inverse mapping:</p> <pre data-language="python">&gt;&gt;&gt; def func(x):
+...     return np.log(x)
+&gt;&gt;&gt; def inverse_func(x):
+...     return np.exp(x)
+</pre> <p>Subsequently, the object is created as:</p> <pre data-language="python">&gt;&gt;&gt; regr = TransformedTargetRegressor(regressor=regressor,
+...                                   func=func,
+...                                   inverse_func=inverse_func)
+&gt;&gt;&gt; regr.fit(X_train, y_train)
+TransformedTargetRegressor(...)
+&gt;&gt;&gt; print('R2 score: {0:.2f}'.format(regr.score(X_test, y_test)))
+R2 score: 0.51
+</pre> <p>By default, the provided functions are checked at each fit to be the inverse of each other. However, it is possible to bypass this checking by setting <code>check_inverse</code> to <code>False</code>:</p> <pre data-language="python">&gt;&gt;&gt; def inverse_func(x):
+...     return x
+&gt;&gt;&gt; regr = TransformedTargetRegressor(regressor=regressor,
+...                                   func=func,
+...                                   inverse_func=inverse_func,
+...                                   check_inverse=False)
+&gt;&gt;&gt; regr.fit(X_train, y_train)
+TransformedTargetRegressor(...)
+&gt;&gt;&gt; print('R2 score: {0:.2f}'.format(regr.score(X_test, y_test)))
+R2 score: -1.57
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The transformation can be triggered by setting either <code>transformer</code> or the pair of functions <code>func</code> and <code>inverse_func</code>. However, setting both options will raise an error.</p> </div> <div class="topic"> <p class="topic-title">Examples:</p> <ul class="simple"> <li><a class="reference internal" href="../auto_examples/compose/plot_transformed_target#sphx-glr-auto-examples-compose-plot-transformed-target-py"><span class="std std-ref">Effect of transforming the targets in regression model</span></a></li> </ul> </div>   <h2 id="feature-union">
+<span class="section-number">6.1.3. </span>FeatureUnion: composite feature spaces</h2> <p id="featureunion-composite-feature-spaces"><a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> combines several transformer objects into a new transformer that combines their output. A <a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> takes a list of transformer objects. During fitting, each of these is fit to the data independently. The transformers are applied in parallel, and the feature matrices they output are concatenated side-by-side into a larger matrix.</p> <p>When you want to apply different transformations to each field of the data, see the related class <a class="reference internal" href="generated/sklearn.compose.columntransformer#sklearn.compose.ColumnTransformer" title="sklearn.compose.ColumnTransformer"><code>ColumnTransformer</code></a> (see <a class="reference internal" href="#column-transformer"><span class="std std-ref">user guide</span></a>).</p> <p><a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> serves the same purposes as <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> - convenience and joint parameter estimation and validation.</p> <p><a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> and <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> can be combined to create complex models.</p> <p>(A <a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> has no way of checking whether two transformers might produce identical features. It only produces a union when the feature sets are disjoint, and making sure they are is the caller’s responsibility.)</p>  <h3 id="id1">
+<span class="section-number">6.1.3.1. </span>Usage</h3> <p>A <a class="reference internal" href="generated/sklearn.pipeline.featureunion#sklearn.pipeline.FeatureUnion" title="sklearn.pipeline.FeatureUnion"><code>FeatureUnion</code></a> is built using a list of <code>(key, value)</code> pairs, where the <code>key</code> is the name you want to give to a given transformation (an arbitrary string; it only serves as an identifier) and <code>value</code> is an estimator object:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.pipeline import FeatureUnion
+&gt;&gt;&gt; from sklearn.decomposition import PCA
+&gt;&gt;&gt; from sklearn.decomposition import KernelPCA
+&gt;&gt;&gt; estimators = [('linear_pca', PCA()), ('kernel_pca', KernelPCA())]
+&gt;&gt;&gt; combined = FeatureUnion(estimators)
+&gt;&gt;&gt; combined
+FeatureUnion(transformer_list=[('linear_pca', PCA()),
+                               ('kernel_pca', KernelPCA())])
+</pre> <p>Like pipelines, feature unions have a shorthand constructor called <a class="reference internal" href="generated/sklearn.pipeline.make_union#sklearn.pipeline.make_union" title="sklearn.pipeline.make_union"><code>make_union</code></a> that does not require explicit naming of the components.</p> <p>Like <code>Pipeline</code>, individual steps may be replaced using <code>set_params</code>, and ignored by setting to <code>'drop'</code>:</p> <pre data-language="python">&gt;&gt;&gt; combined.set_params(kernel_pca='drop')
+FeatureUnion(transformer_list=[('linear_pca', PCA()),
+                               ('kernel_pca', 'drop')])
+</pre> <div class="topic"> <p class="topic-title">Examples:</p> <ul class="simple"> <li><a class="reference internal" href="../auto_examples/compose/plot_feature_union#sphx-glr-auto-examples-compose-plot-feature-union-py"><span class="std std-ref">Concatenating multiple feature extraction methods</span></a></li> </ul> </div>    <h2 id="column-transformer">
+<span class="section-number">6.1.4. </span>ColumnTransformer for heterogeneous data</h2> <p id="columntransformer-for-heterogeneous-data">Many datasets contain features of different types, say text, floats, and dates, where each type of feature requires separate preprocessing or feature extraction steps. Often it is easiest to preprocess data before applying scikit-learn methods, for example using <a class="reference external" href="https://pandas.pydata.org/">pandas</a>. Processing your data before passing it to scikit-learn might be problematic for one of the following reasons:</p> <ol class="arabic simple"> <li>Incorporating statistics from test data into the preprocessors makes cross-validation scores unreliable (known as <em>data leakage</em>), for example in the case of scalers or imputing missing values.</li> <li>You may want to include the parameters of the preprocessors in a <a class="reference internal" href="grid_search#grid-search"><span class="std std-ref">parameter search</span></a>.</li> </ol> <p>The <a class="reference internal" href="generated/sklearn.compose.columntransformer#sklearn.compose.ColumnTransformer" title="sklearn.compose.ColumnTransformer"><code>ColumnTransformer</code></a> helps performing different transformations for different columns of the data, within a <a class="reference internal" href="generated/sklearn.pipeline.pipeline#sklearn.pipeline.Pipeline" title="sklearn.pipeline.Pipeline"><code>Pipeline</code></a> that is safe from data leakage and that can be parametrized. <a class="reference internal" href="generated/sklearn.compose.columntransformer#sklearn.compose.ColumnTransformer" title="sklearn.compose.ColumnTransformer"><code>ColumnTransformer</code></a> works on arrays, sparse matrices, and <a class="reference external" href="https://pandas.pydata.org/pandas-docs/stable/">pandas DataFrames</a>.</p> <p>To each column, a different transformation can be applied, such as preprocessing or a specific feature extraction method:</p> <pre data-language="python">&gt;&gt;&gt; import pandas as pd
+&gt;&gt;&gt; X = pd.DataFrame(
+...     {'city': ['London', 'London', 'Paris', 'Sallisaw'],
+...      'title': ["His Last Bow", "How Watson Learned the Trick",
+...                "A Moveable Feast", "The Grapes of Wrath"],
+...      'expert_rating': [5, 3, 4, 5],
+...      'user_rating': [4, 5, 4, 3]})
+</pre> <p>For this data, we might want to encode the <code>'city'</code> column as a categorical variable using <a class="reference internal" href="generated/sklearn.preprocessing.onehotencoder#sklearn.preprocessing.OneHotEncoder" title="sklearn.preprocessing.OneHotEncoder"><code>OneHotEncoder</code></a> but apply a <a class="reference internal" href="generated/sklearn.feature_extraction.text.countvectorizer#sklearn.feature_extraction.text.CountVectorizer" title="sklearn.feature_extraction.text.CountVectorizer"><code>CountVectorizer</code></a> to the <code>'title'</code> column. As we might use multiple feature extraction methods on the same column, we give each transformer a unique name, say <code>'city_category'</code> and <code>'title_bow'</code>. By default, the remaining rating columns are ignored (<code>remainder='drop'</code>):</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.compose import ColumnTransformer
+&gt;&gt;&gt; from sklearn.feature_extraction.text import CountVectorizer
+&gt;&gt;&gt; from sklearn.preprocessing import OneHotEncoder
+&gt;&gt;&gt; column_trans = ColumnTransformer(
+...     [('city_category', OneHotEncoder(dtype='int'),['city']),
+...      ('title_bow', CountVectorizer(), 'title')],
+...     remainder='drop')
+
+&gt;&gt;&gt; column_trans.fit(X)
+ColumnTransformer(transformers=[('city_category', OneHotEncoder(dtype='int'),
+                                 ['city']),
+                                ('title_bow', CountVectorizer(), 'title')])
+
+&gt;&gt;&gt; column_trans.get_feature_names()
+['city_category__x0_London', 'city_category__x0_Paris', 'city_category__x0_Sallisaw',
+'title_bow__bow', 'title_bow__feast', 'title_bow__grapes', 'title_bow__his',
+'title_bow__how', 'title_bow__last', 'title_bow__learned', 'title_bow__moveable',
+'title_bow__of', 'title_bow__the', 'title_bow__trick', 'title_bow__watson',
+'title_bow__wrath']
+
+&gt;&gt;&gt; column_trans.transform(X).toarray()
+array([[1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+       [1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0],
+       [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+       [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1]]...)
+</pre> <p>In the above example, the <a class="reference internal" href="generated/sklearn.feature_extraction.text.countvectorizer#sklearn.feature_extraction.text.CountVectorizer" title="sklearn.feature_extraction.text.CountVectorizer"><code>CountVectorizer</code></a> expects a 1D array as input and therefore the columns were specified as a string (<code>'title'</code>). However, <a class="reference internal" href="generated/sklearn.preprocessing.onehotencoder#sklearn.preprocessing.OneHotEncoder" title="sklearn.preprocessing.OneHotEncoder"><code>OneHotEncoder</code></a> as most of other transformers expects 2D data, therefore in that case you need to specify the column as a list of strings (<code>['city']</code>).</p> <p>Apart from a scalar or a single item list, the column selection can be specified as a list of multiple items, an integer array, a slice, a boolean mask, or with a <a class="reference internal" href="generated/sklearn.compose.make_column_selector#sklearn.compose.make_column_selector" title="sklearn.compose.make_column_selector"><code>make_column_selector</code></a>. The <a class="reference internal" href="generated/sklearn.compose.make_column_selector#sklearn.compose.make_column_selector" title="sklearn.compose.make_column_selector"><code>make_column_selector</code></a> is used to select columns based on data type or column name:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.preprocessing import StandardScaler
+&gt;&gt;&gt; from sklearn.compose import make_column_selector
+&gt;&gt;&gt; ct = ColumnTransformer([
+...       ('scale', StandardScaler(),
+...       make_column_selector(dtype_include=np.number)),
+...       ('onehot',
+...       OneHotEncoder(),
+...       make_column_selector(pattern='city', dtype_include=object))])
+&gt;&gt;&gt; ct.fit_transform(X)
+array([[ 0.904...,  0.      ,  1. ,  0. ,  0. ],
+       [-1.507...,  1.414...,  1. ,  0. ,  0. ],
+       [-0.301...,  0.      ,  0. ,  1. ,  0. ],
+       [ 0.904..., -1.414...,  0. ,  0. ,  1. ]])
+</pre> <p>Strings can reference columns if the input is a DataFrame, integers are always interpreted as the positional columns.</p> <p>We can keep the remaining rating columns by setting <code>remainder='passthrough'</code>. The values are appended to the end of the transformation:</p> <pre data-language="python">&gt;&gt;&gt; column_trans = ColumnTransformer(
+...     [('city_category', OneHotEncoder(dtype='int'),['city']),
+...      ('title_bow', CountVectorizer(), 'title')],
+...     remainder='passthrough')
+
+&gt;&gt;&gt; column_trans.fit_transform(X)
+array([[1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 5, 4],
+       [1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 0, 3, 5],
+       [0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 4, 4],
+       [0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 5, 3]]...)
+</pre> <p>The <code>remainder</code> parameter can be set to an estimator to transform the remaining rating columns. The transformed values are appended to the end of the transformation:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.preprocessing import MinMaxScaler
+&gt;&gt;&gt; column_trans = ColumnTransformer(
+...     [('city_category', OneHotEncoder(), ['city']),
+...      ('title_bow', CountVectorizer(), 'title')],
+...     remainder=MinMaxScaler())
+
+&gt;&gt;&gt; column_trans.fit_transform(X)[:, -2:]
+array([[1. , 0.5],
+       [0. , 1. ],
+       [0.5, 0.5],
+       [1. , 0. ]])
+</pre> <p id="make-column-transformer">The <a class="reference internal" href="generated/sklearn.compose.make_column_transformer#sklearn.compose.make_column_transformer" title="sklearn.compose.make_column_transformer"><code>make_column_transformer</code></a> function is available to more easily create a <a class="reference internal" href="generated/sklearn.compose.columntransformer#sklearn.compose.ColumnTransformer" title="sklearn.compose.ColumnTransformer"><code>ColumnTransformer</code></a> object. Specifically, the names will be given automatically. The equivalent for the above example would be:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.compose import make_column_transformer
+&gt;&gt;&gt; column_trans = make_column_transformer(
+...     (OneHotEncoder(), ['city']),
+...     (CountVectorizer(), 'title'),
+...     remainder=MinMaxScaler())
+&gt;&gt;&gt; column_trans
+ColumnTransformer(remainder=MinMaxScaler(),
+                  transformers=[('onehotencoder', OneHotEncoder(), ['city']),
+                                ('countvectorizer', CountVectorizer(),
+                                 'title')])
+</pre>   <h2 id="id2">
+<span class="section-number">6.1.5. </span>Visualizing Composite Estimators</h2> <p id="visualizing-composite-estimators">Estimators can be displayed with a HTML representation when shown in a jupyter notebook. This can be useful to diagnose or visualize a Pipeline with many estimators. This visualization is activated by setting the <code>display</code> option in <a class="reference internal" href="generated/sklearn.set_config#sklearn.set_config" title="sklearn.set_config"><code>set_config</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn import set_config
+&gt;&gt;&gt; set_config(display='diagram')   
+&gt;&gt;&gt; # diplays HTML representation in a jupyter context
+&gt;&gt;&gt; column_trans  
+</pre> <p>An example of the HTML output can be seen in the <strong>HTML representation of Pipeline</strong> section of <a class="reference internal" href="../auto_examples/compose/plot_column_transformer_mixed_types#sphx-glr-auto-examples-compose-plot-column-transformer-mixed-types-py"><span class="std std-ref">Column Transformer with Mixed Types</span></a>. As an alternative, the HTML can be written to a file using <a class="reference internal" href="generated/sklearn.utils.estimator_html_repr#sklearn.utils.estimator_html_repr" title="sklearn.utils.estimator_html_repr"><code>estimator_html_repr</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from sklearn.utils import estimator_html_repr
+&gt;&gt;&gt; with open('my_estimator.html', 'w') as f:  
+...     f.write(estimator_html_repr(clf))
+</pre> <div class="topic"> <p class="topic-title">Examples:</p> <ul class="simple"> <li><a class="reference internal" href="../auto_examples/compose/plot_column_transformer#sphx-glr-auto-examples-compose-plot-column-transformer-py"><span class="std std-ref">Column Transformer with Heterogeneous Data Sources</span></a></li> <li><a class="reference internal" href="../auto_examples/compose/plot_column_transformer_mixed_types#sphx-glr-auto-examples-compose-plot-column-transformer-mixed-types-py"><span class="std std-ref">Column Transformer with Mixed Types</span></a></li> </ul> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2020 The scikit-learn developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://scikit-learn.org/0.24/modules/compose.html" class="_attribution-link">https://scikit-learn.org/0.24/modules/compose.html</a>
+  </p>
+</div>

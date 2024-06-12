@@ -1,0 +1,1389 @@
+<h1 id="torch-fx">torch.fx</h1>  <h2 id="overview">Overview</h2> <p id="module-torch.fx">FX is a toolkit for developers to use to transform <code>nn.Module</code> instances. FX consists of three main components: a <strong>symbolic tracer,</strong> an <strong>intermediate representation</strong>, and <strong>Python code generation</strong>. A demonstration of these components in action:</p> <pre data-language="python">import torch
+# Simple module for demonstration
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.rand(3, 4))
+        self.linear = torch.nn.Linear(4, 5)
+
+    def forward(self, x):
+        return self.linear(x + self.param).clamp(min=0.0, max=1.0)
+
+module = MyModule()
+
+from torch.fx import symbolic_trace
+# Symbolic tracing frontend - captures the semantics of the module
+symbolic_traced : torch.fx.GraphModule = symbolic_trace(module)
+
+# High-level intermediate representation (IR) - Graph representation
+print(symbolic_traced.graph)
+"""
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %param : [num_users=1] = get_attr[target=param]
+    %add : [num_users=1] = call_function[target=operator.add](args = (%x, %param), kwargs = {})
+    %linear : [num_users=1] = call_module[target=linear](args = (%add,), kwargs = {})
+    %clamp : [num_users=1] = call_method[target=clamp](args = (%linear,), kwargs = {min: 0.0, max: 1.0})
+    return clamp
+"""
+
+# Code generation - valid Python code
+print(symbolic_traced.code)
+"""
+def forward(self, x):
+    param = self.param
+    add = x + param;  x = param = None
+    linear = self.linear(add);  add = None
+    clamp = linear.clamp(min = 0.0, max = 1.0);  linear = None
+    return clamp
+"""
+</pre> <p>The <strong>symbolic tracer</strong> performs “symbolic execution” of the Python code. It feeds fake values, called Proxies, through the code. Operations on theses Proxies are recorded. More information about symbolic tracing can be found in the <a class="reference internal" href="#torch.fx.symbolic_trace" title="torch.fx.symbolic_trace"><code>symbolic_trace()</code></a> and <a class="reference internal" href="#torch.fx.Tracer" title="torch.fx.Tracer"><code>Tracer</code></a> documentation.</p> <p>The <strong>intermediate representation</strong> is the container for the operations that were recorded during symbolic tracing. It consists of a list of Nodes that represent function inputs, callsites (to functions, methods, or <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> instances), and return values. More information about the IR can be found in the documentation for <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>. The IR is the format on which transformations are applied.</p> <p><strong>Python code generation</strong> is what makes FX a Python-to-Python (or Module-to-Module) transformation toolkit. For each Graph IR, we can create valid Python code matching the Graph’s semantics. This functionality is wrapped up in <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a>, which is a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> instance that holds a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> as well as a <code>forward</code> method generated from the Graph.</p> <p>Taken together, this pipeline of components (symbolic tracing -&gt; intermediate representation -&gt; transforms -&gt; Python code generation) constitutes the Python-to-Python transformation pipeline of FX. In addition, these components can be used separately. For example, symbolic tracing can be used in isolation to capture a form of the code for analysis (and not transformation) purposes. Code generation can be used for programmatically generating models, for example from a config file. There are many uses for FX!</p> <p>Several example transformations can be found at the <a class="reference external" href="https://github.com/pytorch/examples/tree/master/fx">examples</a> repository.</p>   <h2 id="id1">Writing Transformations</h2> <p id="writing-transformations">What is an FX transform? Essentially, it’s a function that looks like this.</p> <pre data-language="python">import torch
+import torch.fx
+
+def transform(m: nn.Module,
+              tracer_class : type = torch.fx.Tracer) -&gt; torch.nn.Module:
+    # Step 1: Acquire a Graph representing the code in `m`
+
+    # NOTE: torch.fx.symbolic_trace is a wrapper around a call to
+    # fx.Tracer.trace and constructing a GraphModule. We'll
+    # split that out in our transform to allow the caller to
+    # customize tracing behavior.
+    graph : torch.fx.Graph = tracer_class().trace(m)
+
+    # Step 2: Modify this Graph or create a new one
+    graph = ...
+
+    # Step 3: Construct a Module to return
+    return torch.fx.GraphModule(m, graph)
+</pre> <p>Your transform will take in a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a>, acquire a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> from it, do some modifications, and return a new <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a>. You should think of the <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> that your FX transform returns as identical to a regular <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> – you can pass it to another FX transform, you can pass it to TorchScript, or you can run it. Ensuring that the inputs and outputs of your FX transform are a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> will allow for composability.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is also possible to modify an existing <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a> instead of creating a new one, like so:</p> <pre data-language="python">import torch
+import torch.fx
+
+def transform(m : nn.Module) -&gt; nn.Module:
+    gm : torch.fx.GraphModule = torch.fx.symbolic_trace(m)
+
+    # Modify gm.graph
+    # &lt;...&gt;
+
+    # Recompile the forward() method of `gm` from its Graph
+    gm.recompile()
+
+    return gm
+</pre> <p>Note that you MUST call <a class="reference internal" href="#torch.fx.GraphModule.recompile" title="torch.fx.GraphModule.recompile"><code>GraphModule.recompile()</code></a> to bring the generated <code>forward()</code> method on the <code>GraphModule</code> in sync with the modified <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>.</p> </div> <p>Given that you’ve passed in a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> that has been traced into a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>, there are now two primary approaches you can take to building a new <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>.</p>  <h3 id="a-quick-primer-on-graphs">A Quick Primer on Graphs</h3> <p>Full treatment of the semantics of graphs can be found in the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> documentation, but we are going to cover the basics here. A <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> is a data structure that represents a method on a <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a>. The information that this requires is:</p> <ul class="simple"> <li>What are the inputs to the method?</li> <li>What are the operations that run inside the method?</li> <li>What is the output (i.e. return) value from the method?</li> </ul> <p>All three of these concepts are represented with <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a> instances. Let’s see what we mean by that with a short example:</p> <pre data-language="python">import torch
+import torch.fx
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.rand(3, 4))
+        self.linear = torch.nn.Linear(4, 5)
+
+    def forward(self, x):
+        return torch.topk(torch.sum(
+            self.linear(x + self.linear.weight).relu(), dim=-1), 3)
+
+m = MyModule()
+gm = torch.fx.symbolic_trace(m)
+
+gm.graph.print_tabular()
+</pre> <p>Here we define a module <code>MyModule</code> for demonstration purposes, instantiate it, symbolically trace it, then call the <a class="reference internal" href="#torch.fx.Graph.print_tabular" title="torch.fx.Graph.print_tabular"><code>Graph.print_tabular()</code></a> method to print out a table showing the nodes of this <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>:</p>  <table class="docutils colwidths-auto align-default"> <thead> <tr>
+<th class="head"><p>opcode</p></th> <th class="head"><p>name</p></th> <th class="head"><p>target</p></th> <th class="head"><p>args</p></th> <th class="head"><p>kwargs</p></th> </tr> </thead>  <tr>
+<td><p>placeholder</p></td> <td><p>x</p></td> <td><p>x</p></td> <td><p>()</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>get_attr</p></td> <td><p>linear_weight</p></td> <td><p>linear.weight</p></td> <td><p>()</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>call_function</p></td> <td><p>add_1</p></td> <td><p>&lt;built-in function add&gt;</p></td> <td><p>(x, linear_weight)</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>call_module</p></td> <td><p>linear_1</p></td> <td><p>linear</p></td> <td><p>(add_1,)</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>call_method</p></td> <td><p>relu_1</p></td> <td><p>relu</p></td> <td><p>(linear_1,)</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>call_function</p></td> <td><p>sum_1</p></td> <td><p>&lt;built-in method sum …&gt;</p></td> <td><p>(relu_1,)</p></td> <td><p>{‘dim’: -1}</p></td> </tr> <tr>
+<td><p>call_function</p></td> <td><p>topk_1</p></td> <td><p>&lt;built-in method topk …&gt;</p></td> <td><p>(sum_1, 3)</p></td> <td><p>{}</p></td> </tr> <tr>
+<td><p>output</p></td> <td><p>output</p></td> <td><p>output</p></td> <td><p>(topk_1,)</p></td> <td><p>{}</p></td> </tr>  </table>  <p>We can use this information to answer the questions we posed above.</p> <ul class="simple"> <li>What are the inputs to the method? In FX, method inputs are specified via special <code>placeholder</code> nodes. In this case, we have a single <code>placeholder</code> node with a <code>target</code> of <code>x</code>, meaning we have a single (non-self) argument named x.</li> <li>What are the operations within the method? The <code>get_attr</code>, <code>call_function</code>, <code>call_module</code>, and <code>call_method</code> nodes represent the operations in the method. A full treatment of the semantics of all of these can be found in the <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a> documentation.</li> <li>What is the return value of the method? The return value in a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> is specified by a special <code>output</code> node.</li> </ul> <p>Given that we now know the basics of how code is represented in FX, we can now explore how we would edit a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>.</p>   <h3 id="graph-manipulation">Graph Manipulation</h3>  <h4 id="direct-graph-manipulation">Direct Graph Manipulation</h4> <p>One approach to building this new <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> is to directly manipulate your old one. To aid in this, we can simply take the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> we obtain from symbolic tracing and modify it. For example, let’s say we desire to replace <a class="reference internal" href="generated/torch.add#torch.add" title="torch.add"><code>torch.add()</code></a> calls with <a class="reference internal" href="generated/torch.mul#torch.mul" title="torch.mul"><code>torch.mul()</code></a> calls.</p> <pre data-language="python">import torch
+import torch.fx
+
+# Sample module
+class M(torch.nn.Module):
+    def forward(self, x, y):
+        return torch.add(x, y)
+
+def transform(m: torch.nn.Module,
+              tracer_class : type = fx.Tracer) -&gt; torch.nn.Module:
+    graph : fx.Graph = tracer_class().trace(m)
+    # FX represents its Graph as an ordered list of
+    # nodes, so we can iterate through them.
+    for node in graph.nodes:
+        # Checks if we're calling a function (i.e:
+        # torch.add)
+        if node.op == 'call_function':
+            # The target attribute is the function
+            # that call_function calls.
+            if node.target == torch.add:
+                node.target = torch.mul
+
+    graph.lint() # Does some checks to make sure the
+                 # Graph is well-formed.
+
+    return fx.GraphModule(m, graph)
+</pre> <p>We can also do more involved <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> rewrites, such as deleting or appending nodes. To aid in these transformations, FX has utility functions for transforming the graph that can be found in the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> documentation. An example of using these APIs to append a <code>torch.relu()</code> call can be found below.</p> <pre data-language="python"># Specifies the insertion point. Any nodes added to the
+# Graph within this scope will be inserted after `node`
+with traced.graph.inserting_after(node):
+    # Insert a new `call_function` node calling `torch.relu`
+    new_node = traced.graph.call_function(
+        torch.relu, args=(node,))
+
+    # We want all places that used the value of `node` to
+    # now use that value after the `relu` call we've added.
+    # We use the `replace_all_uses_with` API to do this.
+    node.replace_all_uses_with(new_node)
+</pre> <p>For simple transformations that only consist of substitutions, you can also make use of the <a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/subgraph_rewriter.py">subgraph rewriter.</a></p>   <h4 id="subgraph-rewriting-with-replace-pattern">Subgraph Rewriting With replace_pattern()</h4> <p>FX also provides another level of automation on top of direct graph manipulation. The <a class="reference internal" href="#torch.fx.replace_pattern" title="torch.fx.replace_pattern"><code>replace_pattern()</code></a> API is essentially a “find/replace” tool for editing <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>s. It allows you to specify a <code>pattern</code> and <code>replacement</code> function and it will trace through those functions, find instances of the group of operations in the <code>pattern</code> graph, and replace those instances with copies of the <code>replacement</code> graph. This can help to greatly automate tedious graph manipulation code, which can get unwieldy as the transformations get more complex.</p>   <h4 id="graph-manipulation-examples">Graph Manipulation Examples</h4> <ul class="simple"> <li><a class="reference external" href="https://github.com/pytorch/examples/blob/master/fx/replace_op.py">Replace one op</a></li> <li><a class="reference external" href="https://github.com/pytorch/pytorch/blob/40cbf342d3c000712da92cfafeaca651b3e0bd3e/torch/fx/experimental/optimization.py#L50">Conv/Batch Norm fusion</a></li> <li><a class="reference external" href="https://github.com/pytorch/examples/blob/master/fx/subgraph_rewriter_basic_use.py">replace_pattern: Basic usage</a></li> <li><a class="reference external" href="https://pytorch.org/docs/main/quantization.html#prototype-fx-graph-mode-quantization">Quantization</a></li> <li><a class="reference external" href="https://github.com/pytorch/examples/blob/master/fx/invert.py">Invert Transformation</a></li> </ul>    <h3 id="proxy-retracing">Proxy/Retracing</h3> <p>Another way of manipulating <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>s is by reusing the <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> machinery used in symbolic tracing. For example, let’s imagine that we wanted to write a transformation that decomposed PyTorch functions into smaller operations. It would transform every <code>F.relu(x)</code> call into <code>(x &gt; 0) * x</code>. One possibility would be to perform the requisite graph rewriting to insert the comparison and multiplication after the <code>F.relu</code>, and then clean up the original <code>F.relu</code>. However, we can automate this process by using <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> objects to automatically record operations into the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>.</p> <p>To use this method, we write the operations that we want inserted as regular PyTorch code and invoke that code with <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> objects as arguments. These <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> objects will capture the operations that are performed on them and append them to the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a>.</p> <pre data-language="python"># Note that this decomposition rule can be read as regular Python
+def relu_decomposition(x):
+    return (x &gt; 0) * x
+
+decomposition_rules = {}
+decomposition_rules[F.relu] = relu_decomposition
+
+def decompose(model: torch.nn.Module,
+              tracer_class : type = fx.Tracer) -&gt; torch.nn.Module:
+    """
+    Decompose `model` into smaller constituent operations.
+    Currently,this only supports decomposing ReLU into its
+    mathematical definition: (x &gt; 0) * x
+    """
+    graph : fx.Graph = tracer_class().trace(model)
+    new_graph = fx.Graph()
+    env = {}
+    tracer = torch.fx.proxy.GraphAppendingTracer(new_graph)
+    for node in graph.nodes:
+        if node.op == 'call_function' and node.target in decomposition_rules:
+            # By wrapping the arguments with proxies,
+            # we can dispatch to the appropriate
+            # decomposition rule and implicitly add it
+            # to the Graph by symbolically tracing it.
+            proxy_args = [
+                fx.Proxy(env[x.name], tracer) if isinstance(x, fx.Node) else x for x in node.args]
+            output_proxy = decomposition_rules[node.target](*proxy_args)
+
+            # Operations on `Proxy` always yield new `Proxy`s, and the
+            # return value of our decomposition rule is no exception.
+            # We need to extract the underlying `Node` from the `Proxy`
+            # to use it in subsequent iterations of this transform.
+            new_node = output_proxy.node
+            env[node.name] = new_node
+        else:
+            # Default case: we don't have a decomposition rule for this
+            # node, so just copy the node over into the new graph.
+            new_node = new_graph.node_copy(node, lambda x: env[x.name])
+            env[node.name] = new_node
+    return fx.GraphModule(model, new_graph)
+</pre> <p>In addition to avoiding explicit graph manipulation, using <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a>s also allows you to specify your rewrite rules as native Python code. For transformations that require a large amount of rewrite rules (such as vmap or grad), this can often improve readability and maintainability of the rules. Note that while calling <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> we also passed a tracer pointing to the underlying variable <code>graph</code>. This is done so if in case the operations in graph are n-ary (e.g. add is a binary operator) the call to <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> does not create multiple instances of a graph tracer which can lead to unexpected runtime errors. We recommend this method of using <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> especially when the underlying operators can not be safely assumed to be unary.</p> <p>A worked example of using <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a>s for <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> manipulation can be found <a class="reference external" href="https://github.com/pytorch/examples/blob/master/fx/proxy_based_graph_creation.py">here</a>.</p>   <h3 id="the-interpreter-pattern">The Interpreter Pattern</h3> <p>A useful code organizational pattern in FX is to loop over all the <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a>s in a <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> and execute them. This can be used for several things including runtime analysis of values flowing through the graph or transformation of the code via retracing with <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a>s. For example, suppose we want to run a <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a> and record the <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> shape and dtype properties on the nodes as we see them at runtime. That might look like:</p> <pre data-language="python">import torch
+import torch.fx
+from torch.fx.node import Node
+
+from typing import Dict
+
+class ShapeProp:
+    """
+    Shape propagation. This class takes a `GraphModule`.
+    Then, its `propagate` method executes the `GraphModule`
+    node-by-node with the given arguments. As each operation
+    executes, the ShapeProp class stores away the shape and
+    element type for the output values of each operation on
+    the `shape` and `dtype` attributes of the operation's
+    `Node`.
+    """
+    def __init__(self, mod):
+        self.mod = mod
+        self.graph = mod.graph
+        self.modules = dict(self.mod.named_modules())
+
+    def propagate(self, *args):
+        args_iter = iter(args)
+        env : Dict[str, Node] = {}
+
+        def load_arg(a):
+            return torch.fx.graph.map_arg(a, lambda n: env[n.name])
+
+        def fetch_attr(target : str):
+            target_atoms = target.split('.')
+            attr_itr = self.mod
+            for i, atom in enumerate(target_atoms):
+                if not hasattr(attr_itr, atom):
+                    raise RuntimeError(f"Node referenced nonexistant target {'.'.join(target_atoms[:i])}")
+                attr_itr = getattr(attr_itr, atom)
+            return attr_itr
+
+        for node in self.graph.nodes:
+            if node.op == 'placeholder':
+                result = next(args_iter)
+            elif node.op == 'get_attr':
+                result = fetch_attr(node.target)
+            elif node.op == 'call_function':
+                result = node.target(*load_arg(node.args), **load_arg(node.kwargs))
+            elif node.op == 'call_method':
+                self_obj, *args = load_arg(node.args)
+                kwargs = load_arg(node.kwargs)
+                result = getattr(self_obj, node.target)(*args, **kwargs)
+            elif node.op == 'call_module':
+                result = self.modules[node.target](*load_arg(node.args), **load_arg(node.kwargs))
+
+            # This is the only code specific to shape propagation.
+            # you can delete this `if` branch and this becomes
+            # a generic GraphModule interpreter.
+            if isinstance(result, torch.Tensor):
+                node.shape = result.shape
+                node.dtype = result.dtype
+
+            env[node.name] = result
+
+        return load_arg(self.graph.result)
+</pre> <p>As you can see, a full interpreter for FX is not that complicated but it can be very useful. To ease using this pattern, we provide the <a class="reference internal" href="#torch.fx.Interpreter" title="torch.fx.Interpreter"><code>Interpreter</code></a> class, which encompasses the above logic in a way that certain aspects of the interpreter’s execution can be overridden via method overrides.</p> <p>In addition to executing operations, we can also generate a new <code>Graph</code> by feeding <a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> values through an interpreter. Similarly, we provide the <a class="reference internal" href="#torch.fx.Transformer" title="torch.fx.Transformer"><code>Transformer</code></a> class to encompass this pattern. <a class="reference internal" href="#torch.fx.Transformer" title="torch.fx.Transformer"><code>Transformer</code></a> behaves similarly to <a class="reference internal" href="#torch.fx.Interpreter" title="torch.fx.Interpreter"><code>Interpreter</code></a>, but instead of calling the <code>run</code> method to get a concrete output value from the Module, you would call the <a class="reference internal" href="#torch.fx.Transformer.transform" title="torch.fx.Transformer.transform"><code>Transformer.transform()</code></a> method to return a new <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a> which was subject to any transformation rules you installed as overridden methods.</p>  <h4 id="examples-of-the-interpreter-pattern">Examples of the Interpreter Pattern</h4> <ul class="simple"> <li><a class="reference external" href="https://github.com/pytorch/pytorch/blob/master/torch/fx/passes/shape_prop.py">Shape Propagation</a></li> <li><a class="reference external" href="https://github.com/pytorch/tutorials/pull/1319">Performance Profiler</a></li> </ul>     <h2 id="debugging">Debugging</h2>  <h3 id="introduction">Introduction</h3> <p>Often in the course of authoring transformations, our code will not be quite right. In this case, we may need to do some debugging. The key is to work backwards: first, check the results of invoking the generated module to prove or disprove correctness. Then, inspect and debug the generated code. Then, debug the process of transformations that led to the generated code.</p> <p>If you’re not familiar with debuggers, please see the auxiliary section <a class="reference internal" href="#available-debuggers"><span class="std std-ref">Available Debuggers</span></a>.</p>   <h3 id="common-pitfalls-in-transform-authoring">Common Pitfalls in Transform Authoring</h3> <ul class="simple"> <li>Nondeterministic <code>set</code> iteration order. In Python, the <code>set</code> datatype is unordered. Using <code>set</code> to contain collections of objects like <code>Node</code>s, for example, can cause unexpected nondeterminism. An example is iterating over a set of <code>Node</code>s to insert them into a <code>Graph</code>. Because the <code>set</code> data type is unordered, the ordering of the operations in the output program will be nondeterministic and can change across program invocations. The recommended alternative is to use a <code>dict</code> data type, which is <a class="reference external" href="https://mail.python.org/pipermail/python-dev/2017-December/151283.html">insertion ordered</a> as of Python 3.7 (and as of cPython 3.6). A <code>dict</code> can be used equivalently to a set by storing values to be deduplicated in the keys of the <code>dict</code>.</li> </ul>   <h3 id="checking-correctness-of-modules">Checking Correctness of Modules</h3> <p>Because the output of most deep learning modules consists of floating point <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> instances, checking for equivalence between the results of two <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> is not as straightforward as doing a simple equality check. To motivate this, let’s use an example:</p> <pre data-language="python">import torch
+import torch.fx
+import torchvision.models as models
+
+def transform(m : torch.nn.Module) -&gt; torch.nn.Module:
+    gm = torch.fx.symbolic_trace(m)
+
+    # Imagine we're doing some transforms here
+    # &lt;...&gt;
+
+    gm.recompile()
+
+    return gm
+
+resnet18 = models.resnet18()
+transformed_resnet18 = transform(resnet18)
+
+input_image = torch.randn(5, 3, 224, 224)
+
+assert resnet18(input_image) == transformed_resnet18(input_image)
+"""
+RuntimeError: Boolean value of Tensor with more than one value is ambiguous
+"""
+</pre> <p>Here, we’ve tried to check equality of the values of two deep learning models with the <code>==</code> equality operator. However, this is not well- defined both due to the issue of that operator returning a tensor and not a bool, but also because comparison of floating point values should use a margin of error (or epsilon) to account for the non-commutativity of floating point operations (see <a class="reference external" href="https://floating-point-gui.de/errors/comparison/">here</a> for more details). We can use <a class="reference internal" href="generated/torch.allclose#torch.allclose" title="torch.allclose"><code>torch.allclose()</code></a> instead, which will give us an approximate comparison taking into account a relative and absolute tolerance threshold:</p> <pre data-language="python">assert torch.allclose(resnet18(input_image), transformed_resnet18(input_image))
+</pre> <p>This is the first tool in our toolbox to check if transformed modules are behaving as we expect compared to a reference implementation.</p>   <h3 id="debugging-the-generated-code">Debugging the Generated Code</h3> <p>Because FX generates the <code>forward()</code> function on <a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule"><code>GraphModule</code></a>s, using traditional debugging techniques like <code>print</code> statements or <code>pdb</code> is not as straightforward. Luckily, we have several techniques we can use for debugging the generated code.</p>  <h4 id="use-pdb">Use <code>pdb</code>
+</h4> <p>Invoke <code>pdb</code> to step into the running program. Although the code that represents the <a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph"><code>Graph</code></a> is not in any source file, we can still step into it manually using <code>pdb</code> when the forward pass is invoked.</p> <pre data-language="python">import torch
+import torch.fx
+import torchvision.models as models
+
+def my_pass(inp: torch.nn.Module, tracer_class : type = fx.Tracer) -&gt; torch.nn.Module:
+    graph = tracer_class().trace(inp)
+    # Transformation logic here
+    # &lt;...&gt;
+
+    # Return new Module
+    return fx.GraphModule(inp, graph)
+
+my_module = models.resnet18()
+my_module_transformed = my_pass(my_module)
+
+input_value = torch.randn(5, 3, 224, 224)
+
+# When this line is executed at runtime, we will be dropped into an
+# interactive `pdb` prompt. We can use the `step` or `s` command to
+# step into the execution of the next line
+import pdb; pdb.set_trace()
+
+my_module_transformed(input_value)
+</pre>   <h4 id="id2">Print the Generated Code</h4> <p id="print-the-generated-code">If you’d like to run the same code multiple times, then it can be a bit tedious to step to the right code with <code>pdb</code>. In that case, one approach is to simply copy-paste the generated <code>forward</code> pass into your code and examine it from there.</p> <pre data-language="python"># Assume that `traced` is a GraphModule that has undergone some
+# number of transforms
+
+# Copy this code for later
+print(traced)
+# Print the code generated from symbolic tracing. This outputs:
+"""
+def forward(self, y):
+    x = self.x
+    add_1 = x + y;  x = y = None
+    return add_1
+"""
+
+# Subclass the original Module
+class SubclassM(M):
+    def __init__(self):
+        super().__init__()
+
+    # Paste the generated `forward` function (the one we printed and
+    # copied above) here
+    def forward(self, y):
+        x = self.x
+        add_1 = x + y;  x = y = None
+        return add_1
+
+# Create an instance of the original, untraced Module. Then, create an
+# instance of the Module with the copied `forward` function. We can
+# now compare the output of both the original and the traced version.
+pre_trace = M()
+post_trace = SubclassM()
+</pre>   <h4 id="use-the-to-folder-function-from-graphmodule">Use the <code>to_folder</code> Function From <code>GraphModule</code>
+</h4> <p><a class="reference internal" href="#torch.fx.GraphModule.to_folder" title="torch.fx.GraphModule.to_folder"><code>GraphModule.to_folder()</code></a> is a method in <code>GraphModule</code> that allows you to dump out the generated FX code to a folder. Although copying the forward pass into the code often suffices as in <a class="reference internal" href="#print-the-generated-code"><span class="std std-ref">Print the Generated Code</span></a>, it may be easier to examine modules and parameters using <code>to_folder</code>.</p> <pre data-language="python">m = symbolic_trace(M())
+m.to_folder("foo", "Bar")
+from foo import Bar
+y = Bar()
+</pre> <p>After running the above example, we can then look at the code within <code>foo/module.py</code> and modify it as desired (e.g. adding <code>print</code> statements or using <code>pdb</code>) to debug the generated code.</p>    <h3 id="debugging-the-transformation">Debugging the Transformation</h3> <p>Now that we’ve identified that a transformation is creating incorrect code, it’s time to debug the transformation itself. First, we’ll check the <a class="reference internal" href="#limitations-of-symbolic-tracing"><span class="std std-ref">Limitations of Symbolic Tracing</span></a> section in the documentation. Once we verify that tracing is working as expected, the goal becomes figuring out what went wrong during our <code>GraphModule</code> transformation. There may be a quick answer in <a class="reference internal" href="#writing-transformations"><span class="std std-ref">Writing Transformations</span></a>, but, if not, there are several ways to examine our traced module:</p> <pre data-language="python"># Sample Module
+class M(torch.nn.Module):
+    def forward(self, x, y):
+        return x + y
+
+# Create an instance of `M`
+m = M()
+
+# Symbolically trace an instance of `M` (returns a GraphModule). In
+# this example, we'll only be discussing how to inspect a
+# GraphModule, so we aren't showing any sample transforms for the
+# sake of brevity.
+traced = symbolic_trace(m)
+
+# Print the code produced by tracing the module.
+print(traced)
+# The generated `forward` function is:
+"""
+def forward(self, x, y):
+    add = x + y;  x = y = None
+    return add
+"""
+
+# Print the internal Graph.
+print(traced.graph)
+# This print-out returns:
+"""
+graph():
+    %x : [num_users=1] = placeholder[target=x]
+    %y : [num_users=1] = placeholder[target=y]
+    %add : [num_users=1] = call_function[target=operator.add](args = (%x, %y), kwargs = {})
+    return add
+"""
+
+# Print a tabular representation of the internal Graph.
+traced.graph.print_tabular()
+# This gives us:
+"""
+opcode         name    target                   args    kwargs
+-------------  ------  -----------------------  ------  --------
+placeholder    x       x                        ()      {}
+placeholder    y       y                        ()      {}
+call_function  add     &lt;built-in function add&gt;  (x, y)  {}
+output         output  output                   (add,)  {}
+"""
+</pre> <p>Using the utility functions above, we can compare our traced Module before and after we’ve applied our transformations. Sometimes, a simple visual comparison is enough to trace down a bug. If it’s still not clear what’s going wrong, a debugger like <code>pdb</code> can be a good next step.</p> <p>Going off of the example above, consider the following code:</p> <pre data-language="python"># Sample user-defined function
+def transform_graph(module: torch.nn.Module, tracer_class : type = fx.Tracer) -&gt; torch.nn.Module:
+    # Get the Graph from our traced Module
+    g = tracer_class().trace(module)
+
+    """
+    Transformations on `g` go here
+    """
+
+    return fx.GraphModule(module, g)
+
+# Transform the Graph
+transformed = transform_graph(traced)
+
+# Print the new code after our transforms. Check to see if it was
+# what we expected
+print(transformed)
+</pre> <p>Using the above example, let’s say that the call to <code>print(traced)</code> showed us that there was an error in our transforms. We want to find what goes wrong using a debugger. We start a <code>pdb</code> session. We can see what’s happening during the transform by breaking on <code>transform_graph(traced)</code>, then pressing <code>s</code> to “step into” the call to <code>transform_graph(traced)</code>.</p> <p>We may also have good luck by editing the <code>print_tabular</code> method to print different attributes of the Nodes in the Graph. (For example, we might want to see the Node’s <code>input_nodes</code> and <code>users</code>.)</p>   <h3 id="id3">Available Debuggers</h3> <p id="available-debuggers">The most common Python debugger is <a class="reference external" href="https://docs.python.org/3/library/pdb.html">pdb</a>. You can start your program in “debug mode” with <code>pdb</code> by typing <code>python -m pdb FILENAME.py</code> into the command line, where <code>FILENAME</code> is the name of the file you want to debug. After that, you can use the <code>pdb</code> <a class="reference external" href="https://docs.python.org/3/library/pdb.html#debugger-commands">debugger commands</a> to move through your running program stepwise. It’s common to set a breakpoint (<code>b LINE-NUMBER</code>) when you start <code>pdb</code>, then call <code>c</code> to run the program until that point. This prevents you from having to step through each line of execution (using <code>s</code> or <code>n</code>) to get to the part of the code you want to examine. Alternatively, you can write <code>import pdb; pdb.set_trace()</code> before the line you want to break at. If you add <code>pdb.set_trace()</code>, your program will automatically start in debug mode when you run it. (In other words, you can just type <code>python FILENAME.py</code> into the command line instead of <code>python -m pdb FILENAME.py</code>.) Once you’re running your file in debug mode, you can step through the code and examine your program’s internal state using certain commands. There are many excellent tutorials on <code>pdb</code> online, including RealPython’s <a class="reference external" href="https://realpython.com/python-debugging-pdb/">“Python Debugging With Pdb”</a>.</p> <p>IDEs like PyCharm or VSCode usually have a debugger built in. In your IDE, you can choose to either a) use <code>pdb</code> by pulling up a terminal window in your IDE (e.g. View → Terminal in VSCode), or b) use the built-in debugger (usually a graphical wrapper around <code>pdb</code>).</p>    <h2 id="id4">Limitations of Symbolic Tracing</h2> <p id="limitations-of-symbolic-tracing">FX uses a system of <strong>symbolic tracing</strong> (a.k.a <a class="reference external" href="https://en.wikipedia.org/wiki/Symbolic_execution">symbolic execution</a>) to capture the semantics of programs in a transformable/analyzable form. The system is <strong>tracing</strong> in that it executes the program (really a <a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module"><code>torch.nn.Module</code></a> or function) to record operations. It is <strong>symbolic</strong> in that the data flowing through the program during this execution is not real data, but rather symbols (<a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.Proxy"><code>Proxy</code></a> in FX parlance).</p> <p>Although symbolic tracing works for most neural net code, it has some limitations.</p>  <h3 id="dynamic-control-flow">Dynamic Control Flow</h3> <p>The main limitation of symbolic tracing is it does not currently support <em>dynamic control flow</em>. That is, loops or <code>if</code> statements where the condition may depend on the input values of the program.</p> <p>For example, let’s examine the following program:</p> <pre data-language="python">def func_to_trace(x):
+    if x.sum() &gt; 0:
+        return torch.relu(x)
+    else:
+        return torch.neg(x)
+
+traced = torch.fx.symbolic_trace(func_to_trace)
+"""
+  &lt;...&gt;
+  File "dyn.py", line 6, in func_to_trace
+    if x.sum() &gt; 0:
+  File "pytorch/torch/fx/proxy.py", line 155, in __bool__
+    return self.tracer.to_bool(self)
+  File "pytorch/torch/fx/proxy.py", line 85, in to_bool
+    raise TraceError('symbolically traced variables cannot be used as inputs to control flow')
+torch.fx.proxy.TraceError: symbolically traced variables cannot be used as inputs to control flow
+"""
+</pre> <p>The condition to the <code>if</code> statement relies on the value of <code>x.sum()</code>, which relies on the value of <code>x</code>, a function input. Since <code>x</code> can change (i.e. if you pass a new input tensor to the traced function), this is <em>dynamic control flow</em>. The traceback walks back up through your code to show you where this situation happens.</p>  <h4 id="static-control-flow">Static Control Flow</h4> <p>On the other hand, so-called <em>static control flow</em> is supported. Static control flow is loops or <code>if</code> statements whose value cannot change across invocations. Typically, in PyTorch programs, this control flow arises for code making decisions about a model’s architecture based on hyper-parameters. As a concrete example:</p> <pre data-language="python">import torch
+import torch.fx
+
+class MyModule(torch.nn.Module):
+    def __init__(self, do_activation : bool = False):
+        super().__init__()
+        self.do_activation = do_activation
+        self.linear = torch.nn.Linear(512, 512)
+
+    def forward(self, x):
+        x = self.linear(x)
+        # This if-statement is so-called static control flow.
+        # Its condition does not depend on any input values
+        if self.do_activation:
+            x = torch.relu(x)
+        return x
+
+without_activation = MyModule(do_activation=False)
+with_activation = MyModule(do_activation=True)
+
+traced_without_activation = torch.fx.symbolic_trace(without_activation)
+print(traced_without_activation.code)
+"""
+def forward(self, x):
+    linear_1 = self.linear(x);  x = None
+    return linear_1
+"""
+
+traced_with_activation = torch.fx.symbolic_trace(with_activation)
+print(traced_with_activation.code)
+"""
+import torch
+def forward(self, x):
+    linear_1 = self.linear(x);  x = None
+    relu_1 = torch.relu(linear_1);  linear_1 = None
+    return relu_1
+"""
+</pre> <p>The if-statement <code>if self.do_activation</code> does not depend on any function inputs, thus it is static. <code>do_activation</code> can be considered to be a hyper-parameter, and the traces of different instances of <code>MyModule</code> with different values for that parameter have different code. This is a valid pattern that is supported by symbolic tracing.</p> <p>Many instances of dynamic control flow are semantically static control flow. These instances can be made to support symbolic tracing by removing the data dependencies on input values, for example by moving values to <code>Module</code> attributes or by binding concrete values to arguments during symbolic tracing:</p> <pre data-language="python">def f(x, flag):
+    if flag: return x
+    else: return x*2
+
+fx.symbolic_trace(f) # Fails!
+
+fx.symbolic_trace(f, concrete_args={'flag': True})
+</pre> <p>In the case of truly dynamic control flow, the sections of the program that contain this code can be traced as calls to the Method (see <a class="reference internal" href="#customizing-tracing"><span class="std std-ref">Customizing Tracing with the Tracer class</span></a>) or function (see <a class="reference internal" href="#torch.fx.wrap" title="torch.fx.wrap"><code>wrap()</code></a>) rather than tracing through them.</p>    <h3 id="non-torch-functions">Non-<code>torch</code> Functions</h3> <p>FX uses <code>__torch_function__</code> as the mechanism by which it intercepts calls (see the <a class="reference external" href="https://github.com/pytorch/pytorch/blob/master/torch/fx/OVERVIEW.md#technical-details">technical overview</a> for more information about this). Some functions, such as builtin Python functions or those in the <code>math</code> module, are not covered by <code>__torch_function__</code>, but we would still like to capture them in symbolic tracing. For example:</p> <pre data-language="python">import torch
+import torch.fx
+from math import sqrt
+
+def normalize(x):
+    """
+    Normalize `x` by the size of the batch dimension
+    """
+    return x / sqrt(len(x))
+
+# It's valid Python code
+normalize(torch.rand(3, 4))
+
+traced = torch.fx.symbolic_trace(normalize)
+"""
+  &lt;...&gt;
+  File "sqrt.py", line 9, in normalize
+    return x / sqrt(len(x))
+  File "pytorch/torch/fx/proxy.py", line 161, in __len__
+    raise RuntimeError("'len' is not supported in symbolic tracing by default. If you want "
+RuntimeError: 'len' is not supported in symbolic tracing by default. If you want this call to be recorded, please call torch.fx.wrap('len') at module scope
+"""
+</pre> <p>The error tells us that the built-in function <code>len</code> is not supported. We can make it so that functions like this are recorded in the trace as direct calls using the <a class="reference internal" href="#torch.fx.wrap" title="torch.fx.wrap"><code>wrap()</code></a> API:</p> <pre data-language="python">torch.fx.wrap('len')
+torch.fx.wrap('sqrt')
+
+traced = torch.fx.symbolic_trace(normalize)
+
+print(traced.code)
+"""
+import math
+def forward(self, x):
+    len_1 = len(x)
+    sqrt_1 = math.sqrt(len_1);  len_1 = None
+    truediv = x / sqrt_1;  x = sqrt_1 = None
+    return truediv
+"""
+</pre>   <h3 id="customizing-tracing">Customizing Tracing with the <code>Tracer</code> class</h3> <p id="customizing-tracing-with-the-tracer-class">The <a class="reference internal" href="#torch.fx.Tracer" title="torch.fx.Tracer"><code>Tracer</code></a> class is the class that underlies the implementation of <code>symbolic_trace</code>. The behavior of tracing can be customized by subclassing Tracer, like so:</p> <pre data-language="python">class MyCustomTracer(torch.fx.Tracer):
+    # Inside here you can override various methods
+    # to customize tracing. See the `Tracer` API
+    # reference
+    pass
+
+
+# Let's use this custom tracer to trace through this module
+class MyModule(torch.nn.Module):
+    def forward(self, x):
+        return torch.relu(x) + torch.ones(3, 4)
+
+mod = MyModule()
+
+traced_graph = MyCustomTracer().trace(mod)
+# trace() returns a Graph. Let's wrap it up in a
+# GraphModule to make it runnable
+traced = torch.fx.GraphModule(mod, traced_graph)
+</pre>  <h4 id="leaf-modules">Leaf Modules</h4> <p>Leaf Modules are the modules that appear as calls in the symbolic trace rather than being traced through. The default set of leaf modules is the set of standard <code>torch.nn</code> module instances. For example:</p> <pre data-language="python">class MySpecialSubmodule(torch.nn.Module):
+    def forward(self, x):
+        return torch.neg(x)
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(3, 4)
+        self.submod = MySpecialSubmodule()
+
+    def forward(self, x):
+        return self.submod(self.linear(x))
+
+traced = torch.fx.symbolic_trace(MyModule())
+print(traced.code)
+# `linear` is preserved as a call, yet `submod` is traced though.
+# This is because the default set of "Leaf Modules" includes all
+# standard `torch.nn` modules.
+"""
+import torch
+def forward(self, x):
+    linear_1 = self.linear(x);  x = None
+    neg_1 = torch.neg(linear_1);  linear_1 = None
+    return neg_1
+"""
+</pre> <p>The set of leaf modules can be customized by overriding <a class="reference internal" href="#torch.fx.Tracer.is_leaf_module" title="torch.fx.Tracer.is_leaf_module"><code>Tracer.is_leaf_module()</code></a>.</p>    <h3 id="miscellanea">Miscellanea</h3> <ul> <li>
+<p>Tensor constructors (e.g. <code>torch.zeros</code>, <code>torch.ones</code>, <code>torch.rand</code>, <code>torch.randn</code>, <code>torch.sparse_coo_tensor</code>) are currently not traceable.</p> <ul class="simple"> <li>The deterministic constructors (<code>zeros</code>, <code>ones</code>) can be used and the value they produce will be embedded in the trace as a constant. This is only problematic if the arguments to these constructors refers to dynamic input sizes. In this case, <code>ones_like</code> or <code>zeros_like</code> may be a viable substitute.</li> <li>Nondeterministic constructors (<code>rand</code>, <code>randn</code>) will have a single random value embedded in the trace. This is likely not the intended behavior. One workaround is to wrap <code>torch.randn</code> in a <code>torch.fx.wrap</code> function and call that instead.</li> </ul>  <pre data-language="python">@torch.fx.wrap
+def torch_randn(x, shape):
+    return torch.randn(shape)
+
+def f(x):
+    return x + torch_randn(x, 5)
+fx.symbolic_trace(f)
+</pre>  <ul class="simple"> <li>This behavior may be fixed in a future release.</li> </ul> </li> <li>
+<p>Type annotations</p> <ul class="simple"> <li>Python 3-style type annotations (e.g. <code>func(x : torch.Tensor, y : int) -&gt; torch.Tensor</code>) are supported and will be preserved by symbolic tracing.</li> <li>Python 2-style comment type annotations <code># type: (torch.Tensor, int) -&gt; torch.Tensor</code> are not currently supported.</li> <li>Annotations on local names within a function are not currently supported.</li> </ul> </li> <li>
+<p>Gotcha around <code>training</code> flag and submodules</p> <ul class="simple"> <li>When using functionals like <code>torch.nn.functional.dropout</code>, it will be common for the training argument to be passed in as <code>self.training</code>. During FX tracing, this will likely be baked in as a constant value.</li> </ul>  <pre data-language="python">import torch
+import torch.fx
+
+class DropoutRepro(torch.nn.Module):
+  def forward(self, x):
+    return torch.nn.functional.dropout(x, training=self.training)
+
+
+traced = torch.fx.symbolic_trace(DropoutRepro())
+print(traced.code)
+"""
+def forward(self, x):
+  dropout = torch.nn.functional.dropout(x, p = 0.5, training = True, inplace = False);  x = None
+  return dropout
+"""
+
+traced.eval()
+
+x = torch.randn(5, 3)
+torch.testing.assert_close(traced(x), x)
+"""
+AssertionError: Tensor-likes are not close!
+
+Mismatched elements: 15 / 15 (100.0%)
+Greatest absolute difference: 1.6207983493804932 at index (0, 2) (up to 1e-05 allowed)
+Greatest relative difference: 1.0 at index (0, 0) (up to 0.0001 allowed)
+"""
+</pre>  <ul class="simple"> <li>However, when the standard <code>nn.Dropout()</code> submodule is used, the training flag is encapsulated and–because of the preservation of the <code>nn.Module</code> object model–can be changed.</li> </ul>  <pre data-language="python">class DropoutRepro2(torch.nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.drop = torch.nn.Dropout()
+
+  def forward(self, x):
+    return self.drop(x)
+
+traced = torch.fx.symbolic_trace(DropoutRepro2())
+print(traced.code)
+"""
+def forward(self, x):
+  drop = self.drop(x);  x = None
+  return drop
+"""
+
+traced.eval()
+
+x = torch.randn(5, 3)
+torch.testing.assert_close(traced(x), x)
+</pre>  </li> </ul>  <ul class="simple"> <li>Because of this difference, consider marking modules that interact with the <code>training</code> flag dynamically as leaf modules.</li> </ul>     <h2 id="api-reference">API Reference</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.fx.symbolic_trace">
+<code>torch.fx.symbolic_trace(root, concrete_args=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#symbolic_trace"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Symbolic tracing API</p> <p>Given an <code>nn.Module</code> or function instance <code>root</code>, this function will return a <code>GraphModule</code> constructed by recording operations seen while tracing through <code>root</code>.</p> <p><code>concrete_args</code> allows you to partially specialize your function, whether it’s to remove control flow or data structures.</p> <p>For example:</p> <pre data-language="python">def f(a, b):
+    if b == True:
+        return a
+    else:
+        return a*2
+</pre> <p>FX can typically not trace through this due to the presence of control flow. However, we can use <code>concrete_args</code> to specialize on the value of <code>b</code> to trace through this:</p> <pre data-language="python">f = fx.symbolic_trace(f, concrete_args={'b': False})
+assert f(3, False)  == 6
+</pre> <p>Note that although you can still pass in different values of <code>b</code>, they will be ignored.</p> <p>We can also use <code>concrete_args</code> to eliminate data-structure handling from our function. This will use pytrees to flatten your input. To avoid overspecializing, pass in <code>fx.PH</code> for values that shouldn’t be specialized. For example:</p> <pre data-language="python">def f(x):
+    out = 0
+    for v in x.values():
+        out += v
+    return out
+f = fx.symbolic_trace(f, concrete_args={'x': {'a': fx.PH, 'b': fx.PH, 'c': fx.PH}})
+assert f({'a': 1, 'b': 2, 'c': 4}) == 7
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>root</strong> (<em>Union</em><em>[</em><a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">torch.nn.Module</a><em>, </em><em>Callable</em><em>]</em>) – Module or function to be traced and converted into a Graph representation.</li> <li>
+<strong>concrete_args</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>any</em><em>]</em><em>]</em>) – Inputs to be partially specialized</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>a Module created from the recorded operations from <code>root</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule">GraphModule</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.fx.wrap">
+<code>torch.fx.wrap(fn_or_name)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#wrap"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This function can be called at module-level scope to register fn_or_name as a “leaf function”. A “leaf function” will be preserved as a CallFunction node in the FX trace instead of being traced through:</p> <pre data-language="python"># foo/bar/baz.py
+def my_custom_function(x, y):
+    return x * x + y * y
+
+torch.fx.wrap('my_custom_function')
+
+def fn_to_be_traced(x, y):
+    # When symbolic tracing, the below call to my_custom_function will be inserted into
+    # the graph rather than tracing it.
+    return my_custom_function(x, y)
+</pre> <p>This function can also equivalently be used as a decorator:</p> <pre data-language="python"># foo/bar/baz.py
+@torch.fx.wrap
+def my_custom_function(x, y):
+    return x * x + y * y
+</pre> <p>A wrapped function can be thought of a “leaf function”, analogous to the concept of “leaf modules”, that is, they are functions that are left as calls in the FX trace rather than traced through.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>fn_or_name</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Callable</em><em>]</em>) – The function or name of the global function to insert into the graph when it’s called</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.GraphModule">
+<code>class torch.fx.GraphModule(*args, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>GraphModule is an nn.Module generated from an fx.Graph. Graphmodule has a <code>graph</code> attribute, as well as <code>code</code> and <code>forward</code> attributes generated from that <code>graph</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>When <code>graph</code> is reassigned, <code>code</code> and <code>forward</code> will be automatically regenerated. However, if you edit the contents of the <code>graph</code> without reassigning the <code>graph</code> attribute itself, you must call <code>recompile()</code> to update the generated code.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.__init__">
+<code>__init__(root, graph, class_name='GraphModule')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.__init__"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Construct a GraphModule.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>root</strong> (<em>Union</em><em>[</em><a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">torch.nn.Module</a><em>, </em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em>) – <code>root</code> can either be an nn.Module instance or a Dict mapping strings to any attribute type. In the case that <code>root</code> is a Module, any references to Module-based objects (via qualified name) in the Graph’s Nodes’ <code>target</code> field will be copied over from the respective place within <code>root</code>’s Module hierarchy into the GraphModule’s module hierarchy. In the case that <code>root</code> is a dict, the qualified name found in a Node’s <code>target</code> will be looked up directly in the dict’s keys. The object mapped to by the Dict will be copied over into the appropriate place within the GraphModule’s module hierarchy.</li> <li>
+<strong>graph</strong> (<a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph">Graph</a>) – <code>graph</code> contains the nodes this GraphModule should use for code generation</li> <li>
+<strong>class_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – <code>name</code> denotes the name of this GraphModule for debugging purposes. If it’s unset, all error messages will report as originating from <code>GraphModule</code>. It may be helpful to set this to <code>root</code>’s original name or a name that makes sense within the context of your transform.</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.add_submodule">
+<code>add_submodule(target, m)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.add_submodule"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Adds the given submodule to <code>self</code>.</p> <p>This installs empty Modules where none exist yet if they are subpaths of <code>target</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The fully-qualified string name of the new submodule (See example in <code>nn.Module.get_submodule</code> for how to specify a fully-qualified string.)</li> <li>
+<strong>m</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a>) – The submodule itself; the actual object we want to install in the current Module</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+
+<dl class="simple"> <dt>Whether or not the submodule could be inserted. For</dt>
+<dd>
+<p>this method to return True, each object in the chain denoted by <code>target</code> must either a) not exist yet, or b) reference an <code>nn.Module</code> (not a parameter or other attribute)</p> </dd> </dl> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.GraphModule.code">
+<code>property code: str</code> </dt> <dd>
+<p>Return the Python code generated from the <code>Graph</code> underlying this <code>GraphModule</code>.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.delete_all_unused_submodules">
+<code>delete_all_unused_submodules()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.delete_all_unused_submodules"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Deletes all unused submodules from <code>self</code>.</p> <p>A Module is considered “used” if any one of the following is true: 1. It has children that are used 2. Its forward is called directly via a <code>call_module</code> node 3. It has a non-Module attribute that is used from a <code>get_attr</code> node</p> <p>This method can be called to clean up an <code>nn.Module</code> without manually calling <code>delete_submodule</code> on each unused submodule.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.delete_submodule">
+<code>delete_submodule(target)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.delete_submodule"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Deletes the given submodule from <code>self</code>.</p> <p>The module will not be deleted if <code>target</code> is not a valid target.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>target</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The fully-qualified string name of the new submodule (See example in <code>nn.Module.get_submodule</code> for how to specify a fully-qualified string.)</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+
+<dl class="simple"> <dt>Whether or not the target string referenced a</dt>
+<dd>
+<p>submodule we want to delete. A return value of <code>False</code> means that the <code>target</code> was not a valid reference to a submodule.</p> </dd> </dl> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.GraphModule.graph">
+<code>property graph: Graph</code> </dt> <dd>
+<p>Return the <code>Graph</code> underlying this <code>GraphModule</code></p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.print_readable">
+<code>print_readable(print_output=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.print_readable"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return the Python code generated for current GraphModule and its children GraphModules</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.recompile">
+<code>recompile()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.recompile"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Recompile this GraphModule from its <code>graph</code> attribute. This should be called after editing the contained <code>graph</code>, otherwise the generated code of this <code>GraphModule</code> will be out of date.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>PythonCode</em></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.GraphModule.to_folder">
+<code>to_folder(folder, module_name='FxModule')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph_module.html#GraphModule.to_folder"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl> <dt>
+<code>Dumps out module to folder with module_name so that it can be</code> </dt>
+<dd>
+<p>imported with <code>from &lt;folder&gt; import &lt;module_name&gt;</code></p> <p>Args:</p>  <p>folder (Union[str, os.PathLike]): The folder to write the code out to</p> <dl class="simple"> <dt>
+<code>module_name (str): Top-level name to use for the Module while</code> </dt>
+<dd>
+<p>writing out the code</p> </dd> </dl>  </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Graph">
+<code>class torch.fx.Graph(owning_module=None, tracer_cls=None, tracer_extras=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>Graph</code> is the main data structure used in the FX Intermediate Representation. It consists of a series of <code>Node</code> s, each representing callsites (or other syntactic constructs). The list of <code>Node</code> s, taken together, constitute a valid Python function.</p> <p>For example, the following code</p> <pre data-language="python">import torch
+import torch.fx
+
+class MyModule(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.param = torch.nn.Parameter(torch.rand(3, 4))
+        self.linear = torch.nn.Linear(4, 5)
+
+    def forward(self, x):
+        return torch.topk(torch.sum(self.linear(x + self.linear.weight).relu(), dim=-1), 3)
+
+m = MyModule()
+gm = torch.fx.symbolic_trace(m)
+</pre> <p>Will produce the following Graph:</p> <pre data-language="python">print(gm.graph)
+</pre> <pre data-language="text">graph(x):
+    %linear_weight : [num_users=1] = self.linear.weight
+    %add_1 : [num_users=1] = call_function[target=operator.add](args = (%x, %linear_weight), kwargs = {})
+    %linear_1 : [num_users=1] = call_module[target=linear](args = (%add_1,), kwargs = {})
+    %relu_1 : [num_users=1] = call_method[target=relu](args = (%linear_1,), kwargs = {})
+    %sum_1 : [num_users=1] = call_function[target=torch.sum](args = (%relu_1,), kwargs = {dim: -1})
+    %topk_1 : [num_users=1] = call_function[target=torch.topk](args = (%sum_1, 3), kwargs = {})
+    return topk_1
+</pre> <p>For the semantics of operations represented in the <code>Graph</code>, please see <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.__init__">
+<code>__init__(owning_module=None, tracer_cls=None, tracer_extras=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.__init__"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Construct an empty Graph.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.call_function">
+<code>call_function(the_function, args=None, kwargs=None, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.call_function"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert a <code>call_function</code> <code>Node</code> into the <code>Graph</code>. A <code>call_function</code> node represents a call to a Python callable, specified by <code>the_function</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>the_function</strong> (<em>Callable</em><em>[</em><em>...</em><em>, </em><em>Any</em><em>]</em>) – The function to be called. Can be any PyTorch operator, Python function, or member of the <code>builtins</code> or <code>operator</code> namespaces.</li> <li>
+<strong>args</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>Argument</em><em>, </em><em>...</em><em>]</em><em>]</em>) – The positional arguments to be passed to the called function.</li> <li>
+<strong>kwargs</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Argument</em><em>]</em><em>]</em>) – The keyword arguments to be passed to the called function</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The newly created and inserted <code>call_function</code> node.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <a class="reference internal" href="#torch.fx.Graph.create_node" title="torch.fx.Graph.create_node"><code>Graph.create_node()</code></a>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.call_method">
+<code>call_method(method_name, args=None, kwargs=None, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.call_method"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert a <code>call_method</code> <code>Node</code> into the <code>Graph</code>. A <code>call_method</code> node represents a call to a given method on the 0th element of <code>args</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>method_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of the method to apply to the self argument. For example, if args[0] is a <code>Node</code> representing a <code>Tensor</code>, then to call <code>relu()</code> on that <code>Tensor</code>, pass <code>relu</code> to <code>method_name</code>.</li> <li>
+<strong>args</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>Argument</em><em>, </em><em>...</em><em>]</em><em>]</em>) – The positional arguments to be passed to the called method. Note that this <em>should</em> include a <code>self</code> argument.</li> <li>
+<strong>kwargs</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Argument</em><em>]</em><em>]</em>) – The keyword arguments to be passed to the called method</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The newly created and inserted <code>call_method</code> node.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <a class="reference internal" href="#torch.fx.Graph.create_node" title="torch.fx.Graph.create_node"><code>Graph.create_node()</code></a>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.call_module">
+<code>call_module(module_name, args=None, kwargs=None, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.call_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert a <code>call_module</code> <code>Node</code> into the <code>Graph</code>. A <code>call_module</code> node represents a call to the forward() function of a <code>Module</code> in the <code>Module</code> hierarchy.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The qualified name of the <code>Module</code> in the <code>Module</code> hierarchy to be called. For example, if the traced <code>Module</code> has a submodule named <code>foo</code>, which has a submodule named <code>bar</code>, the qualified name <code>foo.bar</code> should be passed as <code>module_name</code> to call that module.</li> <li>
+<strong>args</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>Argument</em><em>, </em><em>...</em><em>]</em><em>]</em>) – The positional arguments to be passed to the called method. Note that this should <em>not</em> include a <code>self</code> argument.</li> <li>
+<strong>kwargs</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Argument</em><em>]</em><em>]</em>) – The keyword arguments to be passed to the called method</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The newly-created and inserted <code>call_module</code> node.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <a class="reference internal" href="#torch.fx.Graph.create_node" title="torch.fx.Graph.create_node"><code>Graph.create_node()</code></a>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.create_node">
+<code>create_node(op, target, args=None, kwargs=None, name=None, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.create_node"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Create a <code>Node</code> and add it to the <code>Graph</code> at the current insert-point. Note that the current insert-point can be set via <a class="reference internal" href="#torch.fx.Graph.inserting_before" title="torch.fx.Graph.inserting_before"><code>Graph.inserting_before()</code></a> and <a class="reference internal" href="#torch.fx.Graph.inserting_after" title="torch.fx.Graph.inserting_after"><code>Graph.inserting_after()</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>op</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – the opcode for this Node. One of ‘call_function’, ‘call_method’, ‘get_attr’, ‘call_module’, ‘placeholder’, or ‘output’. The semantics of these opcodes are described in the <code>Graph</code> docstring.</li> <li>
+<strong>args</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>Argument</em><em>, </em><em>...</em><em>]</em><em>]</em>) – is a tuple of arguments to this node.</li> <li>
+<strong>kwargs</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Argument</em><em>]</em><em>]</em>) – the kwargs of this Node</li> <li>
+<strong>name</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – an optional string name for the <code>Node</code>. This will influence the name of the value assigned to in the Python generated code.</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The newly-created and inserted node.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.eliminate_dead_code">
+<code>eliminate_dead_code()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.eliminate_dead_code"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Remove all dead code from the graph, based on each node’s number of users, and whether the nodes have any side effects. The graph must be topologically sorted before calling.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>Whether the graph was changed as a result of the pass.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> <p>Example:</p> <p>Before dead code is eliminated, <code>a</code> from <code>a = x + 1</code> below has no users and thus can be eliminated from the graph without having an effect.</p> <pre data-language="python">def forward(self, x):
+    a = x + 1
+    return x + self.attr_1
+</pre> <p>After dead code is eliminated, <code>a = x + 1</code> has been removed, and the rest of <code>forward</code> remains.</p> <pre data-language="python">def forward(self, x):
+    return x + self.attr_1
+</pre> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Dead code elimination has some heuristics to avoid removing side-effectful nodes (see Node.is_impure) but in general coverage is very bad, so you should assume that this method is not sound to call unless you know that your FX graph consists entirely of functional operations.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.erase_node">
+<code>erase_node(to_erase)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.erase_node"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Erases a <code>Node</code> from the <code>Graph</code>. Throws an exception if there are still users of that node in the <code>Graph</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>to_erase</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The <code>Node</code> to erase from the <code>Graph</code>.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.get_attr">
+<code>get_attr(qualified_name, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.get_attr"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert a <code>get_attr</code> node into the Graph. A <code>get_attr</code> <code>Node</code> represents the fetch of an attribute from the <code>Module</code> hierarchy.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>qualified_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – the fully-qualified name of the attribute to be retrieved. For example, if the traced Module has a submodule named <code>foo</code>, which has a submodule named <code>bar</code>, which has an attribute named <code>baz</code>, the qualified name <code>foo.bar.baz</code> should be passed as <code>qualified_name</code>.</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The newly-created and inserted <code>get_attr</code> node.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <code>Graph.create_node</code>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.graph_copy">
+<code>graph_copy(g, val_map, return_output_node=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.graph_copy"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Copy all nodes from a given graph into <code>self</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>g</strong> (<a class="reference internal" href="#torch.fx.Graph" title="torch.fx.Graph">Graph</a>) – The source graph from which to copy Nodes.</li> <li>
+<strong>val_map</strong> (<em>Dict</em><em>[</em><a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a><em>, </em><a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a><em>]</em>) – a dictionary that will be populated with a mapping from nodes in <code>g</code> to nodes in <code>self</code>. Note that <code>val_map</code> can be passed in with values in it already to override copying of certain values.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The value in <code>self</code> that is now equivalent to the output value in <code>g</code>, if <code>g</code> had an <code>output</code> node. <code>None</code> otherwise.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>, …], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/functions.html#slice" title="(in Python v3.12)">slice</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#range" title="(in Python v3.12)">range</a>, <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#complex" title="(in Python v3.12)">complex</a>, <a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype">dtype</a>, <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>, <a class="reference internal" href="tensor_attributes#torch.device" title="torch.device">device</a>, <a class="reference internal" href="tensor_attributes#torch.memory_format" title="torch.memory_format">memory_format</a>, <a class="reference internal" href="tensor_attributes#torch.layout" title="torch.layout">layout</a>, <em>OpOverload</em>]]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.inserting_after">
+<code>inserting_after(n=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.inserting_after"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl> <dt>Set the point at which create_node and companion methods will insert into the graph.</dt>
+<dd>
+<p>When used within a ‘with’ statement, this will temporary set the insert point and then restore it when the with statement exits:</p> <pre data-language="python">with g.inserting_after(n):
+    ... # inserting after node n
+... # insert point restored to what it was previously
+g.inserting_after(n) #  set the insert point permanently
+</pre> <p>Args:</p>  <dl class="simple"> <dt>n (Optional[Node]): The node before which to insert. If None this will insert after</dt>
+<dd>
+<p>the beginning of the entire graph.</p> </dd> </dl>  <dl class="simple"> <dt>Returns:</dt>
+<dd>
+<p>A resource manager that will restore the insert point on <code>__exit__</code>.</p> </dd> </dl> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.inserting_before">
+<code>inserting_before(n=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.inserting_before"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl> <dt>Set the point at which create_node and companion methods will insert into the graph.</dt>
+<dd>
+<p>When used within a ‘with’ statement, this will temporary set the insert point and then restore it when the with statement exits:</p> <pre data-language="python">with g.inserting_before(n):
+    ... # inserting before node n
+... # insert point restored to what it was previously
+g.inserting_before(n) #  set the insert point permanently
+</pre> <p>Args:</p>  <dl class="simple"> <dt>n (Optional[Node]): The node before which to insert. If None this will insert before</dt>
+<dd>
+<p>the beginning of the entire graph.</p> </dd> </dl>  <dl class="simple"> <dt>Returns:</dt>
+<dd>
+<p>A resource manager that will restore the insert point on <code>__exit__</code>.</p> </dd> </dl> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.lint">
+<code>lint()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.lint"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Runs various checks on this Graph to make sure it is well-formed. In particular: - Checks Nodes have correct ownership (owned by this graph) - Checks Nodes appear in topological order - If this Graph has an owning GraphModule, checks that targets exist in that GraphModule</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.node_copy">
+<code>node_copy(node, arg_transform=&lt;function Graph.&lt;lambda&gt;&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.node_copy"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Copy a node from one graph into another. <code>arg_transform</code> needs to transform arguments from the graph of node to the graph of self. Example:</p> <pre data-language="python"># Copying all the nodes in `g` into `new_graph`
+g : torch.fx.Graph = ...
+new_graph = torch.fx.graph()
+value_remap = {}
+for node in g.nodes:
+    value_remap[node] = new_graph.node_copy(node, lambda n : value_remap[n])
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>node</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The node to copy into <code>self</code>.</li> <li>
+<strong>arg_transform</strong> (<em>Callable</em><em>[</em><em>[</em><a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a><em>]</em><em>, </em><em>Argument</em><em>]</em>) – A function that transforms <code>Node</code> arguments in node’s <code>args</code> and <code>kwargs</code> into the equivalent argument in <code>self</code>. In the simplest case, this should retrieve a value out of a table mapping Nodes in the original graph to <code>self</code>.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Graph.nodes">
+<code>property nodes: _node_list</code> </dt> <dd>
+<p>Get the list of Nodes that constitute this Graph.</p> <p>Note that this <code>Node</code> list representation is a doubly-linked list. Mutations during iteration (e.g. delete a Node, add a Node) are safe.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A doubly-linked list of Nodes. Note that <code>reversed</code> can be called on this list to switch iteration order.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.on_generate_code">
+<code>on_generate_code(make_transformer)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.on_generate_code"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Register a transformer function when python code is generated</p>  <dl> <dt>Args:</dt>
+<dd>
+<dl> <dt>make_transformer (Callable[[Optional[TransformCodeFunc]], TransformCodeFunc]):</dt>
+<dd>
+<p>a function that returns a code transformer to be registered. This function is called by <code>on_generate_code</code> to obtain the code transformer.</p> <p>This function is also given as its input the currently registered code transformer (or None if nothing is registered), in case it is not desirable to overwrite it. This is useful to chain code transformers together.</p> </dd> </dl> </dd> <dt>Returns:</dt>
+<dd>
+<p>a context manager that when used in a <code>with</code> statement, to automatically restore the previously registered code transformer.</p> </dd> </dl> <p>Example:</p> <pre data-language="python">gm: fx.GraphModule = ...
+
+# This is a code transformer we want to register. This code
+# transformer prepends a pdb import and trace statement at the very
+# beginning of the generated torch.fx code to allow for manual
+# debugging with the PDB library.
+def insert_pdb(body):
+    return ["import pdb; pdb.set_trace()\n", *body]
+
+# Registers `insert_pdb`, and overwrites the current registered
+# code transformer (given by `_` to the lambda):
+gm.graph.on_generate_code(
+    lambda _: insert_pdb
+)
+
+# Or alternatively, registers a code transformer which first
+# runs `body` through existing registered transformer, then
+# through `insert_pdb`:
+gm.graph.on_generate_code(
+    lambda current_trans: (
+        lambda body: insert_pdb(
+            current_trans(body) if current_trans
+            else body
+        )
+    )
+)
+
+gm.recompile()
+gm(*inputs)  # drops into pdb
+</pre> <p>This function can also be used as a context manager, with the benefit to automatically restores the previously registered code transformer:</p> <pre data-language="python"># ... continue from previous example
+
+with gm.graph.on_generate_code(lambda _: insert_pdb):
+    # do more stuff with `gm`...
+    gm.recompile()
+    gm(*inputs)  # drops into pdb
+
+# now previous code transformer is restored (but `gm`'s code with pdb
+# remains - that means you can run `gm` with pdb here too, until you
+# run next `recompile()`).
+</pre>  <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.output">
+<code>output(result, type_expr=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.output"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert an <code>output</code> <code>Node</code> into the <code>Graph</code>. An <code>output</code> node represents a <code>return</code> statement in Python code. <code>result</code> is the value that should be returned.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>result</strong> (<em>Argument</em>) – The value to be returned.</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have.</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <code>Graph.create_node</code>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.placeholder">
+<code>placeholder(name, type_expr=None, default_value)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.placeholder"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert a <code>placeholder</code> node into the Graph. A <code>placeholder</code> represents a function input.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – A name for the input value. This corresponds to the name of the positional argument to the function this <code>Graph</code> represents.</li> <li>
+<strong>type_expr</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – an optional type annotation representing the Python type the output of this node will have. This is needed in some cases for proper code generation (e.g. when the function is used subsequently in TorchScript compilation).</li> <li>
+<strong>default_value</strong> (<em>Any</em>) – The default value this function argument should take on. NOTE: to allow for <code>None</code> as a default value, <code>inspect.Signature.empty</code> should be passed as this argument to specify that the parameter does _not_ have a default value.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The same insertion point and type expression rules apply for this method as <code>Graph.create_node</code>.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.print_tabular">
+<code>print_tabular()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.print_tabular"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Prints the intermediate representation of the graph in tabular format. Note that this API requires the <code>tabulate</code> module to be installed.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.process_inputs">
+<code>process_inputs(*args)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.process_inputs"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Processes args so that they can be passed to the FX graph.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.process_outputs">
+<code>process_outputs(out)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.process_outputs"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.python_code">
+<code>python_code(root_module, *, verbose=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.python_code"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Turn this <code>Graph</code> into valid Python code.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>root_module</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of the root module on which to look-up qualified name targets. This is usually ‘self’.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>src: the Python source code representing the object globals: a dictionary of global names in <code>src</code> -&gt; the objects that they reference.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>A PythonCode object, consisting of two fields</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Graph.set_codegen">
+<code>set_codegen(codegen)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/graph.html#Graph.set_codegen"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Node">
+<code>class torch.fx.Node(graph, name, op, target, args, kwargs, return_type=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>Node</code> is the data structure that represents individual operations within a <code>Graph</code>. For the most part, Nodes represent callsites to various entities, such as operators, methods, and Modules (some exceptions include nodes that specify function inputs and outputs). Each <code>Node</code> has a function specified by its <code>op</code> property. The <code>Node</code> semantics for each value of <code>op</code> are as follows:</p> <ul class="simple"> <li>
+<code>placeholder</code> represents a function input. The <code>name</code> attribute specifies the name this value will take on. <code>target</code> is similarly the name of the argument. <code>args</code> holds either: 1) nothing, or 2) a single argument denoting the default parameter of the function input. <code>kwargs</code> is don’t-care. Placeholders correspond to the function parameters (e.g. <code>x</code>) in the graph printout.</li> <li>
+<code>get_attr</code> retrieves a parameter from the module hierarchy. <code>name</code> is similarly the name the result of the fetch is assigned to. <code>target</code> is the fully-qualified name of the parameter’s position in the module hierarchy. <code>args</code> and <code>kwargs</code> are don’t-care</li> <li>
+<code>call_function</code> applies a free function to some values. <code>name</code> is similarly the name of the value to assign to. <code>target</code> is the function to be applied. <code>args</code> and <code>kwargs</code> represent the arguments to the function, following the Python calling convention</li> <li>
+<code>call_module</code> applies a module in the module hierarchy’s <code>forward()</code> method to given arguments. <code>name</code> is as previous. <code>target</code> is the fully-qualified name of the module in the module hierarchy to call. <code>args</code> and <code>kwargs</code> represent the arguments to invoke the module on, <em>excluding the self argument</em>.</li> <li>
+<code>call_method</code> calls a method on a value. <code>name</code> is as similar. <code>target</code> is the string name of the method to apply to the <code>self</code> argument. <code>args</code> and <code>kwargs</code> represent the arguments to invoke the module on, <em>including the self argument</em>
+</li> <li>
+<code>output</code> contains the output of the traced function in its <code>args[0]</code> attribute. This corresponds to the “return” statement in the Graph printout.</li> </ul> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.all_input_nodes">
+<code>property all_input_nodes: List[Node]</code> </dt> <dd>
+<p>Return all Nodes that are inputs to this Node. This is equivalent to iterating over <code>args</code> and <code>kwargs</code> and only collecting the values that are Nodes.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>List of <code>Nodes</code> that appear in the <code>args</code> and <code>kwargs</code> of this <code>Node</code>, in that order.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.append">
+<code>append(x)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.append"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert <code>x</code> after this node in the list of nodes in the graph. Equivalent to <code>self.next.prepend(x)</code></p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>x</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The node to put after this node. Must be a member of the same graph.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.args">
+<code>property args: Tuple[Optional[Union[Tuple[Any, ...], List[Any], Dict[str, Any], slice, range, Node, str, int, float, bool, complex, dtype, Tensor, device, memory_format, layout, OpOverload]], ...]</code> </dt> <dd>
+<p>The tuple of arguments to this <code>Node</code>. The interpretation of arguments depends on the node’s opcode. See the <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a> docstring for more information.</p> <p>Assignment to this property is allowed. All accounting of uses and users is updated automatically on assignment.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.format_node">
+<code>format_node(placeholder_names=None, maybe_return_typename=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.format_node"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return a descriptive string representation of <code>self</code>.</p> <p>This method can be used with no arguments as a debugging utility.</p> <p>This function is also used internally in the <code>__str__</code> method of <code>Graph</code>. Together, the strings in <code>placeholder_names</code> and <code>maybe_return_typename</code> make up the signature of the autogenerated <code>forward</code> function in this Graph’s surrounding GraphModule. <code>placeholder_names</code> and <code>maybe_return_typename</code> should not be used otherwise.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>placeholder_names</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em>) – A list that will store formatted strings representing the placeholders in the generated <code>forward</code> function. Internal use only.</li> <li>
+<strong>maybe_return_typename</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>]</em>) – A single-element list that will store a formatted string representing the output of the generated <code>forward</code> function. Internal use only.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+
+<dl class="simple"> <dt>
+<code>If 1) we’re using format_node as an internal helper</code> </dt>
+<dd>
+<p>in the <code>__str__</code> method of <code>Graph</code>, and 2) <code>self</code> is a placeholder Node, return <code>None</code>. Otherwise, return a descriptive string representation of the current Node.</p> </dd> </dl> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.is_impure">
+<code>is_impure()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.is_impure"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns whether this op is impure, i.e. if its op is a placeholder or output, or if a call_function or call_module which is impure.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>If the op is impure or not.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.kwargs">
+<code>property kwargs: Dict[str, Optional[Union[Tuple[Any, ...], List[Any], Dict[str, Any], slice, range, Node, str, int, float, bool, complex, dtype, Tensor, device, memory_format, layout, OpOverload]]]</code> </dt> <dd>
+<p>The dict of keyword arguments to this <code>Node</code>. The interpretation of arguments depends on the node’s opcode. See the <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node"><code>Node</code></a> docstring for more information.</p> <p>Assignment to this property is allowed. All accounting of uses and users is updated automatically on assignment.</p> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.next">
+<code>property next: Node</code> </dt> <dd>
+<p>Returns the next <code>Node</code> in the linked list of Nodes.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The next <code>Node</code> in the linked list of Nodes.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.normalized_arguments">
+<code>normalized_arguments(root, arg_types=None, kwarg_types=None, normalize_to_only_use_kwargs=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.normalized_arguments"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns normalized arguments to Python targets. This means that <code>args/kwargs</code> will be matched up to the module/functional’s signature and return exclusively kwargs in positional order if <code>normalize_to_only_use_kwargs</code> is true. Also populates default values. Does not support positional-only parameters or varargs parameters.</p> <p>Supports module calls.</p> <p>May require <code>arg_types</code> and <code>kwarg_types</code> in order to disambiguate overloads.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>root</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">torch.nn.Module</a>) – Module upon which to resolve module targets.</li> <li>
+<strong>arg_types</strong> (<em>Optional</em><em>[</em><em>Tuple</em><em>[</em><em>Any</em><em>]</em><em>]</em>) – Tuple of arg types for the args</li> <li>
+<strong>kwarg_types</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – Dict of arg types for the kwargs</li> <li>
+<strong>normalize_to_only_use_kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Whether to normalize to only use kwargs.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns NamedTuple ArgsKwargsPair, or <code>None</code> if not successful.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a>[<em>ArgsKwargsPair</em>]</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.prepend">
+<code>prepend(x)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.prepend"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Insert x before this node in the list of nodes in the graph. Example:</p> <pre data-language="python">Before: p -&gt; self
+        bx -&gt; x -&gt; ax
+After:  p -&gt; x -&gt; self
+        bx -&gt; ax
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>x</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The node to put before this node. Must be a member of the same graph.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.prev">
+<code>property prev: Node</code> </dt> <dd>
+<p>Returns the previous <code>Node</code> in the linked list of Nodes.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The previous <code>Node</code> in the linked list of Nodes.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.replace_all_uses_with">
+<code>replace_all_uses_with(replace_with, delete_user_cb=&lt;function Node.&lt;lambda&gt;&gt;, *, propagate_meta=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.replace_all_uses_with"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Replace all uses of <code>self</code> in the Graph with the Node <code>replace_with</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>replace_with</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The node to replace all uses of <code>self</code> with.</li> <li>
+<strong>delete_user_cb</strong> (<em>Callable</em>) – Callback that is called to determine whether a given user of the self node should be removed.</li> <li>
+<strong>propagate_meta</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Whether or not to copy all properties on the .meta field of the original node onto the replacement node. For safety, this is only valid to do if the replacement node doesn’t already have an existing .meta field.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The list of Nodes on which this change was made.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a>]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.replace_input_with">
+<code>replace_input_with(old_input, new_input)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.replace_input_with"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Loop through input nodes of <code>self</code>, and replace all instances of <code>old_input</code> with <code>new_input</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>old_input</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The old input node to be replaced.</li> <li>
+<strong>new_input</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The new input node to replace <code>old_input</code>.</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="torch.fx.Node.stack_trace">
+<code>property stack_trace: Optional[str]</code> </dt> <dd>
+<p>Return the Python stack trace that was recorded during tracing, if any. When traced with fx.Tracer, this property is usually populated by <code>Tracer.create_proxy</code>. To record stack traces during tracing for debug purposes, set <code>record_stack_traces = True</code> on the <code>Tracer</code> instance. When traced with dynamo, this property will be populated by default by <code>OutputGraph.create_proxy</code>.</p> <p>stack_trace would have the innermost frame at the end of the string.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.update_arg">
+<code>update_arg(idx, arg)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.update_arg"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Update an existing positional argument to contain the new value <code>arg</code>. After calling, <code>self.args[idx] == arg</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>idx</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – The index into <code>self.args</code> of the element to update</li> <li>
+<strong>arg</strong> (<em>Argument</em>) – The new argument value to write into <code>args</code>
+</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Node.update_kwarg">
+<code>update_kwarg(key, arg)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/node.html#Node.update_kwarg"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Update an existing keyword argument to contain the new value <code>arg</code>. After calling, <code>self.kwargs[key] == arg</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>key</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The key in <code>self.kwargs</code> of the element to update</li> <li>
+<strong>arg</strong> (<em>Argument</em>) – The new argument value to write into <code>kwargs</code>
+</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Tracer">
+<code>class torch.fx.Tracer(autowrap_modules=(math,), autowrap_functions=())</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd> <p><code>Tracer</code> is the class that implements the symbolic tracing functionality of <code>torch.fx.symbolic_trace</code>. A call to <code>symbolic_trace(m)</code> is equivalent to <code>Tracer().trace(m)</code>.</p> <p>Tracer can be subclassed to override various behaviors of the tracing process. The different behaviors that can be overridden are described in the docstrings of the methods on this class.</p>  <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.call_module">
+<code>call_module(m, forward, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.call_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Method that specifies the behavior of this <code>Tracer</code> when it encounters a call to an <code>nn.Module</code> instance.</p> <p>By default, the behavior is to check if the called module is a leaf module via <code>is_leaf_module</code>. If it is, emit a <code>call_module</code> node referring to <code>m</code> in the <code>Graph</code>. Otherwise, call the <code>Module</code> normally, tracing through the operations in its <code>forward</code> function.</p> <p>This method can be overridden to–for example–create nested traced GraphModules, or any other behavior you would want while tracing across <code>Module</code> boundaries.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>m</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">Module</a>) – The module for which a call is being emitted</li> <li>
+<strong>forward</strong> (<em>Callable</em>) – The forward() method of the <code>Module</code> to be invoked</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – args of the module callsite</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – kwargs of the module callsite</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The return value from the Module call. In the case that a <code>call_module</code> node was emitted, this is a <code>Proxy</code> value. Otherwise, it is whatever value was returned from the <code>Module</code> invocation.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.create_arg">
+<code>create_arg(a)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.create_arg"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>A method to specify the behavior of tracing when preparing values to be used as arguments to nodes in the <code>Graph</code>.</p> <p>By default, the behavior includes:</p> <ol class="arabic"> <li>Iterate through collection types (e.g. tuple, list, dict) and recursively call <code>create_args</code> on the elements.</li> <li>Given a Proxy object, return a reference to the underlying IR <code>Node</code>
+</li> <li>
+<p>Given a non-Proxy Tensor object, emit IR for various cases:</p>  <ul class="simple"> <li>For a Parameter, emit a <code>get_attr</code> node referring to that Parameter</li> <li>For a non-Parameter Tensor, store the Tensor away in a special attribute referring to that attribute.</li> </ul>  </li> </ol> <p>This method can be overridden to support more types.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>a</strong> (<em>Any</em>) – The value to be emitted as an <code>Argument</code> in the <code>Graph</code>.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The value <code>a</code> converted into the appropriate <code>Argument</code></p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>, …], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/functions.html#slice" title="(in Python v3.12)">slice</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#range" title="(in Python v3.12)">range</a>, <a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#complex" title="(in Python v3.12)">complex</a>, <a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype">dtype</a>, <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>, <a class="reference internal" href="tensor_attributes#torch.device" title="torch.device">device</a>, <a class="reference internal" href="tensor_attributes#torch.memory_format" title="torch.memory_format">memory_format</a>, <a class="reference internal" href="tensor_attributes#torch.layout" title="torch.layout">layout</a>, <em>OpOverload</em>]]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.create_args_for_root">
+<code>create_args_for_root(root_fn, is_module, concrete_args=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.create_args_for_root"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Create <code>placeholder</code> nodes corresponding to the signature of the <code>root</code> Module. This method introspects root’s signature and emits those nodes accordingly, also supporting <code>*args</code> and <code>**kwargs</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.create_node">
+<code>create_node(kind, target, args, kwargs, name=None, type_expr=None)</code> </dt> <dd>
+<p>Inserts a graph node given target, args, kwargs, and name.</p> <p>This method can be overridden to do extra checking, validation, or modification of values used in node creation. For example, one might want to disallow in-place operations from being recorded.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.create_proxy">
+<code>create_proxy(kind, target, args, kwargs, name=None, type_expr=None, proxy_factory_fn=None)</code> </dt> <dd>
+<p>Create a Node from the given arguments, then return the Node wrapped in a Proxy object.</p> <p>If kind = ‘placeholder’, then we’re creating a Node that represents the parameter of a function. If we need to encode a default parameter, we use the <code>args</code> tuple. <code>args</code> is otherwise empty for <code>placeholder</code> Nodes.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.getattr">
+<code>getattr(attr, attr_val, parameter_proxy_cache)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.getattr"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Method that specifies the behavior of this <code>Tracer</code> when we call getattr on a call to an <code>nn.Module</code> instance.</p> <p>By default, the behavior is to return a proxy value for the attribute. It also stores the proxy value in the <code>parameter_proxy_cache</code>, so that future calls will reuse the proxy rather than creating a new one.</p> <p>This method can be overridden to –for example– not return proxies when querying parameters.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>attr</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of the attribute being queried</li> <li>
+<strong>attr_val</strong> (<em>Any</em>) – The value of the attribute</li> <li>
+<strong>parameter_proxy_cache</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>Any</em><em>]</em>) – A cache of attr names to proxies</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The return value from the getattr call.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This API is experimental and is <em>NOT</em> backward-compatible.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.is_leaf_module">
+<code>is_leaf_module(m, module_qualified_name)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.is_leaf_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>A method to specify whether a given <code>nn.Module</code> is a “leaf” module.</p> <p>Leaf modules are the atomic units that appear in the IR, referenced by <code>call_module</code> calls. By default, Modules in the PyTorch standard library namespace (torch.nn) are leaf modules. All other modules are traced through and their constituent ops are recorded, unless specified otherwise via this parameter.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>m</strong> (<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">Module</a>) – The module being queried about</li> <li>
+<strong>module_qualified_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The path to root of this module. For example, if you have a module hierarchy where submodule <code>foo</code> contains submodule <code>bar</code>, which contains submodule <code>baz</code>, that module will appear with the qualified name <code>foo.bar.baz</code> here.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.iter">
+<code>iter(obj)</code> </dt> <dd>
+<dl class="simple"> <dt>Called when a proxy object is being iterated over, such as</dt>
+<dd>
+<p>when used in control flow. Normally we don’t know what to do because we don’t know the value of the proxy, but a custom tracer can attach more information to the graph node using create_node and can choose to return an iterator.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Iterator" title="(in Python v3.12)">Iterator</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.keys">
+<code>keys(obj)</code> </dt> <dd>
+<dl class="simple"> <dt>Called when a proxy object is has the keys() method called.</dt>
+<dd>
+<p>This is what happens when ** is called on a proxy. This should return an iterator it ** is suppose to work in your custom tracer.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.path_of_module">
+<code>path_of_module(mod)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.path_of_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Helper method to find the qualified name of <code>mod</code> in the Module hierarchy of <code>root</code>. For example, if <code>root</code> has a submodule named <code>foo</code>, which has a submodule named <code>bar</code>, passing <code>bar</code> into this function will return the string “foo.bar”.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>mod</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The <code>Module</code> to retrieve the qualified name for.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.proxy">
+<code>proxy(node)</code> </dt> <dd>
+<div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.proxy.Proxy">Proxy</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.to_bool">
+<code>to_bool(obj)</code> </dt> <dd>
+<dl class="simple"> <dt>Called when a proxy object is being converted to a boolean, such as</dt>
+<dd>
+<p>when used in control flow. Normally we don’t know what to do because we don’t know the value of the proxy, but a custom tracer can attach more information to the graph node using create_node and can choose to return a value.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Tracer.trace">
+<code>trace(root, concrete_args=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/_symbolic_trace.html#Tracer.trace"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Trace <code>root</code> and return the corresponding FX <code>Graph</code> representation. <code>root</code> can either be an <code>nn.Module</code> instance or a Python callable.</p> <p>Note that after this call, <code>self.root</code> may be different from the <code>root</code> passed in here. For example, when a free function is passed to <code>trace()</code>, we will create an <code>nn.Module</code> instance to use as the root and add embedded constants to.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>root</strong> (<em>Union</em><em>[</em><a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.Module">Module</a><em>, </em><em>Callable</em><em>]</em>) – Either a <code>Module</code> or a function to be traced through. Backwards-compatibility for this parameter is guaranteed.</li> <li>
+<strong>concrete_args</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>any</em><em>]</em><em>]</em>) – Concrete arguments that should not be treated as Proxies. This parameter is experimental and its backwards-compatibility is <em>NOT</em> guaranteed.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>Graph</code> representing the semantics of the passed-in <code>root</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.Graph" title="torch.fx.graph.Graph">Graph</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Proxy">
+<code>class torch.fx.Proxy(node, tracer=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/proxy.html#Proxy"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>Proxy</code> objects are <code>Node</code> wrappers that flow through the program during symbolic tracing and record all the operations (<code>torch</code> function calls, method calls, operators) that they touch into the growing FX Graph.</p> <p>If you’re doing graph transforms, you can wrap your own <code>Proxy</code> method around a raw <code>Node</code> so that you can use the overloaded operators to add additional things to a <code>Graph</code>.</p> <p><code>Proxy</code> objects cannot be iterated. In other words, the symbolic tracer will throw an error if a <code>Proxy</code> is used in a loop or as an <code>*args</code>/<code>**kwargs</code> function argument.</p> <p>There are two main ways around this: 1. Factor out the untraceable logic into a top-level function and use <code>fx.wrap</code> on it. 2. If the control flow is static (i.e. the loop trip count is based on some hyperparameter), the code can be kept in its original position and refactored into something like:</p> <pre data-language="python">for i in range(self.some_hyperparameter):
+    indexed_item = proxied_value[i]
+</pre> <p>For a more detailed description into the Proxy internals, check out the “Proxy” section in <code>torch/fx/OVERVIEW.md</code></p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Interpreter">
+<code>class torch.fx.Interpreter(module, garbage_collect_values=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>An Interpreter executes an FX graph Node-by-Node. This pattern can be useful for many things, including writing code transformations as well as analysis passes.</p> <p>Methods in the Interpreter class can be overridden to customize the behavior of execution. The map of overrideable methods in terms of call hierarchy:</p> <pre data-language="python">run()
+    +-- run_node
+        +-- placeholder()
+        +-- get_attr()
+        +-- call_function()
+        +-- call_method()
+        +-- call_module()
+        +-- output()
+</pre> <h4 class="rubric">Example</h4> <p>Suppose we want to swap all instances of <code>torch.neg</code> with <code>torch.sigmoid</code> and vice versa (including their <code>Tensor</code> method equivalents). We could subclass Interpreter like so:</p> <pre data-language="python">class NegSigmSwapInterpreter(Interpreter):
+    def call_function(self, target : Target,
+                      args : Tuple, kwargs : Dict) -&gt; Any:
+        if target == torch.sigmoid:
+            return torch.neg(*args, **kwargs)
+        return super().call_function(n)
+
+    def call_method(self, target : Target,
+                    args : Tuple, kwargs : Dict) -&gt; Any:
+        if target == 'neg':
+            call_self, *args_tail = args
+            return call_self.sigmoid(*args_tail, **kwargs)
+        return super().call_method(n)
+
+def fn(x):
+    return torch.sigmoid(x).neg()
+
+gm = torch.fx.symbolic_trace(fn)
+input = torch.randn(3, 4)
+result = NegSigmSwapInterpreter(gm).run(input)
+torch.testing.assert_close(result, torch.neg(input).sigmoid())
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module</strong> (<a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule">GraphModule</a>) – The module to be executed</li> <li>
+<strong>garbage_collect_values</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – Whether to delete values after their last use within the Module’s execution. This ensures optimal memory usage during execution. This can be disabled to, for example, examine all of the intermediate values in the execution by looking at the <code>Interpreter.env</code> attribute.</li> </ul> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.boxed_run">
+<code>boxed_run(args_list)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.boxed_run"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Run <code>module</code> via interpretation and return the result. This uses the “boxed” calling convention, where you pass a list of arguments, which will be cleared by the interpreter. This ensures that input tensors are promptly deallocated.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.call_function">
+<code>call_function(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.call_function"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>call_function</code> node and return the result.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> <dl class="simple"> <dt>Return</dt>
+<dd>
+<p>Any: The value returned by the function invocation</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.call_method">
+<code>call_method(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.call_method"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>call_method</code> node and return the result.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> <dl class="simple"> <dt>Return</dt>
+<dd>
+<p>Any: The value returned by the method invocation</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.call_module">
+<code>call_module(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.call_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>call_module</code> node and return the result.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> <dl class="simple"> <dt>Return</dt>
+<dd>
+<p>Any: The value returned by the module invocation</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.fetch_args_kwargs_from_env">
+<code>fetch_args_kwargs_from_env(n)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.fetch_args_kwargs_from_env"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Fetch the concrete values of <code>args</code> and <code>kwargs</code> of node <code>n</code> from the current execution environment.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>n</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The node for which <code>args</code> and <code>kwargs</code> should be fetched.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><code>args</code> and <code>kwargs</code> with concrete values for <code>n</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Tuple[Tuple, Dict]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.fetch_attr">
+<code>fetch_attr(target)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.fetch_attr"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Fetch an attribute from the <code>Module</code> hierarchy of <code>self.module</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>target</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The fully-qualified name of the attribute to fetch</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The value of the attribute.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.get_attr">
+<code>get_attr(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.get_attr"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>get_attr</code> node. Will retrieve an attribute value from the <code>Module</code> hierarchy of <code>self.module</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The value of the attribute that was retrieved</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.map_nodes_to_values">
+<code>map_nodes_to_values(args, n)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.map_nodes_to_values"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Recursively descend through <code>args</code> and look up the concrete value for each <code>Node</code> in the current execution environment.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>args</strong> (<em>Argument</em>) – Data structure within which to look up concrete values</li> <li>
+<strong>n</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – Node to which <code>args</code> belongs. This is only used for error reporting.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Tuple" title="(in Python v3.12)">Tuple</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>, …], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a>], <a class="reference external" href="https://docs.python.org/3/library/functions.html#slice" title="(in Python v3.12)">slice</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#range" title="(in Python v3.12)">range</a>, <a class="reference internal" href="#torch.fx.Node" title="torch.fx.node.Node">Node</a>, <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>, <a class="reference external" href="https://docs.python.org/3/library/functions.html#complex" title="(in Python v3.12)">complex</a>, <a class="reference internal" href="tensor_attributes#torch.dtype" title="torch.dtype">dtype</a>, <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>, <a class="reference internal" href="tensor_attributes#torch.device" title="torch.device">device</a>, <a class="reference internal" href="tensor_attributes#torch.memory_format" title="torch.memory_format">memory_format</a>, <a class="reference internal" href="tensor_attributes#torch.layout" title="torch.layout">layout</a>, <em>OpOverload</em>]]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.output">
+<code>output(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.output"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute an <code>output</code> node. This really just retrieves the value referenced by the <code>output</code> node and returns it.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The return value referenced by the output node</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.placeholder">
+<code>placeholder(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.placeholder"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>placeholder</code> node. Note that this is stateful: <code>Interpreter</code> maintains an internal iterator over arguments passed to <code>run</code> and this method returns next() on that iterator.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The argument value that was retrieved.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.run">
+<code>run(*args, initial_env=None, enable_io_processing=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.run"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Run <code>module</code> via interpretation and return the result.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>*args</strong> – The arguments to the Module to run, in positional order</li> <li>
+<strong>initial_env</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – An optional starting environment for execution. This is a dict mapping <code>Node</code> to any value. This can be used, for example, to pre-populate results for certain <code>Nodes</code> so as to do only partial evaluation within the interpreter.</li> <li>
+<strong>enable_io_processing</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – If true, we process the inputs and outputs with graph’s process_inputs and process_outputs function first before using them.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The value returned from executing the Module</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Interpreter.run_node">
+<code>run_node(n)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Interpreter.run_node"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Run a specific node <code>n</code> and return the result. Calls into placeholder, get_attr, call_function, call_method, call_module, or output depending on <code>node.op</code></p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>n</strong> (<a class="reference internal" href="#torch.fx.Node" title="torch.fx.Node">Node</a>) – The Node to execute</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The result of executing <code>n</code></p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.fx.Transformer">
+<code>class torch.fx.Transformer(module)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p><code>Transformer</code> is a special type of interpreter that produces a new <code>Module</code>. It exposes a <code>transform()</code> method that returns the transformed <code>Module</code>. <code>Transformer</code> does not require arguments to run, as <code>Interpreter</code> does. <code>Transformer</code> works entirely symbolically.</p> <h4 class="rubric">Example</h4> <p>Suppose we want to swap all instances of <code>torch.neg</code> with <code>torch.sigmoid</code> and vice versa (including their <code>Tensor</code> method equivalents). We could subclass <code>Transformer</code> like so:</p> <pre data-language="python">class NegSigmSwapXformer(Transformer):
+    def call_function(self, target : 'Target', args : Tuple[Argument, ...], kwargs : Dict[str, Any]) -&gt; Any:
+        if target == torch.sigmoid:
+            return torch.neg(*args, **kwargs)
+        return super().call_function(n)
+
+    def call_method(self, target : 'Target', args : Tuple[Argument, ...], kwargs : Dict[str, Any]) -&gt; Any:
+        if target == 'neg':
+            call_self, *args_tail = args
+            return call_self.sigmoid(*args_tail, **kwargs)
+        return super().call_method(n)
+
+def fn(x):
+    return torch.sigmoid(x).neg()
+
+gm = torch.fx.symbolic_trace(fn)
+
+transformed : torch.nn.Module = NegSigmSwapXformer(gm).transform()
+input = torch.randn(3, 4)
+torch.testing.assert_close(transformed(input), torch.neg(input).sigmoid())
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>module</strong> (<a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.GraphModule">GraphModule</a>) – The <code>Module</code> to be transformed.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Transformer.call_function">
+<code>call_function(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer.call_function"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Transformer.call_module">
+<code>call_module(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer.call_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.12)">Any</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Transformer.get_attr">
+<code>get_attr(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer.get_attr"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>get_attr</code> node. In <code>Transformer</code>, this is overridden to insert a new <code>get_attr</code> node into the output graph.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.proxy.Proxy">Proxy</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Transformer.placeholder">
+<code>placeholder(target, args, kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer.placeholder"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Execute a <code>placeholder</code> node. In <code>Transformer</code>, this is overridden to insert a new <code>placeholder</code> into the output graph.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>target</strong> (<em>Target</em>) – The call target for this node. See <a class="reference external" href="https://pytorch.org/docs/master/fx.html#torch.fx.Node">Node</a> for details on semantics</li> <li>
+<strong>args</strong> (<em>Tuple</em>) – Tuple of positional args for this invocation</li> <li>
+<strong>kwargs</strong> (<em>Dict</em>) – Dict of keyword arguments for this invocation</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.fx.Proxy" title="torch.fx.proxy.Proxy">Proxy</a></p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.fx.Transformer.transform">
+<code>transform()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/interpreter.html#Transformer.transform"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Transform <code>self.module</code> and return the transformed <code>GraphModule</code>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py function" id="module-torch.fx.passes.dialect.common"> <dt class="sig sig-object py" id="torch.fx.replace_pattern">
+<code>torch.fx.replace_pattern(gm, pattern, replacement)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/fx/subgraph_rewriter.html#replace_pattern"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Matches all possible non-overlapping sets of operators and their data dependencies (<code>pattern</code>) in the Graph of a GraphModule (<code>gm</code>), then replaces each of these matched subgraphs with another subgraph (<code>replacement</code>).</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>gm</strong> (<a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a>) – The GraphModule that wraps the Graph to operate on</li> <li>
+<strong>pattern</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a><em>]</em>) – The subgraph to match in <code>gm</code> for replacement</li> <li>
+<strong>replacement</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>, </em><a class="reference internal" href="#torch.fx.GraphModule" title="torch.fx.graph_module.GraphModule">GraphModule</a><em>]</em>) – The subgraph to replace <code>pattern</code> with</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+
+<p>A list of <code>Match</code> objects representing the places in the original graph that <code>pattern</code> was matched to. The list is empty if there are no matches. <code>Match</code> is defined as:</p> <pre data-language="python">class Match(NamedTuple):
+    # Node from which the match was found
+    anchor: Node
+    # Maps nodes in the pattern subgraph to nodes in the larger graph
+    nodes_map: Dict[Node, Node]
+</pre> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>List[Match]</p> </dd> </dl> <p>Examples:</p> <pre data-language="python">import torch
+from torch.fx import symbolic_trace, subgraph_rewriter
+
+class M(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, w1, w2):
+        m1 = torch.cat([w1, w2]).sum()
+        m2 = torch.cat([w1, w2]).sum()
+        return x + torch.max(m1) + torch.max(m2)
+
+def pattern(w1, w2):
+    return torch.cat([w1, w2]).sum()
+
+def replacement(w1, w2):
+    return torch.stack([w1, w2])
+
+traced_module = symbolic_trace(M())
+
+subgraph_rewriter.replace_pattern(traced_module, pattern, replacement)
+</pre> <p>The above code will first match <code>pattern</code> in the <code>forward</code> method of <code>traced_module</code>. Pattern-matching is done based on use-def relationships, not node names. For example, if you had <code>p = torch.cat([a, b])</code> in <code>pattern</code>, you could match <code>m = torch.cat([a, b])</code> in the original <code>forward</code> function, despite the variable names being different (<code>p</code> vs <code>m</code>).</p> <p>The <code>return</code> statement in <code>pattern</code> is matched based on its value only; it may or may not match to the <code>return</code> statement in the larger graph. In other words, the pattern doesn’t have to extend to the end of the larger graph.</p> <p>When the pattern is matched, it will be removed from the larger function and replaced by <code>replacement</code>. If there are multiple matches for <code>pattern</code> in the larger function, each non-overlapping match will be replaced. In the case of a match overlap, the first found match in the set of overlapping matches will be replaced. (“First” here being defined as the first in a topological ordering of the Nodes’ use-def relationships. In most cases, the first Node is the parameter that appears directly after <code>self</code>, while the last Node is whatever the function returns.)</p> <p>One important thing to note is that the parameters of the <code>pattern</code> Callable must be used in the Callable itself, and the parameters of the <code>replacement</code> Callable must match the pattern. The first rule is why, in the above code block, the <code>forward</code> function has parameters <code>x, w1, w2</code>, but the <code>pattern</code> function only has parameters <code>w1, w2</code>. <code>pattern</code> doesn’t use <code>x</code>, so it shouldn’t specify <code>x</code> as a parameter. As an example of the second rule, consider replacing</p> <pre data-language="python">def pattern(x, y):
+    return torch.neg(x) + torch.relu(y)
+</pre> <p>with</p> <pre data-language="python">def replacement(x, y):
+    return torch.relu(x)
+</pre> <p>In this case, <code>replacement</code> needs the same number of parameters as <code>pattern</code> (both <code>x</code> and <code>y</code>), even though the parameter <code>y</code> isn’t used in <code>replacement</code>.</p> <p>After calling <code>subgraph_rewriter.replace_pattern</code>, the generated Python code looks like this:</p> <pre data-language="python">def forward(self, x, w1, w2):
+    stack_1 = torch.stack([w1, w2])
+    sum_1 = stack_1.sum()
+    stack_2 = torch.stack([w1, w2])
+    sum_2 = stack_2.sum()
+    max_1 = torch.max(sum_1)
+    add_1 = x + max_1
+    max_2 = torch.max(sum_2)
+    add_2 = add_1 + max_2
+    return add_2
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Backwards-compatibility for this API is guaranteed.</p> </div> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/fx.html" class="_attribution-link">https://pytorch.org/docs/2.1/fx.html</a>
+  </p>
+</div>

@@ -1,0 +1,110 @@
+<h1 id="context-locals">Context Locals</h1> <p>Sooner or later you have some things you want to have in every single view or helper function or whatever. In PHP the way to go are global variables. However, that isn’t possible in WSGI applications without a major drawback: As soon as you operate on the global namespace your application isn’t thread-safe any longer.</p> <p>The Python standard library has a concept called “thread locals” (or thread-local data). A thread local is a global object in which you can put stuff in and get back later in a thread-safe and thread-specific way. That means that whenever you set or get a value on a thread local object, the thread local object checks in which thread you are and retrieves the value corresponding to your thread (if one exists). So, you won’t accidentally get another thread’s data.</p> <p>This approach, however, has a few disadvantages. For example, besides threads, there are other types of concurrency in Python. A very popular one is greenlets. Also, whether every request gets its own thread is not guaranteed in WSGI. It could be that a request is reusing a thread from a previous request, and hence data is left over in the thread local object.</p> <p>Werkzeug provides its own implementation of local data storage called <code>werkzeug.local</code>. This approach provides a similar functionality to thread locals but also works with greenlets.</p> <p>Here’s a simple example of how one could use werkzeug.local:</p> <pre data-language="python">from werkzeug.local import Local, LocalManager
+
+local = Local()
+local_manager = LocalManager([local])
+
+def application(environ, start_response):
+    local.request = request = Request(environ)
+    ...
+
+application = local_manager.make_middleware(application)
+</pre> <p>This binds the request to <code>local.request</code>. Every other piece of code executed after this assignment in the same context can safely access local.request and will get the same request object. The <code>make_middleware</code> method on the local manager ensures that all references to the local objects are cleared up after the request.</p> <p>The same context means the same greenlet (if you’re using greenlets) in the same thread and same process.</p> <p>If a request object is not yet set on the local object and you try to access it, you will get an <code>AttributeError</code>. You can use <code>getattr</code> to avoid that:</p> <pre data-language="python">def get_request():
+    return getattr(local, 'request', None)
+</pre> <p>This will try to get the request or return <code>None</code> if the request is not (yet?) available.</p> <p>Note that local objects cannot manage themselves, for that you need a local manager. You can pass a local manager multiple locals or add additionals later by appending them to <code>manager.locals</code> and every time the manager cleans up it will clean up all the data left in the locals for this context.</p> <dl class="py function"> <dt class="sig sig-object py" id="werkzeug.local.release_local">
+<code>werkzeug.local.release_local(local)</code> </dt> <dd>
+<p>Releases the contents of the local for the current context. This makes it possible to use locals without a manager.</p> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; loc = Local()
+&gt;&gt;&gt; loc.foo = 42
+&gt;&gt;&gt; release_local(loc)
+&gt;&gt;&gt; hasattr(loc, 'foo')
+False
+</pre> <p>With this function one can release <code>Local</code> objects as well as <a class="reference internal" href="#werkzeug.local.LocalStack" title="werkzeug.local.LocalStack"><code>LocalStack</code></a> objects. However it is not possible to release data held by proxies that way, one always has to retain a reference to the underlying local object in order to be able to release it.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.6.1.</span></p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>local</strong> (<em>Union</em><em>[</em><em>werkzeug.local.Local</em><em>, </em><a class="reference internal" href="#werkzeug.local.LocalStack" title="werkzeug.local.LocalStack">werkzeug.local.LocalStack</a><em>]</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.local.LocalManager">
+<code>class werkzeug.local.LocalManager(locals=None, ident_func=None)</code> </dt> <dd>
+<p>Local objects cannot manage themselves. For that you need a local manager. You can pass a local manager multiple locals or add them later y appending them to <code>manager.locals</code>. Every time the manager cleans up, it will clean up all the data left in the locals for this context.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 2.0: </span><code>ident_func</code> is deprecated and will be removed in Werkzeug 2.1.</p> </div> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.7: </span>The <code>ident_func</code> parameter was added.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.6.1: </span>The <a class="reference internal" href="#werkzeug.local.release_local" title="werkzeug.local.release_local"><code>release_local()</code></a> function can be used instead of a manager.</p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>locals</strong> (<em>Optional</em><em>[</em><em>Iterable</em><em>[</em><em>Union</em><em>[</em><em>werkzeug.local.Local</em><em>, </em><a class="reference internal" href="#werkzeug.local.LocalStack" title="werkzeug.local.LocalStack">werkzeug.local.LocalStack</a><em>]</em><em>]</em><em>]</em>) – </li> <li>
+<strong>ident_func</strong> (<a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalManager.cleanup">
+<code>cleanup()</code> </dt> <dd>
+<p>Manually clean up the data in the locals for this context. Call this at the end of the request or use <code>make_middleware()</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalManager.get_ident">
+<code>get_ident()</code> </dt> <dd>
+<p>Return the context identifier the local objects use internally for this context. You cannot override this method to change the behavior but use it to link other context local objects (such as SQLAlchemy’s scoped sessions) to the Werkzeug locals.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 2.0: </span>Will be removed in Werkzeug 2.1.</p> </div> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.7: </span>You can pass a different ident function to the local manager that will then be propagated to all the locals passed to the constructor.</p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalManager.make_middleware">
+<code>make_middleware(app)</code> </dt> <dd>
+<p>Wrap a WSGI application so that cleaning up happens after request end.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>app</strong> (<em>WSGIApplication</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>WSGIApplication</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalManager.middleware">
+<code>middleware(func)</code> </dt> <dd>
+<p>Like <code>make_middleware</code> but for decorating functions.</p> <p>Example usage:</p> <pre data-language="python">@manager.middleware
+def application(environ, start_response):
+    ...
+</pre> <p>The difference to <code>make_middleware</code> is that the function passed will have all the arguments copied from the inner application (name, docstring, module).</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>func</strong> (<em>WSGIApplication</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>WSGIApplication</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.local.LocalStack">
+<code>class werkzeug.local.LocalStack</code> </dt> <dd>
+<p>This class works similar to a <code>Local</code> but keeps a stack of objects instead. This is best explained with an example:</p> <pre data-language="python">&gt;&gt;&gt; ls = LocalStack()
+&gt;&gt;&gt; ls.push(42)
+&gt;&gt;&gt; ls.top
+42
+&gt;&gt;&gt; ls.push(23)
+&gt;&gt;&gt; ls.top
+23
+&gt;&gt;&gt; ls.pop()
+23
+&gt;&gt;&gt; ls.top
+42
+</pre> <p>They can be force released by using a <a class="reference internal" href="#werkzeug.local.LocalManager" title="werkzeug.local.LocalManager"><code>LocalManager</code></a> or with the <a class="reference internal" href="#werkzeug.local.release_local" title="werkzeug.local.release_local"><code>release_local()</code></a> function but the correct way is to pop the item from the stack after using. When the stack is empty it will no longer be bound to the current context (and as such released).</p> <p>By calling the stack without arguments it returns a proxy that resolves to the topmost item on the stack.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.6.1.</span></p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalStack.pop">
+<code>pop()</code> </dt> <dd>
+<p>Removes the topmost item from the stack, will return the old value or <code>None</code> if the stack was already empty.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalStack.push">
+<code>push(obj)</code> </dt> <dd>
+<p>Pushes a new item to the stack</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>obj</strong> (<em>Any</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>List[Any]</p> </dd> </dl> </dd>
+</dl> <dl class="py property"> <dt class="sig sig-object py" id="werkzeug.local.LocalStack.top">
+<code>property top: Any</code> </dt> <dd>
+<p>The topmost item on the stack. If the stack is empty, <code>None</code> is returned.</p> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.local.LocalProxy">
+<code>class werkzeug.local.LocalProxy(local, name=None)</code> </dt> <dd>
+<p>A proxy to the object bound to a <code>Local</code>. All operations on the proxy are forwarded to the bound object. If no object is bound, a <a class="reference external" href="https://docs.python.org/3/library/exceptions.html#RuntimeError" title="(in Python v3.9)"><code>RuntimeError</code></a> is raised.</p> <pre data-language="python">from werkzeug.local import Local
+l = Local()
+
+# a proxy to whatever l.user is set to
+user = l("user")
+
+from werkzeug.local import LocalStack
+_request_stack = LocalStack()
+
+# a proxy to _request_stack.top
+request = _request_stack()
+
+# a proxy to the session attribute of the request proxy
+session = LocalProxy(lambda: request.session)
+</pre> <p><code>__repr__</code> and <code>__class__</code> are forwarded, so <code>repr(x)</code> and <code>isinstance(x, cls)</code> will look like the proxied object. Use <code>issubclass(type(x), LocalProxy)</code> to check if an object is a proxy.</p> <pre data-language="python">repr(user)  # &lt;User admin&gt;
+isinstance(user, User)  # True
+issubclass(type(user), LocalProxy)  # True
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>local</strong> – The <code>Local</code> or callable that provides the proxied object.</li> <li>
+<strong>name</strong> – The attribute name to look up on a <code>Local</code>. Not used if a callable is given.</li> </ul> </dd> </dl> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 2.0: </span>Updated proxied attributes and methods to reflect the current data model.</p> </div> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.6.1: </span>The class can be instantiated with a callable.</p> </div> </details><dl class="py method"> <dt class="sig sig-object py" id="werkzeug.local.LocalProxy._get_current_object">
+<code>_get_current_object()</code> </dt> <dd>
+<p>Return the current object. This is useful if you want the real object behind the proxy at a time for performance reasons or because you want to pass the object into a different context.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://werkzeug.palletsprojects.com/en/2.0.x/local/" class="_attribution-link">https://werkzeug.palletsprojects.com/en/2.0.x/local/</a>
+  </p>
+</div>

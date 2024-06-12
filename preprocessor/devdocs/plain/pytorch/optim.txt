@@ -1,0 +1,1141 @@
+# torch.optim
+
+`torch.optim` is a package implementing various optimization algorithms. Most
+commonly used methods are already supported, and the interface is general
+enough, so that more sophisticated ones can be also easily integrated in the
+future.
+
+## How to use an optimizer
+
+To use `torch.optim` you have to construct an optimizer object, that will hold
+the current state and will update the parameters based on the computed
+gradients.
+
+### Constructing it
+
+To construct an `Optimizer` you have to give it an iterable containing the
+parameters (all should be `Variable` s) to optimize. Then, you can specify
+optimizer-specific options such as the learning rate, weight decay, etc.
+
+Note
+
+If you need to move a model to GPU via `.cuda()`, please do so before
+constructing optimizers for it. Parameters of a model after `.cuda()` will be
+different objects with those before the call.
+
+In general, you should make sure that optimized parameters live in consistent
+locations when optimizers are constructed and used.
+
+Example:
+
+    
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+    optimizer = optim.Adam([var1, var2], lr=0.0001)
+    
+### Per-parameter options
+
+`Optimizer` s also support specifying per-parameter options. To do this,
+instead of passing an iterable of `Variable` s, pass in an iterable of `dict`
+s. Each of them will define a separate parameter group, and should contain a
+`params` key, containing a list of parameters belonging to it. Other keys
+should match the keyword arguments accepted by the optimizers, and will be
+used as optimization options for this group.
+
+Note
+
+You can still pass options as keyword arguments. They will be used as
+defaults, in the groups that didn’t override them. This is useful when you
+only want to vary a single option, while keeping all others consistent between
+parameter groups.
+
+For example, this is very useful when one wants to specify per-layer learning
+rates:
+
+    
+    optim.SGD([
+                    {'params': model.base.parameters()},
+                    {'params': model.classifier.parameters(), 'lr': 1e-3}
+                ], lr=1e-2, momentum=0.9)
+    
+This means that `model.base`’s parameters will use the default learning rate
+of `1e-2`, `model.classifier`’s parameters will use a learning rate of `1e-3`,
+and a momentum of `0.9` will be used for all parameters.
+
+### Taking an optimization step
+
+All optimizers implement a `step()` method, that updates the parameters. It
+can be used in two ways:
+
+#### `optimizer.step()`
+
+This is a simplified version supported by most optimizers. The function can be
+called once the gradients are computed using e.g. `backward()`.
+
+Example:
+
+    
+    for input, target in dataset:
+        optimizer.zero_grad()
+        output = model(input)
+        loss = loss_fn(output, target)
+        loss.backward()
+        optimizer.step()
+    
+#### `optimizer.step(closure)`
+
+Some optimization algorithms such as Conjugate Gradient and LBFGS need to
+reevaluate the function multiple times, so you have to pass in a closure that
+allows them to recompute your model. The closure should clear the gradients,
+compute the loss, and return it.
+
+Example:
+
+    
+    for input, target in dataset:
+        def closure():
+            optimizer.zero_grad()
+            output = model(input)
+            loss = loss_fn(output, target)
+            loss.backward()
+            return loss
+        optimizer.step(closure)
+    
+## Algorithms
+
+`class torch.optim.Optimizer(params, defaults)` [source]
+
+    
+Base class for all optimizers.
+
+Warning
+
+Parameters need to be specified as collections that have a deterministic
+ordering that is consistent between runs. Examples of objects that don’t
+satisfy those properties are sets and iterators over values of dictionaries.
+
+Parameters
+
+    
+  * params (iterable) – an iterable of `torch.Tensor` s or `dict` s. Specifies what Tensors should be optimized.
+  * defaults – (dict): a dict containing default values of optimization options (used when a parameter group doesn’t specify them).
+
+`add_param_group(param_group)` [source]
+
+    
+Add a param group to the `Optimizer` s `param_groups`.
+
+This can be useful when fine tuning a pre-trained network as frozen layers can
+be made trainable and added to the `Optimizer` as training progresses.
+
+Parameters
+
+    
+  * param_group (dict) – Specifies what Tensors should be optimized along with group
+  * optimization options. (specific) – 
+
+`load_state_dict(state_dict)` [source]
+
+    
+Loads the optimizer state.
+
+Parameters
+
+    
+state_dict (dict) – optimizer state. Should be an object returned from a call
+to `state_dict()`.
+
+`state_dict()` [source]
+
+    
+Returns the state of the optimizer as a `dict`.
+
+It contains two entries:
+
+  * state - a dict holding current optimization state. Its content
+    
+differs between optimizer classes.
+
+  * param_groups - a dict containing all parameter groups
+
+`step(closure)` [source]
+
+    
+Performs a single optimization step (parameter update).
+
+Parameters
+
+    
+closure (callable) – A closure that reevaluates the model and returns the
+loss. Optional for most optimizers.
+
+Note
+
+Unless otherwise specified, this function should not modify the `.grad` field
+of the parameters.
+
+`zero_grad(set_to_none=False)` [source]
+
+    
+Sets the gradients of all optimized `torch.Tensor` s to zero.
+
+Parameters
+
+    
+set_to_none (bool) – instead of setting to zero, set the grads to None. This
+will in general have lower memory footprint, and can modestly improve
+performance. However, it changes certain behaviors. For example: 1. When the
+user tries to access a gradient and perform manual ops on it, a None attribute
+or a Tensor full of 0s will behave differently. 2. If the user requests
+`zero_grad(set_to_none=True)` followed by a backward pass, `.grad`s are
+guaranteed to be None for params that did not receive a gradient. 3.
+`torch.optim` optimizers have a different behavior if the gradient is 0 or
+None (in one case it does the step with a gradient of 0 and in the other it
+skips the step altogether).
+
+`class torch.optim.Adadelta(params, lr=1.0, rho=0.9, eps=1e-06,
+weight_decay=0)` [source]
+
+    
+Implements Adadelta algorithm.
+
+It has been proposed in ADADELTA: An Adaptive Learning Rate Method.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * rho (float, optional) – coefficient used for computing a running average of squared gradients (default: 0.9)
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-6)
+  * lr (float, optional) – coefficient that scale delta before it is applied to the parameters (default: 1.0)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.Adagrad(params, lr=0.01, lr_decay=0, weight_decay=0,
+initial_accumulator_value=0, eps=1e-10)` [source]
+
+    
+Implements Adagrad algorithm.
+
+It has been proposed in Adaptive Subgradient Methods for Online Learning and
+Stochastic Optimization.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-2)
+  * lr_decay (float, optional) – learning rate decay (default: 0)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-10)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.Adam(params, lr=0.001, betas=(0.9, 0.999), eps=1e-08,
+weight_decay=0, amsgrad=False)` [source]
+
+    
+Implements Adam algorithm.
+
+It has been proposed in Adam: A Method for Stochastic Optimization. The
+implementation of the L2 penalty follows changes proposed in Decoupled Weight
+Decay Regularization.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-3)
+  * betas (Tuple[float, float], optional) – coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-8)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+  * amsgrad (boolean, optional) – whether to use the AMSGrad variant of this algorithm from the paper On the Convergence of Adam and Beyond (default: False)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.AdamW(params, lr=0.001, betas=(0.9, 0.999), eps=1e-08,
+weight_decay=0.01, amsgrad=False)` [source]
+
+    
+Implements AdamW algorithm.
+
+The original Adam algorithm was proposed in Adam: A Method for Stochastic
+Optimization. The AdamW variant was proposed in Decoupled Weight Decay
+Regularization.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-3)
+  * betas (Tuple[float, float], optional) – coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-8)
+  * weight_decay (float, optional) – weight decay coefficient (default: 1e-2)
+  * amsgrad (boolean, optional) – whether to use the AMSGrad variant of this algorithm from the paper On the Convergence of Adam and Beyond (default: False)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.SparseAdam(params, lr=0.001, betas=(0.9, 0.999),
+eps=1e-08)` [source]
+
+    
+Implements lazy version of Adam algorithm suitable for sparse tensors.
+
+In this variant, only moments that show up in the gradient get updated, and
+only those portions of the gradient get applied to the parameters.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-3)
+  * betas (Tuple[float, float], optional) – coefficients used for computing running averages of gradient and its square (default: (0.9, 0.999))
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-8)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.Adamax(params, lr=0.002, betas=(0.9, 0.999), eps=1e-08,
+weight_decay=0)` [source]
+
+    
+Implements Adamax algorithm (a variant of Adam based on infinity norm).
+
+It has been proposed in Adam: A Method for Stochastic Optimization.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 2e-3)
+  * betas (Tuple[float, float], optional) – coefficients used for computing running averages of gradient and its square
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-8)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.ASGD(params, lr=0.01, lambd=0.0001, alpha=0.75,
+t0=1000000.0, weight_decay=0)` [source]
+
+    
+Implements Averaged Stochastic Gradient Descent.
+
+It has been proposed in Acceleration of stochastic approximation by averaging.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-2)
+  * lambd (float, optional) – decay term (default: 1e-4)
+  * alpha (float, optional) – power for eta update (default: 0.75)
+  * t0 (float, optional) – point at which to start averaging (default: 1e6)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.LBFGS(params, lr=1, max_iter=20, max_eval=None,
+tolerance_grad=1e-07, tolerance_change=1e-09, history_size=100,
+line_search_fn=None)` [source]
+
+    
+Implements L-BFGS algorithm, heavily inspired by `minFunc
+<https://www.cs.ubc.ca/~schmidtm/Software/minFunc.html>`.
+
+Warning
+
+This optimizer doesn’t support per-parameter options and parameter groups
+(there can be only one).
+
+Warning
+
+Right now all parameters have to be on a single device. This will be improved
+in the future.
+
+Note
+
+This is a very memory intensive optimizer (it requires additional `param_bytes
+* (history_size + 1)` bytes). If it doesn’t fit in memory try reducing the
+history size, or use a different algorithm.
+
+Parameters
+
+    
+  * lr (float) – learning rate (default: 1)
+  * max_iter (int) – maximal number of iterations per optimization step (default: 20)
+  * max_eval (int) – maximal number of function evaluations per optimization step (default: max_iter * 1.25).
+  * tolerance_grad (float) – termination tolerance on first order optimality (default: 1e-5).
+  * tolerance_change (float) – termination tolerance on function value/parameter changes (default: 1e-9).
+  * history_size (int) – update history size (default: 100).
+  * line_search_fn (str) – either ‘strong_wolfe’ or None (default: None).
+
+`step(closure)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable) – A closure that reevaluates the model and returns the
+loss.
+
+`class torch.optim.RMSprop(params, lr=0.01, alpha=0.99, eps=1e-08,
+weight_decay=0, momentum=0, centered=False)` [source]
+
+    
+Implements RMSprop algorithm.
+
+Proposed by G. Hinton in his course.
+
+The centered version first appears in Generating Sequences With Recurrent
+Neural Networks.
+
+The implementation here takes the square root of the gradient average before
+adding epsilon (note that TensorFlow interchanges these two operations). The
+effective learning rate is thus α/(v+ϵ)\alpha/(\sqrt{v} + \epsilon) where
+α\alpha is the scheduled learning rate and vv is the weighted moving average
+of the squared gradient.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-2)
+  * momentum (float, optional) – momentum factor (default: 0)
+  * alpha (float, optional) – smoothing constant (default: 0.99)
+  * eps (float, optional) – term added to the denominator to improve numerical stability (default: 1e-8)
+  * centered (bool, optional) – if `True`, compute the centered RMSProp, the gradient is normalized by an estimation of its variance
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.Rprop(params, lr=0.01, etas=(0.5, 1.2), step_sizes=(1e-06,
+50))` [source]
+
+    
+Implements the resilient backpropagation algorithm.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float, optional) – learning rate (default: 1e-2)
+  * etas (Tuple[float, float], optional) – pair of (etaminus, etaplis), that are multiplicative increase and decrease factors (default: (0.5, 1.2))
+  * step_sizes (Tuple[float, float], optional) – a pair of minimal and maximal allowed step sizes (default: (1e-6, 50))
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+`class torch.optim.SGD(params, lr=<required parameter>, momentum=0,
+dampening=0, weight_decay=0, nesterov=False)` [source]
+
+    
+Implements stochastic gradient descent (optionally with momentum).
+
+Nesterov momentum is based on the formula from On the importance of
+initialization and momentum in deep learning.
+
+Parameters
+
+    
+  * params (iterable) – iterable of parameters to optimize or dicts defining parameter groups
+  * lr (float) – learning rate
+  * momentum (float, optional) – momentum factor (default: 0)
+  * weight_decay (float, optional) – weight decay (L2 penalty) (default: 0)
+  * dampening (float, optional) – dampening for momentum (default: 0)
+  * nesterov (bool, optional) – enables Nesterov momentum (default: False)
+
+#### Example
+
+    
+    >>> optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    >>> optimizer.zero_grad()
+    >>> loss_fn(model(input), target).backward()
+    >>> optimizer.step()
+    
+Note
+
+The implementation of SGD with Momentum/Nesterov subtly differs from Sutskever
+et. al. and implementations in some other frameworks.
+
+Considering the specific case of Momentum, the update can be written as
+
+vt+1=μ∗vt+gt+1,pt+1=pt−lr∗vt+1,\begin{aligned} v_{t+1} & = \mu * v_{t} +
+g_{t+1}, \\\ p_{t+1} & = p_{t} - \text{lr} * v_{t+1}, \end{aligned}
+
+where pp , gg , vv and μ\mu denote the parameters, gradient, velocity, and
+momentum respectively.
+
+This is in contrast to Sutskever et. al. and other frameworks which employ an
+update of the form
+
+vt+1=μ∗vt+lr∗gt+1,pt+1=pt−vt+1.\begin{aligned} v_{t+1} & = \mu * v_{t} +
+\text{lr} * g_{t+1}, \\\ p_{t+1} & = p_{t} - v_{t+1}. \end{aligned}
+
+The Nesterov version is analogously modified.
+
+`step(closure=None)` [source]
+
+    
+Performs a single optimization step.
+
+Parameters
+
+    
+closure (callable, optional) – A closure that reevaluates the model and
+returns the loss.
+
+## How to adjust learning rate
+
+`torch.optim.lr_scheduler` provides several methods to adjust the learning
+rate based on the number of epochs.
+`torch.optim.lr_scheduler.ReduceLROnPlateau` allows dynamic learning rate
+reducing based on some validation measurements.
+
+Learning rate scheduling should be applied after optimizer’s update; e.g., you
+should write your code this way:
+
+    
+    >>> scheduler = ...
+    >>> for epoch in range(100):
+    >>>     train(...)
+    >>>     validate(...)
+    >>>     scheduler.step()
+    
+Warning
+
+Prior to PyTorch 1.1.0, the learning rate scheduler was expected to be called
+before the optimizer’s update; 1.1.0 changed this behavior in a BC-breaking
+way. If you use the learning rate scheduler (calling `scheduler.step()`)
+before the optimizer’s update (calling `optimizer.step()`), this will skip the
+first value of the learning rate schedule. If you are unable to reproduce
+results after upgrading to PyTorch 1.1.0, please check if you are calling
+`scheduler.step()` at the wrong time.
+
+`class torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch=-1,
+verbose=False)` [source]
+
+    
+Sets the learning rate of each parameter group to the initial lr times a given
+function. When last_epoch=-1, sets initial lr as lr.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * lr_lambda (function or list) – A function which computes a multiplicative factor given an integer parameter epoch, or a list of such functions, one for each group in optimizer.param_groups.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> # Assuming optimizer has two groups.
+    >>> lambda1 = lambda epoch: epoch // 30
+    >>> lambda2 = lambda epoch: 0.95 ** epoch
+    >>> scheduler = LambdaLR(optimizer, lr_lambda=[lambda1, lambda2])
+    >>> for epoch in range(100):
+    >>>     train(...)
+    >>>     validate(...)
+    >>>     scheduler.step()
+    
+`load_state_dict(state_dict)` [source]
+
+    
+Loads the schedulers state.
+
+When saving or loading the scheduler, please make sure to also save or load
+the state of the optimizer.
+
+Parameters
+
+    
+state_dict (dict) – scheduler state. Should be an object returned from a call
+to `state_dict()`.
+
+`state_dict()` [source]
+
+    
+Returns the state of the scheduler as a `dict`.
+
+It contains an entry for every variable in self.__dict__ which is not the
+optimizer. The learning rate lambda functions will only be saved if they are
+callable objects and not if they are functions or lambdas.
+
+When saving or loading the scheduler, please make sure to also save or load
+the state of the optimizer.
+
+`class torch.optim.lr_scheduler.MultiplicativeLR(optimizer, lr_lambda,
+last_epoch=-1, verbose=False)` [source]
+
+    
+Multiply the learning rate of each parameter group by the factor given in the
+specified function. When last_epoch=-1, sets initial lr as lr.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * lr_lambda (function or list) – A function which computes a multiplicative factor given an integer parameter epoch, or a list of such functions, one for each group in optimizer.param_groups.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> lmbda = lambda epoch: 0.95
+    >>> scheduler = MultiplicativeLR(optimizer, lr_lambda=lmbda)
+    >>> for epoch in range(100):
+    >>>     train(...)
+    >>>     validate(...)
+    >>>     scheduler.step()
+    
+`load_state_dict(state_dict)` [source]
+
+    
+Loads the schedulers state.
+
+Parameters
+
+    
+state_dict (dict) – scheduler state. Should be an object returned from a call
+to `state_dict()`.
+
+`state_dict()` [source]
+
+    
+Returns the state of the scheduler as a `dict`.
+
+It contains an entry for every variable in self.__dict__ which is not the
+optimizer. The learning rate lambda functions will only be saved if they are
+callable objects and not if they are functions or lambdas.
+
+`class torch.optim.lr_scheduler.StepLR(optimizer, step_size, gamma=0.1,
+last_epoch=-1, verbose=False)` [source]
+
+    
+Decays the learning rate of each parameter group by gamma every step_size
+epochs. Notice that such decay can happen simultaneously with other changes to
+the learning rate from outside this scheduler. When last_epoch=-1, sets
+initial lr as lr.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * step_size (int) – Period of learning rate decay.
+  * gamma (float) – Multiplicative factor of learning rate decay. Default: 0.1.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> # Assuming optimizer uses lr = 0.05 for all groups
+    >>> # lr = 0.05     if epoch < 30
+    >>> # lr = 0.005    if 30 <= epoch < 60
+    >>> # lr = 0.0005   if 60 <= epoch < 90
+    >>> # ...
+    >>> scheduler = StepLR(optimizer, step_size=30, gamma=0.1)
+    >>> for epoch in range(100):
+    >>>     train(...)
+    >>>     validate(...)
+    >>>     scheduler.step()
+    
+`class torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=0.1,
+last_epoch=-1, verbose=False)` [source]
+
+    
+Decays the learning rate of each parameter group by gamma once the number of
+epoch reaches one of the milestones. Notice that such decay can happen
+simultaneously with other changes to the learning rate from outside this
+scheduler. When last_epoch=-1, sets initial lr as lr.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * milestones (list) – List of epoch indices. Must be increasing.
+  * gamma (float) – Multiplicative factor of learning rate decay. Default: 0.1.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> # Assuming optimizer uses lr = 0.05 for all groups
+    >>> # lr = 0.05     if epoch < 30
+    >>> # lr = 0.005    if 30 <= epoch < 80
+    >>> # lr = 0.0005   if epoch >= 80
+    >>> scheduler = MultiStepLR(optimizer, milestones=[30,80], gamma=0.1)
+    >>> for epoch in range(100):
+    >>>     train(...)
+    >>>     validate(...)
+    >>>     scheduler.step()
+    
+`class torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma, last_epoch=-1,
+verbose=False)` [source]
+
+    
+Decays the learning rate of each parameter group by gamma every epoch. When
+last_epoch=-1, sets initial lr as lr.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * gamma (float) – Multiplicative factor of learning rate decay.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+`class torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max, eta_min=0,
+last_epoch=-1, verbose=False)` [source]
+
+    
+Set the learning rate of each parameter group using a cosine annealing
+schedule, where ηmax\eta_{max} is set to the initial lr and TcurT_{cur} is the
+number of epochs since the last restart in SGDR:
+
+ηt=ηmin+12(ηmax−ηmin)(1+cos⁡(TcurTmaxπ)),Tcur≠(2k+1)Tmax;ηt+1=ηt+12(ηmax−ηmin)(1−cos⁡(1Tmaxπ)),Tcur=(2k+1)Tmax.\begin{aligned}
+\eta_t & = \eta_{min} + \frac{1}{2}(\eta_{max} - \eta_{min})\left(1 +
+\cos\left(\frac{T_{cur}}{T_{max}}\pi\right)\right), & T_{cur} \neq
+(2k+1)T_{max}; \\\ \eta_{t+1} & = \eta_{t} + \frac{1}{2}(\eta_{max} -
+\eta_{min}) \left(1 - \cos\left(\frac{1}{T_{max}}\pi\right)\right), & T_{cur}
+= (2k+1)T_{max}. \end{aligned}
+
+When last_epoch=-1, sets initial lr as lr. Notice that because the schedule is
+defined recursively, the learning rate can be simultaneously modified outside
+this scheduler by other operators. If the learning rate is set solely by this
+scheduler, the learning rate at each step becomes:
+
+ηt=ηmin+12(ηmax−ηmin)(1+cos⁡(TcurTmaxπ))\eta_t = \eta_{min} +
+\frac{1}{2}(\eta_{max} - \eta_{min})\left(1 +
+\cos\left(\frac{T_{cur}}{T_{max}}\pi\right)\right)
+
+It has been proposed in SGDR: Stochastic Gradient Descent with Warm Restarts.
+Note that this only implements the cosine annealing part of SGDR, and not the
+restarts.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * T_max (int) – Maximum number of iterations.
+  * eta_min (float) – Minimum learning rate. Default: 0.
+  * last_epoch (int) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+`class torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+factor=0.1, patience=10, threshold=0.0001, threshold_mode='rel', cooldown=0,
+min_lr=0, eps=1e-08, verbose=False)` [source]
+
+    
+Reduce learning rate when a metric has stopped improving. Models often benefit
+from reducing the learning rate by a factor of 2-10 once learning stagnates.
+This scheduler reads a metrics quantity and if no improvement is seen for a
+‘patience’ number of epochs, the learning rate is reduced.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * mode (str) – One of `min`, `max`. In `min` mode, lr will be reduced when the quantity monitored has stopped decreasing; in `max` mode it will be reduced when the quantity monitored has stopped increasing. Default: ‘min’.
+  * factor (float) – Factor by which the learning rate will be reduced. new_lr = lr * factor. Default: 0.1.
+  * patience (int) – Number of epochs with no improvement after which learning rate will be reduced. For example, if `patience = 2`, then we will ignore the first 2 epochs with no improvement, and will only decrease the LR after the 3rd epoch if the loss still hasn’t improved then. Default: 10.
+  * threshold (float) – Threshold for measuring the new optimum, to only focus on significant changes. Default: 1e-4.
+  * threshold_mode (str) – One of `rel`, `abs`. In `rel` mode, dynamic_threshold = best * ( 1 + threshold ) in ‘max’ mode or best * ( 1 - threshold ) in `min` mode. In `abs` mode, dynamic_threshold = best + threshold in `max` mode or best - threshold in `min` mode. Default: ‘rel’.
+  * cooldown (int) – Number of epochs to wait before resuming normal operation after lr has been reduced. Default: 0.
+  * min_lr (float or list) – A scalar or a list of scalars. A lower bound on the learning rate of all param groups or each group respectively. Default: 0.
+  * eps (float) – Minimal decay applied to lr. If the difference between new and old lr is smaller than eps, the update is ignored. Default: 1e-8.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    >>> scheduler = ReduceLROnPlateau(optimizer, 'min')
+    >>> for epoch in range(10):
+    >>>     train(...)
+    >>>     val_loss = validate(...)
+    >>>     # Note that step should be called after validate()
+    >>>     scheduler.step(val_loss)
+    
+`class torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr, max_lr,
+step_size_up=2000, step_size_down=None, mode='triangular', gamma=1.0,
+scale_fn=None, scale_mode='cycle', cycle_momentum=True, base_momentum=0.8,
+max_momentum=0.9, last_epoch=-1, verbose=False)` [source]
+
+    
+Sets the learning rate of each parameter group according to cyclical learning
+rate policy (CLR). The policy cycles the learning rate between two boundaries
+with a constant frequency, as detailed in the paper Cyclical Learning Rates
+for Training Neural Networks. The distance between the two boundaries can be
+scaled on a per-iteration or per-cycle basis.
+
+Cyclical learning rate policy changes the learning rate after every batch.
+`step` should be called after a batch has been used for training.
+
+This class has three built-in policies, as put forth in the paper:
+
+  * “triangular”: A basic triangular cycle without amplitude scaling.
+  * “triangular2”: A basic triangular cycle that scales initial amplitude by half each cycle.
+  * “exp_range”: A cycle that scales initial amplitude by gammacycle iterations\text{gamma}^{\text{cycle iterations}} at each cycle iteration.
+
+This implementation was adapted from the github repo: bckenstler/CLR
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * base_lr (float or list) – Initial learning rate which is the lower boundary in the cycle for each parameter group.
+  * max_lr (float or list) – Upper learning rate boundaries in the cycle for each parameter group. Functionally, it defines the cycle amplitude (max_lr - base_lr). The lr at any cycle is the sum of base_lr and some scaling of the amplitude; therefore max_lr may not actually be reached depending on scaling function.
+  * step_size_up (int) – Number of training iterations in the increasing half of a cycle. Default: 2000
+  * step_size_down (int) – Number of training iterations in the decreasing half of a cycle. If step_size_down is None, it is set to step_size_up. Default: None
+  * mode (str) – One of {triangular, triangular2, exp_range}. Values correspond to policies detailed above. If scale_fn is not None, this argument is ignored. Default: ‘triangular’
+  * gamma (float) – Constant in ‘exp_range’ scaling function: gamma**(cycle iterations) Default: 1.0
+  * scale_fn (function) – Custom scaling policy defined by a single argument lambda function, where 0 <= scale_fn(x) <= 1 for all x >= 0. If specified, then ‘mode’ is ignored. Default: None
+  * scale_mode (str) – {‘cycle’, ‘iterations’}. Defines whether scale_fn is evaluated on cycle number or cycle iterations (training iterations since start of cycle). Default: ‘cycle’
+  * cycle_momentum (bool) – If `True`, momentum is cycled inversely to learning rate between ‘base_momentum’ and ‘max_momentum’. Default: True
+  * base_momentum (float or list) – Lower momentum boundaries in the cycle for each parameter group. Note that momentum is cycled inversely to learning rate; at the peak of a cycle, momentum is ‘base_momentum’ and learning rate is ‘max_lr’. Default: 0.8
+  * max_momentum (float or list) – Upper momentum boundaries in the cycle for each parameter group. Functionally, it defines the cycle amplitude (max_momentum - base_momentum). The momentum at any cycle is the difference of max_momentum and some scaling of the amplitude; therefore base_momentum may not actually be reached depending on scaling function. Note that momentum is cycled inversely to learning rate; at the start of a cycle, momentum is ‘max_momentum’ and learning rate is ‘base_lr’ Default: 0.9
+  * last_epoch (int) – The index of the last batch. This parameter is used when resuming a training job. Since `step()` should be invoked after each batch instead of after each epoch, this number represents the total number of batches computed, not the total number of epochs computed. When last_epoch=-1, the schedule is started from the beginning. Default: -1
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    >>> scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=0.01, max_lr=0.1)
+    >>> data_loader = torch.utils.data.DataLoader(...)
+    >>> for epoch in range(10):
+    >>>     for batch in data_loader:
+    >>>         train_batch(...)
+    >>>         scheduler.step()
+    
+`get_lr()` [source]
+
+    
+Calculates the learning rate at batch index. This function treats
+`self.last_epoch` as the last batch index.
+
+If `self.cycle_momentum` is `True`, this function has a side effect of
+updating the optimizer’s momentum.
+
+`class torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr,
+total_steps=None, epochs=None, steps_per_epoch=None, pct_start=0.3,
+anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85,
+max_momentum=0.95, div_factor=25.0, final_div_factor=10000.0,
+three_phase=False, last_epoch=-1, verbose=False)` [source]
+
+    
+Sets the learning rate of each parameter group according to the 1cycle
+learning rate policy. The 1cycle policy anneals the learning rate from an
+initial learning rate to some maximum learning rate and then from that maximum
+learning rate to some minimum learning rate much lower than the initial
+learning rate. This policy was initially described in the paper Super-
+Convergence: Very Fast Training of Neural Networks Using Large Learning Rates.
+
+The 1cycle learning rate policy changes the learning rate after every batch.
+`step` should be called after a batch has been used for training.
+
+This scheduler is not chainable.
+
+Note also that the total number of steps in the cycle can be determined in one
+of two ways (listed in order of precedence):
+
+  1. A value for total_steps is explicitly provided.
+  2. A number of epochs (epochs) and a number of steps per epoch (steps_per_epoch) are provided. In this case, the number of total steps is inferred by total_steps = epochs * steps_per_epoch
+
+You must either provide a value for total_steps or provide a value for both
+epochs and steps_per_epoch.
+
+The default behaviour of this scheduler follows the fastai implementation of
+1cycle, which claims that “unpublished work has shown even better results by
+using only two phases”. To mimic the behaviour of the original paper instead,
+set `three_phase=True`.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * max_lr (float or list) – Upper learning rate boundaries in the cycle for each parameter group.
+  * total_steps (int) – The total number of steps in the cycle. Note that if a value is not provided here, then it must be inferred by providing a value for epochs and steps_per_epoch. Default: None
+  * epochs (int) – The number of epochs to train for. This is used along with steps_per_epoch in order to infer the total number of steps in the cycle if a value for total_steps is not provided. Default: None
+  * steps_per_epoch (int) – The number of steps per epoch to train for. This is used along with epochs in order to infer the total number of steps in the cycle if a value for total_steps is not provided. Default: None
+  * pct_start (float) – The percentage of the cycle (in number of steps) spent increasing the learning rate. Default: 0.3
+  * anneal_strategy (str) – {‘cos’, ‘linear’} Specifies the annealing strategy: “cos” for cosine annealing, “linear” for linear annealing. Default: ‘cos’
+  * cycle_momentum (bool) – If `True`, momentum is cycled inversely to learning rate between ‘base_momentum’ and ‘max_momentum’. Default: True
+  * base_momentum (float or list) – Lower momentum boundaries in the cycle for each parameter group. Note that momentum is cycled inversely to learning rate; at the peak of a cycle, momentum is ‘base_momentum’ and learning rate is ‘max_lr’. Default: 0.85
+  * max_momentum (float or list) – Upper momentum boundaries in the cycle for each parameter group. Functionally, it defines the cycle amplitude (max_momentum - base_momentum). Note that momentum is cycled inversely to learning rate; at the start of a cycle, momentum is ‘max_momentum’ and learning rate is ‘base_lr’ Default: 0.95
+  * div_factor (float) – Determines the initial learning rate via initial_lr = max_lr/div_factor Default: 25
+  * final_div_factor (float) – Determines the minimum learning rate via min_lr = initial_lr/final_div_factor Default: 1e4
+  * three_phase (bool) – If `True`, use a third phase of the schedule to annihilate the learning rate according to ‘final_div_factor’ instead of modifying the second phase (the first two phases will be symmetrical about the step indicated by ‘pct_start’).
+  * last_epoch (int) – The index of the last batch. This parameter is used when resuming a training job. Since `step()` should be invoked after each batch instead of after each epoch, this number represents the total number of batches computed, not the total number of epochs computed. When last_epoch=-1, the schedule is started from the beginning. Default: -1
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+#### Example
+
+    
+    >>> data_loader = torch.utils.data.DataLoader(...)
+    >>> optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
+    >>> scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=len(data_loader), epochs=10)
+    >>> for epoch in range(10):
+    >>>     for batch in data_loader:
+    >>>         train_batch(...)
+    >>>         scheduler.step()
+    
+`class torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0,
+T_mult=1, eta_min=0, last_epoch=-1, verbose=False)` [source]
+
+    
+Set the learning rate of each parameter group using a cosine annealing
+schedule, where ηmax\eta_{max} is set to the initial lr, TcurT_{cur} is the
+number of epochs since the last restart and TiT_{i} is the number of epochs
+between two warm restarts in SGDR:
+
+ηt=ηmin+12(ηmax−ηmin)(1+cos⁡(TcurTiπ))\eta_t = \eta_{min} +
+\frac{1}{2}(\eta_{max} - \eta_{min})\left(1 +
+\cos\left(\frac{T_{cur}}{T_{i}}\pi\right)\right)
+
+When Tcur=TiT_{cur}=T_{i} , set ηt=ηmin\eta_t = \eta_{min} . When
+Tcur=0T_{cur}=0 after restart, set ηt=ηmax\eta_t=\eta_{max} .
+
+It has been proposed in SGDR: Stochastic Gradient Descent with Warm Restarts.
+
+Parameters
+
+    
+  * optimizer (Optimizer) – Wrapped optimizer.
+  * T_0 (int) – Number of iterations for the first restart.
+  * T_mult (int, optional) – A factor increases TiT_{i} after a restart. Default: 1.
+  * eta_min (float, optional) – Minimum learning rate. Default: 0.
+  * last_epoch (int, optional) – The index of last epoch. Default: -1.
+  * verbose (bool) – If `True`, prints a message to stdout for each update. Default: `False`.
+
+`step(epoch=None)` [source]
+
+    
+Step could be called after every batch update
+
+#### Example
+
+    
+    >>> scheduler = CosineAnnealingWarmRestarts(optimizer, T_0, T_mult)
+    >>> iters = len(dataloader)
+    >>> for epoch in range(20):
+    >>>     for i, sample in enumerate(dataloader):
+    >>>         inputs, labels = sample['inputs'], sample['labels']
+    >>>         optimizer.zero_grad()
+    >>>         outputs = net(inputs)
+    >>>         loss = criterion(outputs, labels)
+    >>>         loss.backward()
+    >>>         optimizer.step()
+    >>>         scheduler.step(epoch + i / iters)
+    
+This function can be called in an interleaved way.
+
+#### Example
+
+    
+    >>> scheduler = CosineAnnealingWarmRestarts(optimizer, T_0, T_mult)
+    >>> for epoch in range(20):
+    >>>     scheduler.step()
+    >>> scheduler.step(26)
+    >>> scheduler.step() # scheduler.step(27), instead of scheduler(20)
+    
+## Stochastic Weight Averaging
+
+`torch.optim.swa_utils` implements Stochastic Weight Averaging (SWA). In
+particular, `torch.optim.swa_utils.AveragedModel` class implements SWA models,
+`torch.optim.swa_utils.SWALR` implements the SWA learning rate scheduler and
+`torch.optim.swa_utils.update_bn()` is a utility function used to update SWA
+batch normalization statistics at the end of training.
+
+SWA has been proposed in Averaging Weights Leads to Wider Optima and Better
+Generalization.
+
+### Constructing averaged models
+
+`AveragedModel` class serves to compute the weights of the SWA model. You can
+create an averaged model by running:
+
+    
+    >>> swa_model = AveragedModel(model)
+    
+Here the model `model` can be an arbitrary `torch.nn.Module` object.
+`swa_model` will keep track of the running averages of the parameters of the
+`model`. To update these averages, you can use the `update_parameters()`
+function:
+
+    
+    >>> swa_model.update_parameters(model)
+    
+### SWA learning rate schedules
+
+Typically, in SWA the learning rate is set to a high constant value. `SWALR`
+is a learning rate scheduler that anneals the learning rate to a fixed value,
+and then keeps it constant. For example, the following code creates a
+scheduler that linearly anneals the learning rate from its initial value to
+0.05 in 5 epochs within each parameter group:
+
+    
+    >>> swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, \
+    >>>         anneal_strategy="linear", anneal_epochs=5, swa_lr=0.05)
+    
+You can also use cosine annealing to a fixed value instead of linear annealing
+by setting `anneal_strategy="cos"`.
+
+### Taking care of batch normalization
+
+`update_bn()` is a utility function that allows to compute the batchnorm
+statistics for the SWA model on a given dataloader `loader` at the end of
+training:
+
+    
+    >>> torch.optim.swa_utils.update_bn(loader, swa_model)
+    
+`update_bn()` applies the `swa_model` to every element in the dataloader and
+computes the activation statistics for each batch normalization layer in the
+model.
+
+Warning
+
+`update_bn()` assumes that each batch in the dataloader `loader` is either a
+tensors or a list of tensors where the first element is the tensor that the
+network `swa_model` should be applied to. If your dataloader has a different
+structure, you can update the batch normalization statistics of the
+`swa_model` by doing a forward pass with the `swa_model` on each element of
+the dataset.
+
+### Custom averaging strategies
+
+By default, `torch.optim.swa_utils.AveragedModel` computes a running equal
+average of the parameters that you provide, but you can also use custom
+averaging functions with the `avg_fn` parameter. In the following example
+`ema_model` computes an exponential moving average.
+
+Example:
+
+    
+    >>> ema_avg = lambda averaged_model_parameter, model_parameter, num_averaged:\
+    >>>         0.1 * averaged_model_parameter + 0.9 * model_parameter
+    >>> ema_model = torch.optim.swa_utils.AveragedModel(model, avg_fn=ema_avg)
+    
+### Putting it all together
+
+In the example below, `swa_model` is the SWA model that accumulates the
+averages of the weights. We train the model for a total of 300 epochs and we
+switch to the SWA learning rate schedule and start to collect SWA averages of
+the parameters at epoch 160:
+
+    
+    >>> loader, optimizer, model, loss_fn = ...
+    >>> swa_model = torch.optim.swa_utils.AveragedModel(model)
+    >>> scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300)
+    >>> swa_start = 160
+    >>> swa_scheduler = SWALR(optimizer, swa_lr=0.05)
+    >>>
+    >>> for epoch in range(300):
+    >>>       for input, target in loader:
+    >>>           optimizer.zero_grad()
+    >>>           loss_fn(model(input), target).backward()
+    >>>           optimizer.step()
+    >>>       if epoch > swa_start:
+    >>>           swa_model.update_parameters(model)
+    >>>           swa_scheduler.step()
+    >>>       else:
+    >>>           scheduler.step()
+    >>>
+    >>> # Update bn statistics for the swa_model at the end
+    >>> torch.optim.swa_utils.update_bn(loader, swa_model)
+    >>> # Use swa_model to make predictions on test data
+    >>> preds = swa_model(test_input)
+    
+© 2019 Torch Contributors  
+Licensed under the 3-clause BSD License.  
+https://pytorch.org/docs/1.8.0/optim.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

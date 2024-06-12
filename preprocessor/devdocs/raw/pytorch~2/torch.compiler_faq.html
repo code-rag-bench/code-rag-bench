@@ -1,0 +1,196 @@
+<h1 id="frequently-asked-questions">Frequently Asked Questions</h1> <p><strong>Author</strong>: <a class="reference external" href="https://github.com/msaroufim">Mark Saroufim</a></p>  <h2 id="does-torch-compile-support-training">Does <code>torch.compile</code> support training?</h2> <p><code>torch.compile</code> supports training, using AOTAutograd to capture backwards:</p> <ol class="arabic simple"> <li>The <code>.forward()</code> graph and <code>optimizer.step()</code> is captured by TorchDynamo’s python <code>evalframe</code> frontend.</li> <li>For each segment of <code>.forward()</code> that torchdynamo captures, it uses AOTAutograd to generate a backward graph segment.</li> <li>Each pair of forward and backward graph are (optionally) min-cut partitioned to save the minimal state between forward and backward.</li> <li>The forward and backward pairs are wrapped in <code>autograd.function</code> modules.</li> <li>Usercode calling<code>.backward()</code> still triggers eager’s autograd engine, which runs each <em>compiled backward</em> graph as if it were one op, also running any non-compiled eager ops’ <code>.backward()</code> functions.</li> </ol>   <h2 id="do-you-support-distributed-code">Do you support Distributed code?</h2> <p><code>torch.compile</code> supports <code>DistributedDataParallel</code> (DDP). Support for other distributed training libraries is being considered.</p> <p>The main reason why Distributed code is challenging with dynamo is because AOTAutograd unrolls both the forward and backward pass and provides 2 graphs for backends to optimize. This is a problem for distributed code because we’d like to ideally overlap communication operations with computations. Eager pytorch accomplishes this in different ways for DDP/FSDP- using autograd hooks, module hooks, and modifications/mutations of module states. In a naive application of dynamo, hooks that should run directly after an operation during backwards may be delayed until after the entire compiled region of backwards ops, due to how AOTAutograd compiled functions interact with dispatcher hooks.</p> <p>The basic strategy for optimizing DDP with Dynamo is outlined in <a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/_dynamo/optimizations/distributed.py">distributed.py</a> where the main idea will be to graph break on <a class="reference external" href="https://pytorch.org/docs/stable/notes/ddp.html#internal-design">DDP bucket boundaries</a>.</p> <p>When each node in DDP needs to synchronize its weights with the other nodes it organizes its gradients and parameters into buckets which reduces communication times and allows a node to broadcast a fraction of its gradients to other waiting nodes.</p> <p>Graph breaks in distributed code mean you can expect dynamo and its backends to optimize the compute overhead of a distributed program but not its communication overhead. Graph-breaks may interfere with compilation speedups, if the reduced graph-size robs the compiler of fusion opportunities. However, there are diminishing returns with increasing graph size since most of the current compute optimizations are local fusions. So in practice this approach may be sufficient.</p>   <h2 id="do-i-still-need-to-export-whole-graphs">Do I still need to export whole graphs?</h2> <p>For the vast majority of models you probably don’t and you can use <code>torch.compile()</code> as is but there are a few situations where full graphs are necessary and you can can ensure a full graph by simply running <code>torch.compile(..., nopython=True)</code>. These situations include:</p> <ul class="simple"> <li>Large scale training runs, such as $250K+ that require pipeline parallelism and other advanced sharding strategies.</li> <li>Inference optimizers like <a class="reference external" href="https://github.com/pytorch/TensorRT">TensorRT</a> or <a class="reference external" href="https://github.com/facebookincubator/AITemplate">AITemplate</a> that rely on fusing much more aggressively than training optimizers.</li> <li>Mobile training or inference.</li> </ul> <p>Future work will include tracing communication operations into graphs, coordinating these operations with compute optimizations, and optimizing the communication operations.</p>   <h2 id="why-is-my-code-crashing">Why is my code crashing?</h2> <p>If your code ran just fine without <code>torch.compile</code> and started to crash with it is enabled, then the most important first step is figuring out which part of the stack your failure occurred. To troubleshoot that, follow the steps below and only try the next step if the previous one succeeded.</p> <ol class="arabic simple"> <li>
+<code>torch.compile(..., backend="eager")</code> which only runs TorchDynamo forward graph capture and then runs the captured graph with PyTorch. If this fails then there’s an issue with TorchDynamo.</li> <li>
+<code>torch.compile(..., backend="aot_eager")</code> which runs TorchDynamo to capture a forward graph, and then AOTAutograd to trace the backward graph without any additional backend compiler steps. PyTorch eager will then be used to run the forward and backward graphs. If this fails then there’s an issue with AOTAutograd.</li> <li>
+<code>torch.compile(..., backend="inductor")</code> which runs TorchDynamo to capture a forward graph, and then AOTAutograd to trace the backward graph with the TorchInductor compiler. If this fails then there’s an issue with TorchInductor</li> </ol>   <h2 id="why-is-compilation-slow">Why is compilation slow?</h2> <ul class="simple"> <li>
+<strong>Dynamo Compilation</strong>– TorchDynamo has a builtin stats function for collecting and displaying the time spent in each compilation phase. These stats can be accessed by calling <code>torch._dynamo.utils.compile_times()</code> after executing <code>torch._dynamo</code>. By default, this returns a string representation of the compile times spent in each TorchDynamo function by name.</li> <li>
+<strong>Inductor Compilation</strong>– TorchInductor has a builtin stats and trace function for displaying time spent in each compilation phase, output code, output graph visualization and IR dump. <code>env TORCH_COMPILE_DEBUG=1 python repro.py</code>. This is a debugging tool designed to make it easier to debug/understand the internals of TorchInductor with an output that will look something like <a class="reference external" href="https://gist.github.com/jansel/f4af078791ad681a0d4094adeb844396">this</a> Each file in that debug trace can be enabled/disabled via <code>torch._inductor.config.trace.*</code>. The profile and the diagram are both disabled by default since they are expensive to generate. See the <a class="reference external" href="https://gist.github.com/jansel/f4af078791ad681a0d4094adeb844396">example debug directory output</a> for more examples.</li> <li>
+<strong>Excessive Recompilation</strong> When TorchDynamo compiles a function (or part of one), it makes certain assumptions about locals and globals in order to allow compiler optimizations, and expresses these assumptions as guards that check particular values at runtime. If any of these guards fail, Dynamo will recompile that function (or part) up to <code>torch._dynamo.config.cache_size_limit</code> times. If your program is hitting the cache limit, you will first need to determine which guard is failing and what part of your program is triggering it. The <a class="reference external" href="#recompilation-profiler">recompilation profiler</a> automates the process of setting TorchDynamo’s cache limit to 1 and running your program under an observation-only ‘compiler’ that records the causes of any guard failures. You should be sure to run your program for at least as long (as many iterations) as you were running when you ran into trouble, and the profiler will accumulate statistics over this duration.</li> </ul> <pre data-language="python">from torch._dynamo.utils import CompileProfiler
+
+def my_model():
+    ...
+
+with CompileProfiler() as prof:
+    profiler_model = torch.compile(my_model, backend=prof)
+    profiler_model()
+    print(prof.report())
+</pre>   <h2 id="why-are-you-recompiling-in-production">Why are you recompiling in production?</h2> <p>In some cases, you may not want unexpected compiles after a program has warmed up. For example, if you are serving production traffic in a latency critical application. For this, TorchDynamo provides an alternate mode where prior compiled graphs are used, but no new ones are generated:</p> <pre data-language="python">frozen_toy_example = dynamo.run(toy_example)
+frozen_toy_example(torch.randn(10), torch.randn(10))
+</pre>   <h2 id="how-are-you-speeding-up-my-code">How are you speeding up my code?</h2> <p>There are 3 major ways to accelerate PyTorch code:</p> <ol class="arabic simple"> <li>Kernel fusion via vertical fusions which fuse sequential operations to avoid excessive read/writes. For example, fuse 2 subsequent cosines means you can can do 1 read 1 write instead 2 reads 2 writes 2. Horizontal fusion: the simplest example being batching where a single matrix is multiplied with a batch of examples but the more general scenario is a grouped GEMM where a group of matrix multiplications are scheduled together</li> <li>Out of order execution: A general optimization for compilers, by looking ahead at the exact data dependencies within a graph we can decide on the most opportune time to execute a node and which buffers can be reused</li> <li>Automatic work placement: Similar of the out of order execution point, but by matching nodes of a graph to resources like physical hardware or memory we can design an appropriate schedule</li> </ol> <p>The above are general principles for accelerating PyTorch code but different backends will each make different tradeoffs on what to optimize. For example Inductor first takes care of fusing whatever it can and only then generates <a class="reference external" href="https://openai.com/blog/triton/">Triton</a> kernels. It can also</p> <p>Triton in addition offers speedups because of automatic memory coalescing, memory management and scheduling within each Streaming Multiprocessor and has been designed to handle tiled computations.</p> <p>However, regardless of the backend you use it’s best to use a benchmark and see approach so try out the PyTorch profiler, visually inspect the generated kernels and try to see what’s going on for yourself.</p>   <h2 id="why-am-i-not-seeing-speedups">Why am I not seeing speedups?</h2>  <h3 id="graph-breaks">Graph Breaks</h3> <p>The main reason you won’t see the speedups you’d like to by using dynamo is excessive graph breaks. So what’s a graph break?</p> <p>Given a program like:</p> <pre data-language="python">def some_fun(x):
+    ...
+
+torch.compile(some_fun)(x)
+...
+</pre> <p>Torchdynamo will attempt to compile all of the torch/tensor operations within <code>some_fun()</code> into a single FX graph, but it may fail to capture everything into one graph.</p> <p>Some graph break reasons are insurmountable to TorchDynamo like calling into a C extension other than PyTorch is invisible to TorchDynamo, and could do arbitrary things without TorchDynamo being able to introduce necessary guards to ensure that the compiled program would be safe to reuse.</p>  <p>To maximize performance, it’s important to have as few graph breaks as possible.</p>    <h3 id="identifying-the-cause-of-a-graph-break">Identifying the cause of a graph break</h3> <p>To identify all graph breaks in a program and the associated reasons for the breaks, <code>torch._dynamo.explain</code> can be used. This tool runs TorchDynamo on the supplied function and aggregates the graph breaks that are encountered. Here is an example usage:</p> <pre data-language="python">import torch
+import torch._dynamo as dynamo
+def toy_example(a, b):
+    x = a / (torch.abs(a) + 1)
+    print("woo")
+    if b.sum() &lt; 0:
+        b = b * -1
+    return x * b
+explanation, out_guards, graphs, ops_per_graph = dynamo.explain(toy_example, torch.randn(10), torch.randn(10))
+print(explanation)
+"""
+Dynamo produced 3 graphs, with 2 graph break and 6 ops.
+ Break reasons:
+1. call_function BuiltinVariable(print) [ConstantVariable(str)] {}
+   File "t2.py", line 16, in toy_example
+    print("woo")
+
+2. generic_jump
+   File "t2.py", line 17, in toy_example
+    if b.sum() &lt; 0:
+ """
+</pre> <p>To throw an error on the first graph break encountered you can use disable python fallback by using <code>nopython=True</code>, this should be familiar if you’ve worked with export based compilers.</p> <pre data-language="python">def toy_example(a, b):
+   ...
+
+torch.compile(toy_example, fullgraph=True, backend=&lt;compiler&gt;)
+</pre>   <h3 id="why-didnt-my-code-recompile-when-i-changed-it">Why didn’t my code recompile when I changed it?</h3> <p>If you enabled dynamic shapes by setting <code>env TORCHDYNAMO_DYNAMIC_SHAPES=1 python model.py</code> then your code won’t recompile on shape changes. We’ve added support for dynamic shapes which avoids recompilations in the case when shapes vary by less than a factor of 2. This is especially useful in scenarios like varying image sizes in CV or variable sequence length in NLP. In inference scenarios it’s often not possible to know what a batch size will be beforehand because you take what you can get from different client apps.</p> <p>In general, TorchDynamo tries very hard not to recompile things unnecessarily so if for example TorchDynamo finds 3 graphs and your change only modified one graph then only that graph will recompile. So another tip to avoid potentially slow compilation times is to warmup a model by compiling it once after which subsequent compilations will be much faster. Cold start compile times is still a metric we track visibly.</p>    <h2 id="why-am-i-getting-incorrect-results">Why am I getting incorrect results?</h2> <p>Accuracy issues can also be minified if you set the environment variable <code>TORCHDYNAMO_REPRO_LEVEL=4</code>, it operates with a similar git bisect model and a full repro might be something like <code>TORCHDYNAMO_REPRO_AFTER="aot" TORCHDYNAMO_REPRO_LEVEL=4</code> the reason we need this is downstream compilers will codegen code whether it’s Triton code or the C++ backend, the numerics from those downstream compilers can be different in subtle ways yet have dramatic impact on your training stability. So the accuracy debugger is very useful for us to detect bugs in our codegen or with a backend compiler.</p> <p>If you’d like to ensure that random number generation is the same across both torch and triton then you can enable <code>torch._inductor.config.fallback_random = True</code></p>   <h2 id="why-am-i-getting-ooms">Why am I getting OOMs?</h2> <p>Dynamo is still an alpha product so there’s a few sources of OOMs and if you’re seeing an OOM try disabling the following configurations in this order and then open an issue on GitHub so we can solve the root problem 1. If you’re using dynamic shapes try disabling them, we’ve disabled them by default: <code>env TORCHDYNAMO_DYNAMIC_SHAPES=0 python model.py</code> 2. CUDA graphs with Triton are enabled by default in inductor but removing them may alleviate some OOM issues: <code>torch._inductor.config.triton.cudagraphs = False</code>.</p>   <h2 id="does-torch-func-work-with-torch-compile-for-grad-and-vmap-transforms">Does <code>torch.func</code> work with <code>torch.compile</code> (for <code>grad</code> and <code>vmap</code> transforms)?</h2> <p>Applying a <code>torch.func</code> transform to a function that uses <code>torch.compile</code> does not work:</p> <pre data-language="python">import torch
+
+@torch.compile
+def f(x):
+    return torch.sin(x)
+
+def g(x):
+    return torch.grad(f)(x)
+
+x = torch.randn(2, 3)
+g(x)
+</pre> <p>This code will not work. There is an <a class="reference external" href="https://github.com/pytorch/pytorch/issues/100320">issue</a> that you can track for this.</p> <p>As a workaround, use <code>torch.compile</code> outside of the <code>torch.func</code> function:</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This is an experimental feature and can be used by setting <code>torch._dynamo.config.capture_func_transforms=True</code></p> </div> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def f(x):
+    return torch.sin(x)
+
+@torch.compile
+def g(x):
+    return torch.vmap(f)(x)
+
+x = torch.randn(2, 3)
+g(x)
+</pre>  <h3 id="calling-torch-func-transform-inside-of-a-function-handled-with-torch-compile">Calling <code>torch.func</code> transform inside of a function handled with <code>torch.compile</code>
+</h3>   <h3 id="compiling-torch-func-grad-with-torch-compile">Compiling <code>torch.func.grad</code> with <code>torch.compile</code>
+</h3> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def wrapper_fn(x):
+    return torch.func.grad(lambda x: x.sin().sum())(x)
+
+x = torch.randn(3, 3, 3)
+grad_x = torch.compile(wrapper_fn)(x)
+</pre>   <h3 id="compiling-torch-vmap-with-torch-compile">Compiling <code>torch.vmap</code> with <code>torch.compile</code>
+</h3> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def my_fn(x):
+    return torch.vmap(lambda x: x.sum(1))(x)
+
+x = torch.randn(3, 3, 3)
+output = torch.compile(my_fn)(x)
+</pre>   <h3 id="limitations">Limitations</h3> <p>There are currently a few cases which are not supported and lead to graph breaks (that is, torch.compile falls back to eager-mode PyTorch on these). We are working on improving the situation for the next release (PyTorch 2.2)</p> <p>1. The inputs and outputs of the function being transformed over must be tensors. We do not yet support things like tuple of Tensors.</p> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def fn(x):
+    x1, x2 = x
+    return x1 + x2
+
+def my_fn(x):
+    return torch.func.vmap(fn)(x)
+
+x1 = torch.randn(3, 3, 3)
+x2 = torch.randn(3, 3, 3)
+# Unsupported, falls back to eager-mode PyTorch
+output = torch.compile(my_fn)((x1, x2))
+</pre> <ol class="arabic simple" start="2"> <li>Keyword arguments are not supported.</li> </ol> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def fn(x, y):
+    return (x + y).sum()
+
+def my_fn(x, y):
+    return torch.func.grad(fn)(x, y=y)
+
+x = torch.randn(3, 3)
+y = torch.randn(3, 3)
+# Unsupported, falls back to eager-mode PyTorch
+output = torch.compile(my_fn)(x, y)
+</pre> <p>3. Functions with observable side effects. For example, it is OK to mutate a list created in the function, but not OK to mutate a list created outside of the function.</p> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+some_list = []
+
+def f(x, y):
+    some_list.append(1)
+    return x + y
+
+def my_fn(x, y):
+    return torch.func.vmap(f)(x, y)
+
+x = torch.ones(2, 3)
+y = torch.randn(2, 3)
+# Unsupported, falls back to eager-mode PyTorch
+output = torch.compile(my_fn)(x, y)
+</pre> <ol class="arabic simple" start="4"> <li>
+<code>torch.vmap</code> over a function that calls one or more operators in the following list.</li> </ol> <div class="admonition note"> <p class="admonition-title">Note</p> <p>‘stride’, ‘requires_grad’, ‘storage_offset’, ‘layout’, ‘data’, ‘is_coalesced’, ‘is_complex’, ‘is_conj’, ‘is_contiguous’, ‘is_cpu’, ‘is_cuda’, ‘is_distributed’, ‘is_floating_point’, ‘is_inference’, ‘is_ipu’, ‘is_leaf’, ‘is_meta’, ‘is_mkldnn’, ‘is_mps’, ‘is_neg’, ‘is_nested’, ‘is_nonzero’, ‘is_ort’, ‘is_pinned’, ‘is_quantized’, ‘is_same_size’, ‘is_set_to’, ‘is_shared’, ‘is_signed’, ‘is_sparse’, ‘is_sparse_csr’, ‘is_vulkan’, ‘is_xla’, ‘is_xpu’</p> </div> <pre data-language="python">import torch
+
+torch._dynamo.config.capture_func_transforms=True
+
+def bad_fn(x):
+    x.stride()
+    return x
+
+def my_fn(x):
+    return torch.func.vmap(bad_fn)(x)
+
+x = torch.randn(3, 3, 3)
+# Unsupported, falls back to eager-mode PyTorch
+output = torch.compile(my_fn)(x)
+</pre>   <h3 id="compiling-functions-besides-the-ones-which-are-supported-escape-hatch">Compiling functions besides the ones which are supported (escape hatch)</h3> <p>For other transforms, as a workaround, use <code>torch._dynamo.allow_in_graph</code></p> <p><code>allow_in_graph</code> is an escape hatch. If your code does not work with <code>torch.compile</code>, which introspects Python bytecode, but you believe it will work via a symbolic tracing approach (like <code>jax.jit</code>), then use <code>allow_in_graph</code>.</p> <p>By using <code>allow_in_graph</code> to annotate a function, you must make sure your code meets the following requirements:</p> <ul class="simple"> <li>All outputs in your function only depend on the inputs and do not depend on any captured Tensors.</li> <li>Your function is functional. That is, it does not mutate any state. This may be relaxed; we actually support functions that appear to be functional from the outside: they may have in-place PyTorch operations, but may not mutate global state or inputs to the function.</li> <li>Your function does not raise data-dependent errors.</li> </ul> <pre data-language="python">import torch
+
+@torch.compile
+def f(x):
+    return torch._dynamo.allow_in_graph(torch.vmap(torch.sum))(x)
+
+x = torch.randn(2, 3)
+f(x)
+</pre> <p>A common pitfall is using <code>allow_in_graph</code> to annotate a function that invokes an <code>nn.Module</code>. This is because the outputs now depend on the parameters of the <code>nn.Module</code>. To get this to work, use <code>torch.func.functional_call</code> to extract the module state.</p>    <h2 id="does-numpy-work-with-torch-compile">Does NumPy work with <code>torch.compile</code>?</h2> <p>Starting in 2.1, <code>torch.compile</code> understands native NumPy programs that work on NumPy arrays, and mixed PyTorch-NumPy programs that convert from PyTorch to NumPy and back via <code>x.numpy()</code>, <code>torch.from_numpy</code>, and related functions.</p>  <h3 id="nonsupported-numpy-feats">Which NumPy features does <code>torch.compile</code> support?</h3> <p id="which-numpy-features-does-torch-compile-support">NumPy within <code>torch.compile</code> follows NumPy 2.0 pre-release.</p> <p>Generally, <code>torch.compile</code> is able to trace through most NumPy constructions, and when it cannot, it falls back to eager and lets NumPy execute that piece of code. Even then, there are a few features where <code>torch.compile</code> semantics slightly deviate from those of NumPy:</p> <ul class="simple"> <li>NumPy scalars: We model them as 0-D arrays. That is, <code>np.float32(3)</code> returns a 0-D array under <code>torch.compile</code>. To avoid a graph break, it is best to use this 0-D array. If this breaks your code, you can workaround this by casting the NumPy scalar to the relevant Python scalar type <code>bool/int/float</code>.</li> <li>Negative strides: <code>np.flip</code> and slicing with a negative step return a copy.</li> <li>Type promotion: NumPy’s type promotion will change in NumPy 2.0. The new rules are described in <a class="reference external" href="https://numpy.org/neps/nep-0050-scalar-promotion.html)">NEP 50</a>. <code>torch.compile</code> implements NEP 50 rather than the current soon-to-be deprecated rules.</li> <li>
+<code>{tril,triu}_indices_from/{tril,triu}_indices</code> return arrays rather than a tuple of arrays.</li> </ul> <p>There are other features for which we do not support tracing and we gracefully fallback to NumPy for their execution:</p> <ul class="simple"> <li>Non-numeric dtypes like datetimes, strings, chars, void, structured dtypes and recarrays.</li> <li>Long dtypes <code>np.float128/np.complex256</code> and some unsigned dtypes <code>np.uint16/np.uint32/np.uint64</code>.</li> <li>
+<code>ndarray</code> subclasses.</li> <li>Masked arrays.</li> <li>Esoteric ufunc machinery like <code>axes=[(n,k),(k,m)-&gt;(n,m)]</code> and ufunc methods (e.g., <code>np.add.reduce</code>).</li> <li>Sorting / ordering <code>complex64/complex128</code> arrays.</li> <li>NumPy <code>np.poly1d</code> and <code>np.polynomial</code>.</li> <li>Positional <code>out1, out2</code> args in functions with 2 or more returns (<code>out=tuple</code> does work).</li> <li>
+<code>__array_function__</code>, <code>__array_interface__</code> and <code>__array_wrap__</code>.</li> <li>
+<code>ndarray.ctypes</code> attribute.</li> </ul>   <h3 id="can-i-execute-numpy-code-on-cuda-via-torch-compile">Can I execute NumPy code on CUDA via <code>torch.compile</code>?</h3> <p>Yes you can! To do so, you may simply execute your code within a <code>torch.device("cuda")</code> context. Consider the example</p> <pre data-language="python">import torch
+import numpy as np
+
+@torch.compile
+def numpy_fn(X: np.ndarray, Y: np.ndarray) -&gt; np.ndarray:
+    return np.sum(X[:, :, None] * Y[:, None, :], axis=(-2, -1))
+
+X = np.random.randn(1024, 64)
+Y = np.random.randn(1024, 64)
+with torch.device("cuda"):
+    Z = numpy_fn(X, Y)
+</pre> <p>In this example, <code>numpy_fn</code> will be executed in CUDA. For this to be possible, <code>torch.compile</code> automatically moves <code>X</code> and <code>Y</code> from CPU to CUDA, and then it moves the result <code>Z</code> from CUDA to CPU. If we are executing this function several times in the same program run, we may want to avoid all these rather expensive memory copies. To do so, we just need to tweak our <code>numpy_fn</code> so that it accepts cuda Tensors and returns tensors:</p> <pre data-language="python">@torch.compile
+def numpy_fn(X: torch.Tensor, Y: torch.Tensor) -&gt; torch.Tensor:
+    X, Y = X.numpy(), Y.numpy()
+    Z = np.sum(X[:, :, None] * Y[:, None, :], axis=(-2, -1))
+    return torch.from_numpy(Z)
+
+X = torch.randn(1024, 64, device="cuda")
+Y = torch.randn(1024, 64, device="cuda")
+with torch.device("cuda"):
+    Z = numpy_fn(X, Y)
+</pre> <p>By doing this, we explicitly create the tensors in CUDA memory, and we keep them there. In this case <code>X.numpy()</code> and <code>from_numpy()</code> are hints to the compiler but no real data movement happens. Note that the original program would not run on eager mode now. If you want to run it in eager mode, you would need to call <code>.numpy(force=True)</code> doing <code>Z = Z.cuda()</code> before returning <code>Z</code>. Of course, doing this would execute the program on eager mode NumPy, and on CPU.</p>   <h3 id="how-do-i-debug-numpy-code-under-torch-compile">How do I debug NumPy code under <code>torch.compile</code>?</h3> <p>Debugging JIT compiled code is challenging, given the complexity of modern compilers and the daunting errors that they raise. <a class="reference external" href="https://pytorch.org/docs/main/torch.compiler_troubleshooting.html#diagnosing-runtime-errors">The tutorial on how to diagnose runtime errors within torch.compile</a> contains a few tips and tricks on how to tackle this task.</p> <p>If the above is not enough to pinpoint the origin of the issue, there are still a few other NumPy-specific tools we can use. We can discern whether the bug is entirely in the PyTorch code by disabling tracing through NumPy functions:</p> <pre data-language="python">from torch._dynamo import config
+config.trace_numpy = False
+</pre> <p>If the bug lies in the traced NumPy code, we can execute the NumPy code eagerly (without <code>torch.compile</code>) using PyTorch as a backend by importing <code>import torch._numpy as np</code>. This should just be used for <strong>debugging purposes</strong> and is in no way a replacement for the PyTorch API, as it is <strong>much less performant</strong> and, as a private API, <strong>may change without notice</strong>. At any rate, <code>torch._numpy</code> is a Python implementation of NumPy in terms of PyTorch and it is used internally by <code>torch.compile</code> to transform NumPy code into Pytorch code. It is rather easy to read and modify, so if you find any bug in it feel free to submit a PR fixing it or simply open an issue.</p> <p>If the program does work when importing <code>torch._numpy as np</code>, chances are that the bug is in TorchDynamo. If this is the case, please feel open an issue with a <a class="reference external" href="torch.compiler_troubleshooting">minimal reproducer</a>.</p>   <h3 id="i-torch-compile-some-numpy-code-and-i-did-not-see-any-speed-up">I <code>torch.compile</code> some NumPy code and I did not see any speed-up.</h3> <p>The best place to start is the <a class="reference external" href="https://pytorch.org/docs/main/torch.compiler_faq.html#why-am-i-not-seeing-speedups">tutorial with general advice for how to debug these sort of torch.compile issues</a>.</p> <p>Some graph breaks may happen because of the use of unsupported features. See <a class="reference internal" href="#nonsupported-numpy-feats"><span class="std std-ref">Which NumPy features does torch.compile support?</span></a>. More generally, it is useful to keep in mind that some widely used NumPy features do not play well with compilers. For example, in-place modifications make reasoning difficult within the compiler and often yield worse performance than their out-of-place counterparts.As such, it is best to avoid them. Same goes for the use of the <code>out=</code> parameter. Instead, prefer out-of-place ops and let <code>torch.compile</code> optimize the memory use. Same goes for data-dependent ops like masked indexing through boolean masks, or data-dependent control flow like <code>if</code> or <code>while</code> constructions.</p>    <h2 id="which-api-to-use-for-fine-grain-tracing">Which API to use for fine grain tracing?</h2> <p>In some cases, you might need to exclude small parts of your code from the torch.compile compilations. This section provides some of the answers and you can find more information in <a class="reference internal" href="torch.compiler_fine_grain_apis#torchdynamo-fine-grain-tracing"><span class="std std-ref">TorchDynamo APIs for fine-grained tracing</span></a>.</p>  <h3 id="how-do-i-graph-break-on-a-function">How do I graph break on a function?</h3> <p>Graph break on a function is not enough to sufficiently express what you want PyTorch to do. You need to be more specific about your use case. Some of the most common use cases you might want to consider:</p> <ul class="simple"> <li>If you want to disable compilation on this function frame and the recursively invoked frames, use <code>torch._dynamo.disable</code>.</li> <li>If you want a particular operator, such as <code>fbgemm</code> to use the eager mode, use <code>torch._dynamo.disallow_in_graph</code>.</li> </ul> <p>Some of the uncommon use cases include:</p> <ul class="simple"> <li>If you want to disable TorchDynamo on the function frame but enable it back on the recursively invoked frames – use <code>torch._dynamo.disable(recursive=False)</code>.</li> <li>If you want to prevent inlining of a function frame – use <code>torch._dynamo.graph_break</code> at the beginning of the function you want to prevent inlining.</li> </ul>   <h3 id="what-s-the-difference-between-torch-dynamo-disable-and-torch-dynamo-disallow-in-graph">What’s the difference between <code>torch._dynamo.disable</code> and <code>torch._dynamo.disallow_in_graph</code>
+</h3> <p>Disallow-in-graph works at the level of operators, or more specifically, the operators that you see in the TorchDynamo extracted graphs.</p> <p>Disable works at the function frame level and decides if TorchDynamo should look into the function frame or not.</p>   <h3 id="what-s-the-difference-between-torch-dynamo-disable-and-torch-dynamo-skip">What’s the difference between <code>torch._dynamo.disable</code> and <code>torch._dynamo_skip</code>
+</h3> <div class="admonition note"> <p class="admonition-title">Note</p> <p><code>torch._dynamo_skip</code> is deprecated.</p> </div> <p>You most likely need <code>torch._dynamo.disable</code>. But in an unlikely scenario, you might need even finer control. Suppose you want to disable the tracing on just the <code>a_fn</code> function, but want to continue the tracing back in <code>aa_fn</code> and <code>ab_fn</code>. The image below demonstrates this use case:</p> <div class="figure align-default"> <img alt="diagram of torch.compile + disable(a_fn, recursive=False)" src="data:image/png;base64,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"> </div> <p>In this case, you can use <code>torch._dynamo.disable(recursive=False)</code>. In previous versions, this functionality was provided by <code>torch._dynamo.skip</code>. This is now supported by the <code>recursive</code> flag inside <code>torch._dynamo.disable</code>.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch.compiler_faq.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch.compiler_faq.html</a>
+  </p>
+</div>

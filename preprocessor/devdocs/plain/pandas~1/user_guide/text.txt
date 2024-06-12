@@ -1,0 +1,1306 @@
+# Working with text data
+
+## Text data types
+
+New in version 1.0.0.
+
+There are two ways to store text data in pandas:
+
+  1. `object` -dtype NumPy array.
+  2. `StringDtype` extension type.
+
+We recommend using `StringDtype` to store text data.
+
+Prior to pandas 1.0, `object` dtype was the only option. This was unfortunate
+for many reasons:
+
+  1. You can accidentally store a mixture of strings and non-strings in an `object` dtype array. It’s better to have a dedicated dtype.
+  2. `object` dtype breaks dtype-specific operations like `DataFrame.select_dtypes()`. There isn’t a clear way to select just text while excluding non-text but still object-dtype columns.
+  3. When reading code, the contents of an `object` dtype array is less clear than `'string'`.
+
+Currently, the performance of `object` dtype arrays of strings and
+`arrays.StringArray` are about the same. We expect future enhancements to
+significantly increase the performance and lower the memory overhead of
+`StringArray`.
+
+Warning
+
+`StringArray` is currently considered experimental. The implementation and
+parts of the API may change without warning.
+
+For backwards-compatibility, `object` dtype remains the default type we infer
+a list of strings to
+
+    
+    In [1]: pd.Series(["a", "b", "c"])
+    Out[1]: 
+    0    a
+    1    b
+    2    c
+    dtype: object
+    
+To explicitly request `string` dtype, specify the `dtype`
+
+    
+    In [2]: pd.Series(["a", "b", "c"], dtype="string")
+    Out[2]: 
+    0    a
+    1    b
+    2    c
+    dtype: string
+    
+    In [3]: pd.Series(["a", "b", "c"], dtype=pd.StringDtype())
+    Out[3]: 
+    0    a
+    1    b
+    2    c
+    dtype: string
+    
+Or `astype` after the `Series` or `DataFrame` is created
+
+    
+    In [4]: s = pd.Series(["a", "b", "c"])
+    
+    In [5]: s
+    Out[5]: 
+    0    a
+    1    b
+    2    c
+    dtype: object
+    
+    In [6]: s.astype("string")
+    Out[6]: 
+    0    a
+    1    b
+    2    c
+    dtype: string
+    
+Changed in version 1.1.0.
+
+You can also use `StringDtype`/`"string"` as the dtype on non-string data and
+it will be converted to `string` dtype:
+
+    
+    In [7]: s = pd.Series(["a", 2, np.nan], dtype="string")
+    
+    In [8]: s
+    Out[8]: 
+    0       a
+    1       2
+    2    <NA>
+    dtype: string
+    
+    In [9]: type(s[1])
+    Out[9]: str
+    
+or convert from existing pandas data:
+
+    
+    In [10]: s1 = pd.Series([1, 2, np.nan], dtype="Int64")
+    
+    In [11]: s1
+    Out[11]: 
+    0       1
+    1       2
+    2    <NA>
+    dtype: Int64
+    
+    In [12]: s2 = s1.astype("string")
+    
+    In [13]: s2
+    Out[13]: 
+    0       1
+    1       2
+    2    <NA>
+    dtype: string
+    
+    In [14]: type(s2[0])
+    Out[14]: str
+    
+### Behavior differences
+
+These are places where the behavior of `StringDtype` objects differ from
+`object` dtype
+
+  12. For `StringDtype`, string accessor methods that return numeric output will always return a nullable integer dtype, rather than either int or float dtype, depending on the presence of NA values. Methods returning boolean output will return a nullable boolean dtype.
+        In [15]: s = pd.Series(["a", None, "b"], dtype="string")
+    
+    In [16]: s
+    Out[16]: 
+    0       a
+    1    <NA>
+    2       b
+    dtype: string
+    
+    In [17]: s.str.count("a")
+    Out[17]: 
+    0       1
+    1    <NA>
+    2       0
+    dtype: Int64
+    
+    In [18]: s.dropna().str.count("a")
+    Out[18]: 
+    0    1
+    2    0
+    dtype: Int64
+    
+Both outputs are `Int64` dtype. Compare that with object-dtype
+
+        In [19]: s2 = pd.Series(["a", None, "b"], dtype="object")
+    
+    In [20]: s2.str.count("a")
+    Out[20]: 
+    0    1.0
+    1    NaN
+    2    0.0
+    dtype: float64
+    
+    In [21]: s2.dropna().str.count("a")
+    Out[21]: 
+    0    1
+    2    0
+    dtype: int64
+    
+When NA values are present, the output dtype is float64. Similarly for methods
+returning boolean values.
+
+        In [22]: s.str.isdigit()
+    Out[22]: 
+    0    False
+    1     <NA>
+    2    False
+    dtype: boolean
+    
+    In [23]: s.str.match("a")
+    Out[23]: 
+    0     True
+    1     <NA>
+    2    False
+    dtype: boolean
+    
+
+  2. Some string methods, like `Series.str.decode()` are not available on `StringArray` because `StringArray` only holds strings, not bytes.
+  3. In comparison operations, `arrays.StringArray` and `Series` backed by a `StringArray` will return an object with `BooleanDtype`, rather than a `bool` dtype object. Missing values in a `StringArray` will propagate in comparison operations, rather than always comparing unequal like `numpy.nan`.
+
+Everything else that follows in the rest of this document applies equally to
+`string` and `object` dtype.
+
+## String methods
+
+Series and Index are equipped with a set of string processing methods that
+make it easy to operate on each element of the array. Perhaps most
+importantly, these methods exclude missing/NA values automatically. These are
+accessed via the `str` attribute and generally have names matching the
+equivalent (scalar) built-in string methods:
+
+    
+    In [24]: s = pd.Series(
+       ....:     ["A", "B", "C", "Aaba", "Baca", np.nan, "CABA", "dog", "cat"], dtype="string"
+       ....: )
+       ....: 
+    
+    In [25]: s.str.lower()
+    Out[25]: 
+    0       a
+    1       b
+    2       c
+    3    aaba
+    4    baca
+    5    <NA>
+    6    caba
+    7     dog
+    8     cat
+    dtype: string
+    
+    In [26]: s.str.upper()
+    Out[26]: 
+    0       A
+    1       B
+    2       C
+    3    AABA
+    4    BACA
+    5    <NA>
+    6    CABA
+    7     DOG
+    8     CAT
+    dtype: string
+    
+    In [27]: s.str.len()
+    Out[27]: 
+    0       1
+    1       1
+    2       1
+    3       4
+    4       4
+    5    <NA>
+    6       4
+    7       3
+    8       3
+    dtype: Int64
+    
+    
+    In [28]: idx = pd.Index([" jack", "jill ", " jesse ", "frank"])
+    
+    In [29]: idx.str.strip()
+    Out[29]: Index(['jack', 'jill', 'jesse', 'frank'], dtype='object')
+    
+    In [30]: idx.str.lstrip()
+    Out[30]: Index(['jack', 'jill ', 'jesse ', 'frank'], dtype='object')
+    
+    In [31]: idx.str.rstrip()
+    Out[31]: Index([' jack', 'jill', ' jesse', 'frank'], dtype='object')
+    
+The string methods on Index are especially useful for cleaning up or
+transforming DataFrame columns. For instance, you may have columns with
+leading or trailing whitespace:
+
+    
+    In [32]: df = pd.DataFrame(
+       ....:     np.random.randn(3, 2), columns=[" Column A ", " Column B "], index=range(3)
+       ....: )
+       ....: 
+    
+    In [33]: df
+    Out[33]: 
+        Column A    Column B 
+    0    0.469112   -0.282863
+    1   -1.509059   -1.135632
+    2    1.212112   -0.173215
+    
+Since `df.columns` is an Index object, we can use the `.str` accessor
+
+    
+    In [34]: df.columns.str.strip()
+    Out[34]: Index(['Column A', 'Column B'], dtype='object')
+    
+    In [35]: df.columns.str.lower()
+    Out[35]: Index([' column a ', ' column b '], dtype='object')
+    
+These string methods can then be used to clean up the columns as needed. Here
+we are removing leading and trailing whitespaces, lower casing all names, and
+replacing any remaining whitespaces with underscores:
+
+    
+    In [36]: df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+    
+    In [37]: df
+    Out[37]: 
+       column_a  column_b
+    0  0.469112 -0.282863
+    1 -1.509059 -1.135632
+    2  1.212112 -0.173215
+    
+Note
+
+If you have a `Series` where lots of elements are repeated (i.e. the number of
+unique elements in the `Series` is a lot smaller than the length of the
+`Series`), it can be faster to convert the original `Series` to one of type
+`category` and then use `.str.<method>` or `.dt.<property>` on that. The
+performance difference comes from the fact that, for `Series` of type
+`category`, the string operations are done on the `.categories` and not on
+each element of the `Series`.
+
+Please note that a `Series` of type `category` with string `.categories` has
+some limitations in comparison to `Series` of type string (e.g. you can’t add
+strings to each other: `s + " " + s` won’t work if `s` is a `Series` of type
+`category`). Also, `.str` methods which operate on elements of type `list` are
+not available on such a `Series`.
+
+Warning
+
+Before v.0.25.0, the `.str`-accessor did only the most rudimentary type
+checks. Starting with v.0.25.0, the type of the Series is inferred and the
+allowed types (i.e. strings) are enforced more rigorously.
+
+Generally speaking, the `.str` accessor is intended to work only on strings.
+With very few exceptions, other uses are not supported, and may be disabled at
+a later point.
+
+## Splitting and replacing strings
+
+Methods like `split` return a Series of lists:
+
+    
+    In [38]: s2 = pd.Series(["a_b_c", "c_d_e", np.nan, "f_g_h"], dtype="string")
+    
+    In [39]: s2.str.split("_")
+    Out[39]: 
+    0    [a, b, c]
+    1    [c, d, e]
+    2         <NA>
+    3    [f, g, h]
+    dtype: object
+    
+Elements in the split lists can be accessed using `get` or `[]` notation:
+
+    
+    In [40]: s2.str.split("_").str.get(1)
+    Out[40]: 
+    0       b
+    1       d
+    2    <NA>
+    3       g
+    dtype: object
+    
+    In [41]: s2.str.split("_").str[1]
+    Out[41]: 
+    0       b
+    1       d
+    2    <NA>
+    3       g
+    dtype: object
+    
+It is easy to expand this to return a DataFrame using `expand`.
+
+    
+    In [42]: s2.str.split("_", expand=True)
+    Out[42]: 
+          0     1     2
+    0     a     b     c
+    1     c     d     e
+    2  <NA>  <NA>  <NA>
+    3     f     g     h
+    
+When original `Series` has `StringDtype`, the output columns will all be
+`StringDtype` as well.
+
+It is also possible to limit the number of splits:
+
+    
+    In [43]: s2.str.split("_", expand=True, n=1)
+    Out[43]: 
+          0     1
+    0     a   b_c
+    1     c   d_e
+    2  <NA>  <NA>
+    3     f   g_h
+    
+`rsplit` is similar to `split` except it works in the reverse direction, i.e.,
+from the end of the string to the beginning of the string:
+
+    
+    In [44]: s2.str.rsplit("_", expand=True, n=1)
+    Out[44]: 
+          0     1
+    0   a_b     c
+    1   c_d     e
+    2  <NA>  <NA>
+    3   f_g     h
+    
+`replace` optionally uses regular expressions:
+
+    
+    In [45]: s3 = pd.Series(
+       ....:     ["A", "B", "C", "Aaba", "Baca", "", np.nan, "CABA", "dog", "cat"],
+       ....:     dtype="string",
+       ....: )
+       ....: 
+    
+    In [46]: s3
+    Out[46]: 
+    0       A
+    1       B
+    2       C
+    3    Aaba
+    4    Baca
+    5        
+    6    <NA>
+    7    CABA
+    8     dog
+    9     cat
+    dtype: string
+    
+    In [47]: s3.str.replace("^.a|dog", "XX-XX ", case=False, regex=True)
+    Out[47]: 
+    0           A
+    1           B
+    2           C
+    3    XX-XX ba
+    4    XX-XX ca
+    5            
+    6        <NA>
+    7    XX-XX BA
+    8      XX-XX 
+    9     XX-XX t
+    dtype: string
+    
+Warning
+
+Some caution must be taken when dealing with regular expressions! The current
+behavior is to treat single character patterns as literal strings, even when
+`regex` is set to `True`. This behavior is deprecated and will be removed in a
+future version so that the `regex` keyword is always respected.
+
+Changed in version 1.2.0.
+
+If you want literal replacement of a string (equivalent to `str.replace()`),
+you can set the optional `regex` parameter to `False`, rather than escaping
+each character. In this case both `pat` and `repl` must be strings:
+
+    
+    In [48]: dollars = pd.Series(["12", "-$10", "$10,000"], dtype="string")
+    
+    # These lines are equivalent
+    In [49]: dollars.str.replace(r"-\$", "-", regex=True)
+    Out[49]: 
+    0         12
+    1        -10
+    2    $10,000
+    dtype: string
+    
+    In [50]: dollars.str.replace("-$", "-", regex=False)
+    Out[50]: 
+    0         12
+    1        -10
+    2    $10,000
+    dtype: string
+    
+The `replace` method can also take a callable as replacement. It is called on
+every `pat` using `re.sub()`. The callable should expect one positional
+argument (a regex object) and return a string.
+
+    
+    # Reverse every lowercase alphabetic word
+    In [51]: pat = r"[a-z]+"
+    
+    In [52]: def repl(m):
+       ....:     return m.group(0)[::-1]
+       ....: 
+    
+    In [53]: pd.Series(["foo 123", "bar baz", np.nan], dtype="string").str.replace(
+       ....:     pat, repl, regex=True
+       ....: )
+       ....: 
+    Out[53]: 
+    0    oof 123
+    1    rab zab
+    2       <NA>
+    dtype: string
+    
+    # Using regex groups
+    In [54]: pat = r"(?P<one>\w+) (?P<two>\w+) (?P<three>\w+)"
+    
+    In [55]: def repl(m):
+       ....:     return m.group("two").swapcase()
+       ....: 
+    
+    In [56]: pd.Series(["Foo Bar Baz", np.nan], dtype="string").str.replace(
+       ....:     pat, repl, regex=True
+       ....: )
+       ....: 
+    Out[56]: 
+    0     bAR
+    1    <NA>
+    dtype: string
+    
+The `replace` method also accepts a compiled regular expression object from
+`re.compile()` as a pattern. All flags should be included in the compiled
+regular expression object.
+
+    
+    In [57]: import re
+    
+    In [58]: regex_pat = re.compile(r"^.a|dog", flags=re.IGNORECASE)
+    
+    In [59]: s3.str.replace(regex_pat, "XX-XX ", regex=True)
+    Out[59]: 
+    0           A
+    1           B
+    2           C
+    3    XX-XX ba
+    4    XX-XX ca
+    5            
+    6        <NA>
+    7    XX-XX BA
+    8      XX-XX 
+    9     XX-XX t
+    dtype: string
+    
+Including a `flags` argument when calling `replace` with a compiled regular
+expression object will raise a `ValueError`.
+
+    
+    In [60]: s3.str.replace(regex_pat, 'XX-XX ', flags=re.IGNORECASE)
+    ---------------------------------------------------------------------------
+    ValueError: case and flags cannot be set when pat is a compiled regex
+    
+`removeprefix` and `removesuffix` have the same effect as `str.removeprefix`
+and `str.removesuffix` added in Python 3.9
+<https://docs.python.org/3/library/stdtypes.html#str.removeprefix>`__:
+
+New in version 1.4.0.
+
+    
+    In [61]: s = pd.Series(["str_foo", "str_bar", "no_prefix"])
+    
+    In [62]: s.str.removeprefix("str_")
+    Out[62]: 
+    0          foo
+    1          bar
+    2    no_prefix
+    dtype: object
+    
+    In [63]: s = pd.Series(["foo_str", "bar_str", "no_suffix"])
+    
+    In [64]: s.str.removesuffix("_str")
+    Out[64]: 
+    0          foo
+    1          bar
+    2    no_suffix
+    dtype: object
+    
+## Concatenation
+
+There are several ways to concatenate a `Series` or `Index`, either with
+itself or others, all based on `cat()`, resp. `Index.str.cat`.
+
+### Concatenating a single Series into a string
+
+The content of a `Series` (or `Index`) can be concatenated:
+
+    
+    In [65]: s = pd.Series(["a", "b", "c", "d"], dtype="string")
+    
+    In [66]: s.str.cat(sep=",")
+    Out[66]: 'a,b,c,d'
+    
+If not specified, the keyword `sep` for the separator defaults to the empty
+string, `sep=''`:
+
+    
+    In [67]: s.str.cat()
+    Out[67]: 'abcd'
+    
+By default, missing values are ignored. Using `na_rep`, they can be given a
+representation:
+
+    
+    In [68]: t = pd.Series(["a", "b", np.nan, "d"], dtype="string")
+    
+    In [69]: t.str.cat(sep=",")
+    Out[69]: 'a,b,d'
+    
+    In [70]: t.str.cat(sep=",", na_rep="-")
+    Out[70]: 'a,b,-,d'
+    
+### Concatenating a Series and something list-like into a Series
+
+The first argument to `cat()` can be a list-like object, provided that it
+matches the length of the calling `Series` (or `Index`).
+
+    
+    In [71]: s.str.cat(["A", "B", "C", "D"])
+    Out[71]: 
+    0    aA
+    1    bB
+    2    cC
+    3    dD
+    dtype: string
+    
+Missing values on either side will result in missing values in the result as
+well, unless `na_rep` is specified:
+
+    
+    In [72]: s.str.cat(t)
+    Out[72]: 
+    0      aa
+    1      bb
+    2    <NA>
+    3      dd
+    dtype: string
+    
+    In [73]: s.str.cat(t, na_rep="-")
+    Out[73]: 
+    0    aa
+    1    bb
+    2    c-
+    3    dd
+    dtype: string
+    
+### Concatenating a Series and something array-like into a Series
+
+The parameter `others` can also be two-dimensional. In this case, the number
+or rows must match the lengths of the calling `Series` (or `Index`).
+
+    
+    In [74]: d = pd.concat([t, s], axis=1)
+    
+    In [75]: s
+    Out[75]: 
+    0    a
+    1    b
+    2    c
+    3    d
+    dtype: string
+    
+    In [76]: d
+    Out[76]: 
+          0  1
+    0     a  a
+    1     b  b
+    2  <NA>  c
+    3     d  d
+    
+    In [77]: s.str.cat(d, na_rep="-")
+    Out[77]: 
+    0    aaa
+    1    bbb
+    2    c-c
+    3    ddd
+    dtype: string
+    
+### Concatenating a Series and an indexed object into a Series, with alignment
+
+For concatenation with a `Series` or `DataFrame`, it is possible to align the
+indexes before concatenation by setting the `join`-keyword.
+
+    
+    In [78]: u = pd.Series(["b", "d", "a", "c"], index=[1, 3, 0, 2], dtype="string")
+    
+    In [79]: s
+    Out[79]: 
+    0    a
+    1    b
+    2    c
+    3    d
+    dtype: string
+    
+    In [80]: u
+    Out[80]: 
+    1    b
+    3    d
+    0    a
+    2    c
+    dtype: string
+    
+    In [81]: s.str.cat(u)
+    Out[81]: 
+    0    aa
+    1    bb
+    2    cc
+    3    dd
+    dtype: string
+    
+    In [82]: s.str.cat(u, join="left")
+    Out[82]: 
+    0    aa
+    1    bb
+    2    cc
+    3    dd
+    dtype: string
+    
+Warning
+
+If the `join` keyword is not passed, the method `cat()` will currently fall
+back to the behavior before version 0.23.0 (i.e. no alignment), but a
+`FutureWarning` will be raised if any of the involved indexes differ, since
+this default will change to `join='left'` in a future version.
+
+The usual options are available for `join` (one of `'left', 'outer', 'inner',
+'right'`). In particular, alignment also means that the different lengths do
+not need to coincide anymore.
+
+    
+    In [83]: v = pd.Series(["z", "a", "b", "d", "e"], index=[-1, 0, 1, 3, 4], dtype="string")
+    
+    In [84]: s
+    Out[84]: 
+    0    a
+    1    b
+    2    c
+    3    d
+    dtype: string
+    
+    In [85]: v
+    Out[85]: 
+    -1    z
+     0    a
+     1    b
+     3    d
+     4    e
+    dtype: string
+    
+    In [86]: s.str.cat(v, join="left", na_rep="-")
+    Out[86]: 
+    0    aa
+    1    bb
+    2    c-
+    3    dd
+    dtype: string
+    
+    In [87]: s.str.cat(v, join="outer", na_rep="-")
+    Out[87]: 
+    -1    -z
+     0    aa
+     1    bb
+     2    c-
+     3    dd
+     4    -e
+    dtype: string
+    
+The same alignment can be used when `others` is a `DataFrame`:
+
+    
+    In [88]: f = d.loc[[3, 2, 1, 0], :]
+    
+    In [89]: s
+    Out[89]: 
+    0    a
+    1    b
+    2    c
+    3    d
+    dtype: string
+    
+    In [90]: f
+    Out[90]: 
+          0  1
+    3     d  d
+    2  <NA>  c
+    1     b  b
+    0     a  a
+    
+    In [91]: s.str.cat(f, join="left", na_rep="-")
+    Out[91]: 
+    0    aaa
+    1    bbb
+    2    c-c
+    3    ddd
+    dtype: string
+    
+### Concatenating a Series and many objects into a Series
+
+Several array-like items (specifically: `Series`, `Index`, and 1-dimensional
+variants of `np.ndarray`) can be combined in a list-like container (including
+iterators, `dict`-views, etc.).
+
+    
+    In [92]: s
+    Out[92]: 
+    0    a
+    1    b
+    2    c
+    3    d
+    dtype: string
+    
+    In [93]: u
+    Out[93]: 
+    1    b
+    3    d
+    0    a
+    2    c
+    dtype: string
+    
+    In [94]: s.str.cat([u, u.to_numpy()], join="left")
+    Out[94]: 
+    0    aab
+    1    bbd
+    2    cca
+    3    ddc
+    dtype: string
+    
+All elements without an index (e.g. `np.ndarray`) within the passed list-like
+must match in length to the calling `Series` (or `Index`), but `Series` and
+`Index` may have arbitrary length (as long as alignment is not disabled with
+`join=None`):
+
+    
+    In [95]: v
+    Out[95]: 
+    -1    z
+     0    a
+     1    b
+     3    d
+     4    e
+    dtype: string
+    
+    In [96]: s.str.cat([v, u, u.to_numpy()], join="outer", na_rep="-")
+    Out[96]: 
+    -1    -z--
+     0    aaab
+     1    bbbd
+     2    c-ca
+     3    dddc
+     4    -e--
+    dtype: string
+    
+If using `join='right'` on a list-like of `others` that contains different
+indexes, the union of these indexes will be used as the basis for the final
+concatenation:
+
+    
+    In [97]: u.loc[[3]]
+    Out[97]: 
+    3    d
+    dtype: string
+    
+    In [98]: v.loc[[-1, 0]]
+    Out[98]: 
+    -1    z
+     0    a
+    dtype: string
+    
+    In [99]: s.str.cat([u.loc[[3]], v.loc[[-1, 0]]], join="right", na_rep="-")
+    Out[99]: 
+     3    dd-
+    -1    --z
+     0    a-a
+    dtype: string
+    
+## Indexing with `.str`
+
+You can use `[]` notation to directly index by position locations. If you
+index past the end of the string, the result will be a `NaN`.
+
+    
+    In [100]: s = pd.Series(
+       .....:     ["A", "B", "C", "Aaba", "Baca", np.nan, "CABA", "dog", "cat"], dtype="string"
+       .....: )
+       .....: 
+    
+    In [101]: s.str[0]
+    Out[101]: 
+    0       A
+    1       B
+    2       C
+    3       A
+    4       B
+    5    <NA>
+    6       C
+    7       d
+    8       c
+    dtype: string
+    
+    In [102]: s.str[1]
+    Out[102]: 
+    0    <NA>
+    1    <NA>
+    2    <NA>
+    3       a
+    4       a
+    5    <NA>
+    6       A
+    7       o
+    8       a
+    dtype: string
+    
+## Extracting substrings
+
+### Extract first match in each subject (extract)
+
+Warning
+
+Before version 0.23, argument `expand` of the `extract` method defaulted to
+`False`. When `expand=False`, `expand` returns a `Series`, `Index`, or
+`DataFrame`, depending on the subject and regular expression pattern. When
+`expand=True`, it always returns a `DataFrame`, which is more consistent and
+less confusing from the perspective of a user. `expand=True` has been the
+default since version 0.23.0.
+
+The `extract` method accepts a regular expression with at least one capture
+group.
+
+Extracting a regular expression with more than one group returns a DataFrame
+with one column per group.
+
+    
+    In [103]: pd.Series(
+       .....:     ["a1", "b2", "c3"],
+       .....:     dtype="string",
+       .....: ).str.extract(r"([ab])(\d)", expand=False)
+       .....: 
+    Out[103]: 
+          0     1
+    0     a     1
+    1     b     2
+    2  <NA>  <NA>
+    
+Elements that do not match return a row filled with `NaN`. Thus, a Series of
+messy strings can be “converted” into a like-indexed Series or DataFrame of
+cleaned-up or more useful strings, without necessitating `get()` to access
+tuples or `re.match` objects. The dtype of the result is always object, even
+if no match is found and the result only contains `NaN`.
+
+Named groups like
+
+    
+    In [104]: pd.Series(["a1", "b2", "c3"], dtype="string").str.extract(
+       .....:     r"(?P<letter>[ab])(?P<digit>\d)", expand=False
+       .....: )
+       .....: 
+    Out[104]: 
+      letter digit
+    0      a     1
+    1      b     2
+    2   <NA>  <NA>
+    
+and optional groups like
+
+    
+    In [105]: pd.Series(
+       .....:     ["a1", "b2", "3"],
+       .....:     dtype="string",
+       .....: ).str.extract(r"([ab])?(\d)", expand=False)
+       .....: 
+    Out[105]: 
+          0  1
+    0     a  1
+    1     b  2
+    2  <NA>  3
+    
+can also be used. Note that any capture group names in the regular expression
+will be used for column names; otherwise capture group numbers will be used.
+
+Extracting a regular expression with one group returns a `DataFrame` with one
+column if `expand=True`.
+
+    
+    In [106]: pd.Series(["a1", "b2", "c3"], dtype="string").str.extract(r"[ab](\d)", expand=True)
+    Out[106]: 
+          0
+    0     1
+    1     2
+    2  <NA>
+    
+It returns a Series if `expand=False`.
+
+    
+    In [107]: pd.Series(["a1", "b2", "c3"], dtype="string").str.extract(r"[ab](\d)", expand=False)
+    Out[107]: 
+    0       1
+    1       2
+    2    <NA>
+    dtype: string
+    
+Calling on an `Index` with a regex with exactly one capture group returns a
+`DataFrame` with one column if `expand=True`.
+
+    
+    In [108]: s = pd.Series(["a1", "b2", "c3"], ["A11", "B22", "C33"], dtype="string")
+    
+    In [109]: s
+    Out[109]: 
+    A11    a1
+    B22    b2
+    C33    c3
+    dtype: string
+    
+    In [110]: s.index.str.extract("(?P<letter>[a-zA-Z])", expand=True)
+    Out[110]: 
+      letter
+    0      A
+    1      B
+    2      C
+    
+It returns an `Index` if `expand=False`.
+
+    
+    In [111]: s.index.str.extract("(?P<letter>[a-zA-Z])", expand=False)
+    Out[111]: Index(['A', 'B', 'C'], dtype='object', name='letter')
+    
+Calling on an `Index` with a regex with more than one capture group returns a
+`DataFrame` if `expand=True`.
+
+    
+    In [112]: s.index.str.extract("(?P<letter>[a-zA-Z])([0-9]+)", expand=True)
+    Out[112]: 
+      letter   1
+    0      A  11
+    1      B  22
+    2      C  33
+    
+It raises `ValueError` if `expand=False`.
+
+    
+    >>> s.index.str.extract("(?P<letter>[a-zA-Z])([0-9]+)", expand=False)
+    ValueError: only one regex group is supported with Index
+    
+The table below summarizes the behavior of `extract(expand=False)` (input
+subject in first column, number of groups in regex in first row)
+
+| 1 group | >1 group  
+---|---|---  
+Index | Index | ValueError  
+Series | Series | DataFrame  
+### Extract all matches in each subject (extractall)
+
+Unlike `extract` (which returns only the first match),
+
+    
+    In [113]: s = pd.Series(["a1a2", "b1", "c1"], index=["A", "B", "C"], dtype="string")
+    
+    In [114]: s
+    Out[114]: 
+    A    a1a2
+    B      b1
+    C      c1
+    dtype: string
+    
+    In [115]: two_groups = "(?P<letter>[a-z])(?P<digit>[0-9])"
+    
+    In [116]: s.str.extract(two_groups, expand=True)
+    Out[116]: 
+      letter digit
+    A      a     1
+    B      b     1
+    C      c     1
+    
+the `extractall` method returns every match. The result of `extractall` is
+always a `DataFrame` with a `MultiIndex` on its rows. The last level of the
+`MultiIndex` is named `match` and indicates the order in the subject.
+
+    
+    In [117]: s.str.extractall(two_groups)
+    Out[117]: 
+            letter digit
+      match             
+    A 0          a     1
+      1          a     2
+    B 0          b     1
+    C 0          c     1
+    
+When each subject string in the Series has exactly one match,
+
+    
+    In [118]: s = pd.Series(["a3", "b3", "c2"], dtype="string")
+    
+    In [119]: s
+    Out[119]: 
+    0    a3
+    1    b3
+    2    c2
+    dtype: string
+    
+then `extractall(pat).xs(0, level='match')` gives the same result as
+`extract(pat)`.
+
+    
+    In [120]: extract_result = s.str.extract(two_groups, expand=True)
+    
+    In [121]: extract_result
+    Out[121]: 
+      letter digit
+    0      a     3
+    1      b     3
+    2      c     2
+    
+    In [122]: extractall_result = s.str.extractall(two_groups)
+    
+    In [123]: extractall_result
+    Out[123]: 
+            letter digit
+      match             
+    0 0          a     3
+    1 0          b     3
+    2 0          c     2
+    
+    In [124]: extractall_result.xs(0, level="match")
+    Out[124]: 
+      letter digit
+    0      a     3
+    1      b     3
+    2      c     2
+    
+`Index` also supports `.str.extractall`. It returns a `DataFrame` which has
+the same result as a `Series.str.extractall` with a default index (starts from
+0).
+
+    
+    In [125]: pd.Index(["a1a2", "b1", "c1"]).str.extractall(two_groups)
+    Out[125]: 
+            letter digit
+      match             
+    0 0          a     1
+      1          a     2
+    1 0          b     1
+    2 0          c     1
+    
+    In [126]: pd.Series(["a1a2", "b1", "c1"], dtype="string").str.extractall(two_groups)
+    Out[126]: 
+            letter digit
+      match             
+    0 0          a     1
+      1          a     2
+    1 0          b     1
+    2 0          c     1
+    
+## Testing for strings that match or contain a pattern
+
+You can check whether elements contain a pattern:
+
+    
+    In [127]: pattern = r"[0-9][a-z]"
+    
+    In [128]: pd.Series(
+       .....:     ["1", "2", "3a", "3b", "03c", "4dx"],
+       .....:     dtype="string",
+       .....: ).str.contains(pattern)
+       .....: 
+    Out[128]: 
+    0    False
+    1    False
+    2     True
+    3     True
+    4     True
+    5     True
+    dtype: boolean
+    
+Or whether elements match a pattern:
+
+    
+    In [129]: pd.Series(
+       .....:     ["1", "2", "3a", "3b", "03c", "4dx"],
+       .....:     dtype="string",
+       .....: ).str.match(pattern)
+       .....: 
+    Out[129]: 
+    0    False
+    1    False
+    2     True
+    3     True
+    4    False
+    5     True
+    dtype: boolean
+    
+New in version 1.1.0.
+
+    
+    In [130]: pd.Series(
+       .....:     ["1", "2", "3a", "3b", "03c", "4dx"],
+       .....:     dtype="string",
+       .....: ).str.fullmatch(pattern)
+       .....: 
+    Out[130]: 
+    0    False
+    1    False
+    2     True
+    3     True
+    4    False
+    5    False
+    dtype: boolean
+    
+Note
+
+The distinction between `match`, `fullmatch`, and `contains` is strictness:
+`fullmatch` tests whether the entire string matches the regular expression;
+`match` tests whether there is a match of the regular expression that begins
+at the first character of the string; and `contains` tests whether there is a
+match of the regular expression at any position within the string.
+
+The corresponding functions in the `re` package for these three match modes
+are re.fullmatch, re.match, and re.search, respectively.
+
+Methods like `match`, `fullmatch`, `contains`, `startswith`, and `endswith`
+take an extra `na` argument so missing values can be considered True or False:
+
+    
+    In [131]: s4 = pd.Series(
+       .....:     ["A", "B", "C", "Aaba", "Baca", np.nan, "CABA", "dog", "cat"], dtype="string"
+       .....: )
+       .....: 
+    
+    In [132]: s4.str.contains("A", na=False)
+    Out[132]: 
+    0     True
+    1    False
+    2    False
+    3     True
+    4    False
+    5    False
+    6     True
+    7    False
+    8    False
+    dtype: boolean
+    
+## Creating indicator variables
+
+You can extract dummy variables from string columns. For example if they are
+separated by a `'|'`:
+
+    
+    In [133]: s = pd.Series(["a", "a|b", np.nan, "a|c"], dtype="string")
+    
+    In [134]: s.str.get_dummies(sep="|")
+    Out[134]: 
+       a  b  c
+    0  1  0  0
+    1  1  1  0
+    2  0  0  0
+    3  1  0  1
+    
+String `Index` also supports `get_dummies` which returns a `MultiIndex`.
+
+    
+    In [135]: idx = pd.Index(["a", "a|b", np.nan, "a|c"])
+    
+    In [136]: idx.str.get_dummies(sep="|")
+    Out[136]: 
+    MultiIndex([(1, 0, 0),
+                (1, 1, 0),
+                (0, 0, 0),
+                (1, 0, 1)],
+               names=['a', 'b', 'c'])
+    
+See also `get_dummies()`.
+
+## Method summary
+
+Method | Description  
+---|---  
+`cat()` | Concatenate strings  
+`split()` | Split strings on delimiter  
+`rsplit()` | Split strings on delimiter working from the end of the string  
+`get()` | Index into each element (retrieve i-th element)  
+`join()` | Join strings in each element of the Series with passed separator  
+`get_dummies()` | Split strings on the delimiter returning DataFrame of dummy variables  
+`contains()` | Return boolean array if each string contains pattern/regex  
+`replace()` | Replace occurrences of pattern/regex/string with some other string or the return value of a callable given the occurrence  
+`removeprefix()` | Remove prefix from string, i.e. only remove if string starts with prefix.  
+`removesuffix()` | Remove suffix from string, i.e. only remove if string ends with suffix.  
+`repeat()` | Duplicate values (`s.str.repeat(3)` equivalent to `x * 3`)  
+`pad()` | Add whitespace to left, right, or both sides of strings  
+`center()` | Equivalent to `str.center`  
+`ljust()` | Equivalent to `str.ljust`  
+`rjust()` | Equivalent to `str.rjust`  
+`zfill()` | Equivalent to `str.zfill`  
+`wrap()` | Split long strings into lines with length less than a given width  
+`slice()` | Slice each string in the Series  
+`slice_replace()` | Replace slice in each string with passed value  
+`count()` | Count occurrences of pattern  
+`startswith()` | Equivalent to `str.startswith(pat)` for each element  
+`endswith()` | Equivalent to `str.endswith(pat)` for each element  
+`findall()` | Compute list of all occurrences of pattern/regex for each string  
+`match()` | Call `re.match` on each element, returning matched groups as list  
+`extract()` | Call `re.search` on each element, returning DataFrame with one row for each element and one column for each regex capture group  
+`extractall()` | Call `re.findall` on each element, returning DataFrame with one row for each match and one column for each regex capture group  
+`len()` | Compute string lengths  
+`strip()` | Equivalent to `str.strip`  
+`rstrip()` | Equivalent to `str.rstrip`  
+`lstrip()` | Equivalent to `str.lstrip`  
+`partition()` | Equivalent to `str.partition`  
+`rpartition()` | Equivalent to `str.rpartition`  
+`lower()` | Equivalent to `str.lower`  
+`casefold()` | Equivalent to `str.casefold`  
+`upper()` | Equivalent to `str.upper`  
+`find()` | Equivalent to `str.find`  
+`rfind()` | Equivalent to `str.rfind`  
+`index()` | Equivalent to `str.index`  
+`rindex()` | Equivalent to `str.rindex`  
+`capitalize()` | Equivalent to `str.capitalize`  
+`swapcase()` | Equivalent to `str.swapcase`  
+`normalize()` | Return Unicode normal form. Equivalent to `unicodedata.normalize`  
+`translate()` | Equivalent to `str.translate`  
+`isalnum()` | Equivalent to `str.isalnum`  
+`isalpha()` | Equivalent to `str.isalpha`  
+`isdigit()` | Equivalent to `str.isdigit`  
+`isspace()` | Equivalent to `str.isspace`  
+`islower()` | Equivalent to `str.islower`  
+`isupper()` | Equivalent to `str.isupper`  
+`istitle()` | Equivalent to `str.istitle`  
+`isnumeric()` | Equivalent to `str.isnumeric`  
+`isdecimal()` | Equivalent to `str.isdecimal`  
+© 2008–2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData
+Development Team  
+Licensed under the 3-clause BSD License.  
+https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/text.html
+

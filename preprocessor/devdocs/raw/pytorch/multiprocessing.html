@@ -1,0 +1,66 @@
+<h1 id="multiprocessing-doc">Multiprocessing package - torch.multiprocessing</h1> <p id="module-torch.multiprocessing">torch.multiprocessing is a wrapper around the native <a class="reference external" href="https://docs.python.org/3/library/multiprocessing.html#module-multiprocessing" title="(in Python v3.9)"><code>multiprocessing</code></a> module. It registers custom reducers, that use shared memory to provide shared views on the same data in different processes. Once the tensor/storage is moved to shared_memory (see <a class="reference internal" href="tensors#torch.Tensor.share_memory_" title="torch.Tensor.share_memory_"><code>share_memory_()</code></a>), it will be possible to send it to other processes without making any copies.</p> <p>The API is 100% compatible with the original module - it’s enough to change <code>import multiprocessing</code> to <code>import torch.multiprocessing</code> to have all the tensors sent through the queues or shared via other mechanisms, moved to shared memory.</p> <p>Because of the similarity of APIs we do not document most of this package contents, and we recommend referring to very good docs of the original module.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>If the main process exits abruptly (e.g. because of an incoming signal), Python’s <code>multiprocessing</code> sometimes fails to clean up its children. It’s a known caveat, so if you’re seeing any resource leaks after interrupting the interpreter, it probably means that this has just happened to you.</p> </div>  <h2 id="strategy-management">Strategy management</h2> <dl class="function"> <dt id="torch.multiprocessing.get_all_sharing_strategies">
+<code>torch.multiprocessing.get_all_sharing_strategies()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/multiprocessing.html#get_all_sharing_strategies"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a set of sharing strategies supported on a current system.</p> </dd>
+</dl> <dl class="function"> <dt id="torch.multiprocessing.get_sharing_strategy">
+<code>torch.multiprocessing.get_sharing_strategy()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/multiprocessing.html#get_sharing_strategy"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the current strategy for sharing CPU tensors.</p> </dd>
+</dl> <dl class="function"> <dt id="torch.multiprocessing.set_sharing_strategy">
+<code>torch.multiprocessing.set_sharing_strategy(new_strategy)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/multiprocessing.html#set_sharing_strategy"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Sets the strategy for sharing CPU tensors.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>new_strategy</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – Name of the selected strategy. Should be one of the values returned by <a class="reference internal" href="#torch.multiprocessing.get_all_sharing_strategies" title="torch.multiprocessing.get_all_sharing_strategies"><code>get_all_sharing_strategies()</code></a>.</p> </dd> </dl> </dd>
+</dl>   <h2 id="multiprocessing-cuda-sharing-details">Sharing CUDA tensors</h2> <p id="sharing-cuda-tensors">Sharing CUDA tensors between processes is supported only in Python 3, using a <code>spawn</code> or <code>forkserver</code> start methods.</p> <p>Unlike CPU tensors, the sending process is required to keep the original tensor as long as the receiving process retains a copy of the tensor. The refcounting is implemented under the hood but requires users to follow the next best practices.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>If the consumer process dies abnormally to a fatal signal, the shared tensor could be forever kept in memory as long as the sending process is running.</p> </div> <ol class="arabic simple"> <li>Release memory ASAP in the consumer.</li> </ol> <pre data-language="python">## Good
+x = queue.get()
+# do somethings with x
+del x
+</pre> <pre data-language="python">## Bad
+x = queue.get()
+# do somethings with x
+# do everything else (producer have to keep x in memory)
+</pre> <p>2. Keep producer process running until all consumers exits. This will prevent the situation when the producer process releasing memory which is still in use by the consumer.</p> <pre data-language="python">## producer
+# send tensors, do something
+event.wait()
+</pre> <pre data-language="python">## consumer
+# receive tensors and use them
+event.set()
+</pre> <ol class="arabic simple" start="3"> <li>Don’t pass received tensors.</li> </ol> <pre data-language="python"># not going to work
+x = queue.get()
+queue_2.put(x)
+</pre> <pre data-language="python"># you need to create a process-local copy
+x = queue.get()
+x_clone = x.clone()
+queue_2.put(x_clone)
+</pre> <pre data-language="python"># putting and getting from the same queue in the same process will likely end up with segfault
+queue.put(tensor)
+x = queue.get()
+</pre>   <h2 id="sharing-strategies">Sharing strategies</h2> <p>This section provides a brief overview into how different sharing strategies work. Note that it applies only to CPU tensor - CUDA tensors will always use the CUDA API, as that’s the only way they can be shared.</p>  <h3 id="file-descriptor-file-descriptor">File descriptor - <code>file_descriptor</code>
+</h3> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This is the default strategy (except for macOS and OS X where it’s not supported).</p> </div> <p>This strategy will use file descriptors as shared memory handles. Whenever a storage is moved to shared memory, a file descriptor obtained from <code>shm_open</code> is cached with the object, and when it’s going to be sent to other processes, the file descriptor will be transferred (e.g. via UNIX sockets) to it. The receiver will also cache the file descriptor and <code>mmap</code> it, to obtain a shared view onto the storage data.</p> <p>Note that if there will be a lot of tensors shared, this strategy will keep a large number of file descriptors open most of the time. If your system has low limits for the number of open file descriptors, and you can’t raise them, you should use the <code>file_system</code> strategy.</p>   <h3 id="file-system-file-system">File system - <code>file_system</code>
+</h3> <p>This strategy will use file names given to <code>shm_open</code> to identify the shared memory regions. This has a benefit of not requiring the implementation to cache the file descriptors obtained from it, but at the same time is prone to shared memory leaks. The file can’t be deleted right after its creation, because other processes need to access it to open their views. If the processes fatally crash, or are killed, and don’t call the storage destructors, the files will remain in the system. This is very serious, because they keep using up the memory until the system is restarted, or they’re freed manually.</p> <p>To counter the problem of shared memory file leaks, <a class="reference internal" href="#module-torch.multiprocessing" title="torch.multiprocessing"><code>torch.multiprocessing</code></a> will spawn a daemon named <code>torch_shm_manager</code> that will isolate itself from the current process group, and will keep track of all shared memory allocations. Once all processes connected to it exit, it will wait a moment to ensure there will be no new connections, and will iterate over all shared memory files allocated by the group. If it finds that any of them still exist, they will be deallocated. We’ve tested this method and it proved to be robust to various failures. Still, if your system has high enough limits, and <code>file_descriptor</code> is a supported strategy, we do not recommend switching to this one.</p>    <h2 id="spawning-subprocesses">Spawning subprocesses</h2> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Available for Python &gt;= 3.4.</p> <p>This depends on the <code>spawn</code> start method in Python’s <code>multiprocessing</code> package.</p> </div> <p>Spawning a number of subprocesses to perform some function can be done by creating <code>Process</code> instances and calling <code>join</code> to wait for their completion. This approach works fine when dealing with a single subprocess but presents potential issues when dealing with multiple processes.</p> <p>Namely, joining processes sequentially implies they will terminate sequentially. If they don’t, and the first process does not terminate, the process termination will go unnoticed. Also, there are no native facilities for error propagation.</p> <p>The <code>spawn</code> function below addresses these concerns and takes care of error propagation, out of order termination, and will actively terminate processes upon detecting an error in one of them.</p> <dl class="function"> <dt id="torch.multiprocessing.spawn">
+<code>torch.multiprocessing.spawn(fn, args=(), nprocs=1, join=True, daemon=False, start_method='spawn')</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/multiprocessing/spawn.html#spawn"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Spawns <code>nprocs</code> processes that run <code>fn</code> with <code>args</code>.</p> <p>If one of the processes exits with a non-zero exit status, the remaining processes are killed and an exception is raised with the cause of termination. In the case an exception was caught in the child process, it is forwarded and its traceback is included in the exception raised in the parent process.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<p><strong>fn</strong> (<em>function</em>) – </p>
+<p>Function is called as the entrypoint of the spawned process. This function must be defined at the top level of a module so it can be pickled and spawned. This is a requirement imposed by multiprocessing.</p> <p>The function is called as <code>fn(i, *args)</code>, where <code>i</code> is the process index and <code>args</code> is the passed through tuple of arguments.</p> </li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.9)">tuple</a>) – Arguments passed to <code>fn</code>.</li> <li>
+<strong>nprocs</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – Number of processes to spawn.</li> <li>
+<strong>join</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – Perform a blocking join on all processes.</li> <li>
+<strong>daemon</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – The spawned processes’ daemon flag. If set to True, daemonic processes will be created.</li> <li>
+<strong>start_method</strong> (<em>string</em>) – (deprecated) this method will always use <code>spawn</code> as the start method. To use a different start method use <code>start_processes()</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>None if <code>join</code> is <code>True</code>, <code>ProcessContext</code> if <code>join</code> is <code>False</code></p> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.multiprocessing.SpawnContext">
+<code>class torch.multiprocessing.SpawnContext</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/multiprocessing/spawn.html#SpawnContext"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returned by <a class="reference internal" href="#torch.multiprocessing.spawn" title="torch.multiprocessing.spawn"><code>spawn()</code></a> when called with <code>join=False</code>.</p> <dl class="method"> <dt id="torch.multiprocessing.SpawnContext.join">
+<code>join(timeout=None)</code> </dt> <dd>
+<p>Tries to join one or more processes in this spawn context. If one of them exited with a non-zero exit status, this function kills the remaining processes and raises an exception with the cause of the first process exiting.</p> <p>Returns <code>True</code> if all processes have been joined successfully, <code>False</code> if there are more processes that need to be joined.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a>) – Wait this long before giving up on waiting.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/multiprocessing.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/multiprocessing.html</a>
+  </p>
+</div>

@@ -1,0 +1,116 @@
+<h1 id="form-handling-with-class-based-views">Form handling with class-based views</h1> <p id="s-form-handling-with-class-based-views">Form processing generally has 3 paths:</p> <ul class="simple"> <li>Initial GET (blank or prepopulated form)</li> <li>POST with invalid data (typically redisplay form with errors)</li> <li>POST with valid data (process the data and typically redirect)</li> </ul> <p>Implementing this yourself often results in a lot of repeated boilerplate code (see <a class="reference internal" href="../forms/index#using-a-form-in-a-view"><span class="std std-ref">Using a form in a view</span></a>). To help avoid this, Django provides a collection of generic class-based views for form processing.</p>  <h2 id="basic-forms">Basic forms</h2> <p id="s-basic-forms">Given a contact form:</p> <div class="literal-block-wrapper docutils container" id="id2"> <div class="code-block-caption"><span class="caption-text">forms.py</span></div> <pre data-language="python">from django import forms
+
+class ContactForm(forms.Form):
+    name = forms.CharField()
+    message = forms.CharField(widget=forms.Textarea)
+
+    def send_email(self):
+        # send email using the self.cleaned_data dictionary
+        pass
+</pre> </div> <p>The view can be constructed using a <code>FormView</code>:</p> <div class="literal-block-wrapper docutils container" id="id3"> <div class="code-block-caption"><span class="caption-text">views.py</span></div> <pre data-language="python">from myapp.forms import ContactForm
+from django.views.generic.edit import FormView
+
+class ContactFormView(FormView):
+    template_name = 'contact.html'
+    form_class = ContactForm
+    success_url = '/thanks/'
+
+    def form_valid(self, form):
+        # This method is called when valid form data has been POSTed.
+        # It should return an HttpResponse.
+        form.send_email()
+        return super().form_valid(form)
+</pre> </div> <p>Notes:</p> <ul class="simple"> <li>FormView inherits <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin" title="django.views.generic.base.TemplateResponseMixin"><code>TemplateResponseMixin</code></a> so <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.template_name" title="django.views.generic.base.TemplateResponseMixin.template_name"><code>template_name</code></a> can be used here.</li> <li>The default implementation for <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.FormMixin.form_valid" title="django.views.generic.edit.FormMixin.form_valid"><code>form_valid()</code></a> simply redirects to the <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.FormMixin.success_url" title="django.views.generic.edit.FormMixin.success_url"><code>success_url</code></a>.</li> </ul>   <h2 id="model-forms">Model forms</h2> <p id="s-model-forms">Generic views really shine when working with models. These generic views will automatically create a <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a>, so long as they can work out which model class to use:</p> <ul class="simple"> <li>If the <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ModelFormMixin.model" title="django.views.generic.edit.ModelFormMixin.model"><code>model</code></a> attribute is given, that model class will be used.</li> <li>If <a class="reference internal" href="../../ref/class-based-views/mixins-single-object#django.views.generic.detail.SingleObjectMixin.get_object" title="django.views.generic.detail.SingleObjectMixin.get_object"><code>get_object()</code></a> returns an object, the class of that object will be used.</li> <li>If a <a class="reference internal" href="../../ref/class-based-views/mixins-single-object#django.views.generic.detail.SingleObjectMixin.queryset" title="django.views.generic.detail.SingleObjectMixin.queryset"><code>queryset</code></a> is given, the model for that queryset will be used.</li> </ul> <p>Model form views provide a <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ModelFormMixin.form_valid" title="django.views.generic.edit.ModelFormMixin.form_valid"><code>form_valid()</code></a> implementation that saves the model automatically. You can override this if you have any special requirements; see below for examples.</p> <p>You don’t even need to provide a <code>success_url</code> for <a class="reference internal" href="../../ref/class-based-views/generic-editing#django.views.generic.edit.CreateView" title="django.views.generic.edit.CreateView"><code>CreateView</code></a> or <a class="reference internal" href="../../ref/class-based-views/generic-editing#django.views.generic.edit.UpdateView" title="django.views.generic.edit.UpdateView"><code>UpdateView</code></a> - they will use <a class="reference internal" href="../../ref/models/instances#django.db.models.Model.get_absolute_url" title="django.db.models.Model.get_absolute_url"><code>get_absolute_url()</code></a> on the model object if available.</p> <p>If you want to use a custom <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a> (for instance to add extra validation), set <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.FormMixin.form_class" title="django.views.generic.edit.FormMixin.form_class"><code>form_class</code></a> on your view.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">When specifying a custom form class, you must still specify the model, even though the <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.FormMixin.form_class" title="django.views.generic.edit.FormMixin.form_class"><code>form_class</code></a> may be a <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a>.</p> </div> <p>First we need to add <a class="reference internal" href="../../ref/models/instances#django.db.models.Model.get_absolute_url" title="django.db.models.Model.get_absolute_url"><code>get_absolute_url()</code></a> to our <code>Author</code> class:</p> <div class="literal-block-wrapper docutils container" id="id4"> <div class="code-block-caption"><span class="caption-text">models.py</span></div> <pre data-language="python">from django.db import models
+from django.urls import reverse
+
+class Author(models.Model):
+    name = models.CharField(max_length=200)
+
+    def get_absolute_url(self):
+        return reverse('author-detail', kwargs={'pk': self.pk})
+</pre> </div> <p>Then we can use <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#CreateView" title="CreateView"><code>CreateView</code></a> and friends to do the actual work. Notice how we’re just configuring the generic class-based views here; we don’t have to write any logic ourselves:</p> <div class="literal-block-wrapper docutils container" id="id5"> <div class="code-block-caption"><span class="caption-text">views.py</span></div> <pre data-language="python">from django.urls import reverse_lazy
+from django.views.generic.edit import CreateView, DeleteView, UpdateView
+from myapp.models import Author
+
+class AuthorCreateView(CreateView):
+    model = Author
+    fields = ['name']
+
+class AuthorUpdateView(UpdateView):
+    model = Author
+    fields = ['name']
+
+class AuthorDeleteView(DeleteView):
+    model = Author
+    success_url = reverse_lazy('author-list')
+</pre> </div> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">We have to use <a class="reference internal" href="../../ref/urlresolvers#django.urls.reverse_lazy" title="django.urls.reverse_lazy"><code>reverse_lazy()</code></a> instead of <code>reverse()</code>, as the urls are not loaded when the file is imported.</p> </div> <p>The <code>fields</code> attribute works the same way as the <code>fields</code> attribute on the inner <code>Meta</code> class on <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a>. Unless you define the form class in another way, the attribute is required and the view will raise an <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.ImproperlyConfigured" title="django.core.exceptions.ImproperlyConfigured"><code>ImproperlyConfigured</code></a> exception if it’s not.</p> <p>If you specify both the <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ModelFormMixin.fields" title="django.views.generic.edit.ModelFormMixin.fields"><code>fields</code></a> and <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.FormMixin.form_class" title="django.views.generic.edit.FormMixin.form_class"><code>form_class</code></a> attributes, an <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.ImproperlyConfigured" title="django.core.exceptions.ImproperlyConfigured"><code>ImproperlyConfigured</code></a> exception will be raised.</p> <p>Finally, we hook these new views into the URLconf:</p> <div class="literal-block-wrapper docutils container" id="id6"> <div class="code-block-caption"><span class="caption-text">urls.py</span></div> <pre data-language="python">from django.urls import path
+from myapp.views import AuthorCreateView, AuthorDeleteView, AuthorUpdateView
+
+urlpatterns = [
+    # ...
+    path('author/add/', AuthorCreateView.as_view(), name='author-add'),
+    path('author/&lt;int:pk&gt;/', AuthorUpdateView.as_view(), name='author-update'),
+    path('author/&lt;int:pk&gt;/delete/', AuthorDeleteView.as_view(), name='author-delete'),
+]
+</pre> </div> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>These views inherit <a class="reference internal" href="../../ref/class-based-views/mixins-single-object#django.views.generic.detail.SingleObjectTemplateResponseMixin" title="django.views.generic.detail.SingleObjectTemplateResponseMixin"><code>SingleObjectTemplateResponseMixin</code></a> which uses <a class="reference internal" href="../../ref/class-based-views/mixins-single-object#django.views.generic.detail.SingleObjectTemplateResponseMixin.template_name_suffix" title="django.views.generic.detail.SingleObjectTemplateResponseMixin.template_name_suffix"><code>template_name_suffix</code></a> to construct the <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.template_name" title="django.views.generic.base.TemplateResponseMixin.template_name"><code>template_name</code></a> based on the model.</p> <p>In this example:</p> <ul class="simple"> <li>
+<a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#CreateView" title="CreateView"><code>CreateView</code></a> and <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#UpdateView" title="UpdateView"><code>UpdateView</code></a> use <code>myapp/author_form.html</code>
+</li> <li>
+<a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#DeleteView" title="DeleteView"><code>DeleteView</code></a> uses <code>myapp/author_confirm_delete.html</code>
+</li> </ul> <p class="last">If you wish to have separate templates for <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#CreateView" title="CreateView"><code>CreateView</code></a> and <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#UpdateView" title="UpdateView"><code>UpdateView</code></a>, you can set either <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.template_name" title="django.views.generic.base.TemplateResponseMixin.template_name"><code>template_name</code></a> or <a class="reference internal" href="../../ref/class-based-views/mixins-single-object#django.views.generic.detail.SingleObjectTemplateResponseMixin.template_name_suffix" title="django.views.generic.detail.SingleObjectTemplateResponseMixin.template_name_suffix"><code>template_name_suffix</code></a> on your view class.</p> </div>   <h2 id="models-and-request-user">Models and <code>request.user</code>
+</h2> <p id="s-models-and-request-user">To track the user that created an object using a <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/ref/class-based-views/flattened-index/#CreateView" title="CreateView"><code>CreateView</code></a>, you can use a custom <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a> to do this. First, add the foreign key relation to the model:</p> <div class="literal-block-wrapper docutils container" id="id7"> <div class="code-block-caption"><span class="caption-text">models.py</span></div> <pre data-language="python">from django.contrib.auth.models import User
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=200)
+    created_by = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    # ...
+</pre> </div> <p>In the view, ensure that you don’t include <code>created_by</code> in the list of fields to edit, and override <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ModelFormMixin.form_valid" title="django.views.generic.edit.ModelFormMixin.form_valid"><code>form_valid()</code></a> to add the user:</p> <div class="literal-block-wrapper docutils container" id="id8"> <div class="code-block-caption"><span class="caption-text">views.py</span></div> <pre data-language="python">from django.contrib.auth.mixins import LoginRequiredMixin
+from django.views.generic.edit import CreateView
+from myapp.models import Author
+
+class AuthorCreateView(LoginRequiredMixin, CreateView):
+    model = Author
+    fields = ['name']
+
+    def form_valid(self, form):
+        form.instance.created_by = self.request.user
+        return super().form_valid(form)
+</pre> </div> <p><a class="reference internal" href="../auth/default#django.contrib.auth.mixins.LoginRequiredMixin" title="django.contrib.auth.mixins.LoginRequiredMixin"><code>LoginRequiredMixin</code></a> prevents users who aren’t logged in from accessing the form. If you omit that, you’ll need to handle unauthorized users in <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ModelFormMixin.form_valid" title="django.views.generic.edit.ModelFormMixin.form_valid"><code>form_valid()</code></a>.</p>   <h2 id="id1">Content negotiation example</h2> <p id="s-content-negotiation-example">Here is an example showing how you might go about implementing a form that works with an API-based workflow as well as ‘normal’ form POSTs:</p> <pre data-language="python">from django.http import JsonResponse
+from django.views.generic.edit import CreateView
+from myapp.models import Author
+
+class JsonableResponseMixin:
+    """
+    Mixin to add JSON support to a form.
+    Must be used with an object-based FormView (e.g. CreateView)
+    """
+    def form_invalid(self, form):
+        response = super().form_invalid(form)
+        if self.request.accepts('text/html'):
+            return response
+        else:
+            return JsonResponse(form.errors, status=400)
+
+    def form_valid(self, form):
+        # We make sure to call the parent's form_valid() method because
+        # it might do some processing (in the case of CreateView, it will
+        # call form.save() for example).
+        response = super().form_valid(form)
+        if self.request.accepts('text/html'):
+            return response
+        else:
+            data = {
+                'pk': self.object.pk,
+            }
+            return JsonResponse(data)
+
+class AuthorCreateView(JsonableResponseMixin, CreateView):
+    model = Author
+    fields = ['name']
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/class-based-views/generic-editing/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/class-based-views/generic-editing/</a>
+  </p>
+</div>

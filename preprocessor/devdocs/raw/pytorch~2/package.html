@@ -1,0 +1,575 @@
+<h1 id="torch-package">torch.package</h1> <p><code>torch.package</code> adds support for creating packages containing both artifacts and arbitrary PyTorch code. These packages can be saved, shared, used to load and execute models at a later date or on a different machine, and can even be deployed to production using <code>torch::deploy</code>.</p> <p>This document contains tutorials, how-to guides, explanations, and an API reference that will help you learn more about <code>torch.package</code> and how to use it.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This module depends on the <code>pickle</code> module which is not secure. Only unpackage data you trust.</p> <p>It is possible to construct malicious pickle data which will <strong>execute arbitrary code during unpickling</strong>. Never unpackage data that could have come from an untrusted source, or that could have been tampered with.</p> <p>For more information, review the <a class="reference external" href="https://docs.python.org/3/library/pickle.html">documentation</a> for the <code>pickle</code> module.</p> </div>  <ul class="simple"> <li>
+<p><a class="reference internal" href="#tutorials" id="id1">Tutorials</a></p> <ul> <li><a class="reference internal" href="#packaging-your-first-model" id="id2">Packaging your first model</a></li> </ul> </li> <li>
+<p><a class="reference internal" href="#how-do-i" id="id3">How do I…</a></p> <ul> <li><a class="reference internal" href="#see-what-is-inside-a-package" id="id4">See what is inside a package?</a></li> <li><a class="reference internal" href="#see-why-a-given-module-was-included-as-a-dependency" id="id5">See why a given module was included as a dependency?</a></li> <li><a class="reference internal" href="#include-arbitrary-resources-with-my-package-and-access-them-later" id="id6">Include arbitrary resources with my package and access them later?</a></li> <li><a class="reference internal" href="#customize-how-a-class-is-packaged" id="id7">Customize how a class is packaged?</a></li> <li><a class="reference internal" href="#test-in-my-source-code-whether-or-not-it-is-executing-inside-a-package" id="id8">Test in my source code whether or not it is executing inside a package?</a></li> <li><a class="reference internal" href="#patch-code-into-a-package" id="id9">Patch code into a package?</a></li> <li><a class="reference internal" href="#access-package-contents-from-packaged-code" id="id10">Access package contents from packaged code?</a></li> <li><a class="reference internal" href="#distinguish-between-packaged-code-and-non-packaged-code" id="id11">Distinguish between packaged code and non-packaged code?</a></li> <li><a class="reference internal" href="#re-export-an-imported-object" id="id12">Re-export an imported object?</a></li> <li><a class="reference internal" href="#package-a-torchscript-module" id="id13">Package a TorchScript module?</a></li> </ul> </li> <li>
+<p><a class="reference internal" href="#explanation" id="id14">Explanation</a></p> <ul> <li><a class="reference internal" href="#torch-package-format-overview" id="id15"><code>torch.package</code> Format Overview</a></li> <li><a class="reference internal" href="#how-torch-package-finds-your-code-s-dependencies" id="id16">How <code>torch.package</code> finds your code’s dependencies</a></li> <li><a class="reference internal" href="#dependency-management" id="id17">Dependency Management</a></li> <li><a class="reference internal" href="#torch-package-sharp-edges" id="id18"><code>torch.package</code> sharp edges</a></li> <li><a class="reference internal" href="#how-torch-package-keeps-packages-isolated-from-each-other" id="id19">How <code>torch.package</code> keeps packages isolated from each other</a></li> </ul> </li> <li><a class="reference internal" href="#api-reference" id="id20">API Reference</a></li> </ul>   <h2 id="tutorials">Tutorials</h2>  <h3 id="packaging-your-first-model">Packaging your first model</h3> <p>A tutorial that guides you through packaging and unpackaging a simple model is available <a class="reference external" href="https://colab.research.google.com/drive/1lFZkLyViGfXxB-m3jqlyTQuYToo3XLo-">on Colab</a>. After completing this exercise, you will be familiar with the basic API for creating and using Torch packages.</p>    <h2 id="how-do-i">How do I…</h2>  <h3 id="see-what-is-inside-a-package">See what is inside a package?</h3>  <h4 id="treat-the-package-like-a-zip-archive">Treat the package like a ZIP archive</h4> <p>The container format for a <code>torch.package</code> is ZIP, so any tools that work with standard ZIP files should work for exploring the contents. Some common ways to interact with ZIP files:</p> <ul class="simple"> <li>
+<code>unzip my_package.pt</code> will unzip the <code>torch.package</code> archive to disk, where you can freely inspect its contents.</li> </ul> <pre data-language="python">$ unzip my_package.pt &amp;&amp; tree my_package
+my_package
+├── .data
+│   ├── 94304870911616.storage
+│   ├── 94304900784016.storage
+│   ├── extern_modules
+│   └── version
+├── models
+│   └── model_1.pkl
+└── torchvision
+    └── models
+        ├── resnet.py
+        └── utils.py
+~ cd my_package &amp;&amp; cat torchvision/models/resnet.py
+...
+</pre> <ul class="simple"> <li>The Python <code>zipfile</code> module provides a standard way to read and write ZIP archive contents.</li> </ul> <pre data-language="python">from zipfile import ZipFile
+with ZipFile("my_package.pt") as myzip:
+    file_bytes = myzip.read("torchvision/models/resnet.py")
+    # edit file_bytes in some way
+    myzip.writestr("torchvision/models/resnet.py", new_file_bytes)
+</pre> <ul class="simple"> <li>vim has the ability to natively read ZIP archives. You can even edit files and :<code>write</code> them back into the archive!</li> </ul> <pre data-language="python"># add this to your .vimrc to treat `*.pt` files as zip files
+au BufReadCmd *.pt call zip#Browse(expand("&lt;amatch&gt;"))
+
+~ vi my_package.pt
+</pre>   <h4 id="use-the-file-structure-api">Use the <code>file_structure()</code> API</h4> <p><a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> provides a <code>file_structure()</code> method, which will return a printable and queryable <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a> object. The <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a> object is a simple directory structure that you can use to explore the current contents of a <code>torch.package</code>.</p> <p>The <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a> object itself is directly printable and will print out a file tree representation. To filter what is returned, use the glob-style <code>include</code> and <code>exclude</code> filtering arguments.</p> <pre data-language="python">with PackageExporter('my_package.pt') as pe:
+    pe.save_pickle('models', 'model_1.pkl', mod)
+
+importer = PackageImporter('my_package.pt')
+# can limit printed items with include/exclude args
+print(importer.file_structure(include=["**/utils.py", "**/*.pkl"], exclude="**/*.storage"))
+print(importer.file_structure()) # will print out all files
+</pre> <p>Output:</p> <pre data-language="python"># filtered with glob pattern:
+#    include=["**/utils.py", "**/*.pkl"], exclude="**/*.storage"
+─── my_package.pt
+    ├── models
+    │   └── model_1.pkl
+    └── torchvision
+        └── models
+            └── utils.py
+
+# all files
+─── my_package.pt
+    ├── .data
+    │   ├── 94304870911616.storage
+    │   ├── 94304900784016.storage
+    │   ├── extern_modules
+    │   └── version
+    ├── models
+    │   └── model_1.pkl
+    └── torchvision
+        └── models
+            ├── resnet.py
+            └── utils.py
+</pre> <p>You can also query <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a> objects with the <code>has_file()</code> method.</p> <pre data-language="python">importer_file_structure = importer.file_structure()
+found: bool = importer_file_structure.has_file("package_a/subpackage.py")
+</pre>    <h3 id="see-why-a-given-module-was-included-as-a-dependency">See why a given module was included as a dependency?</h3> <p>Say there is a given module <code>foo</code>, and you want to know why your <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a> is pulling in <code>foo</code> as a dependency.</p> <p><a class="reference internal" href="#torch.package.PackageExporter.get_rdeps" title="torch.package.PackageExporter.get_rdeps"><code>PackageExporter.get_rdeps()</code></a> will return all modules that directly depend on <code>foo</code>.</p> <p>If you would like to see how a given module <code>src</code> depends on <code>foo</code>, the <a class="reference internal" href="#torch.package.PackageExporter.all_paths" title="torch.package.PackageExporter.all_paths"><code>PackageExporter.all_paths()</code></a> method will return a DOT-formatted graph showing all the dependency paths between <code>src</code> and <code>foo</code>.</p> <p>If you would just like to see the whole dependency graph of your <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a>, you can use <a class="reference internal" href="#torch.package.PackageExporter.dependency_graph_string" title="torch.package.PackageExporter.dependency_graph_string"><code>PackageExporter.dependency_graph_string()</code></a>.</p>   <h3 id="include-arbitrary-resources-with-my-package-and-access-them-later">Include arbitrary resources with my package and access them later?</h3> <p><a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a> exposes three methods, <code>save_pickle</code>, <code>save_text</code> and <code>save_binary</code> that allow you to save Python objects, text, and binary data to a package.</p> <pre data-language="python">with torch.PackageExporter("package.pt") as exporter:
+    # Pickles the object and saves to `my_resources/tensor.pkl` in the archive.
+    exporter.save_pickle("my_resources", "tensor.pkl", torch.randn(4))
+    exporter.save_text("config_stuff", "words.txt", "a sample string")
+    exporter.save_binary("raw_data", "binary", my_bytes)
+</pre> <p><a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> exposes complementary methods named <code>load_pickle</code>, <code>load_text</code> and <code>load_binary</code> that allow you to load Python objects, text and binary data from a package.</p> <pre data-language="python">importer = torch.PackageImporter("package.pt")
+my_tensor = importer.load_pickle("my_resources", "tensor.pkl")
+text = importer.load_text("config_stuff", "words.txt")
+binary = importer.load_binary("raw_data", "binary")
+</pre>   <h3 id="customize-how-a-class-is-packaged">Customize how a class is packaged?</h3> <p><code>torch.package</code> allows for the customization of how classes are packaged. This behavior is accessed through defining the method <code>__reduce_package__</code> on a class and by defining a corresponding de-packaging function. This is similar to defining <code>__reduce__</code> for Python’s normal pickling process.</p> <p>Steps:</p> <ol class="arabic simple"> <li>Define the method <code>__reduce_package__(self, exporter: PackageExporter)</code> on the target class. This method should do the work to save the class instance inside of the package, and should return a tuple of the corresponding de-packaging function with the arguments needed to invoke the de-packaging function. This method is called by the <code>PackageExporter</code> when it encounters an instance of the target class.</li> <li>Define a de-packaging function for the class. This de-packaging function should do the work to reconstruct and return an instance of the class. The function signature’s first parameter should be a <code>PackageImporter</code> instance, and the rest of the parameters are user defined.</li> </ol> <pre data-language="python"># foo.py [Example of customizing how class Foo is packaged]
+from torch.package import PackageExporter, PackageImporter
+import time
+
+
+class Foo:
+    def __init__(self, my_string: str):
+        super().__init__()
+        self.my_string = my_string
+        self.time_imported = 0
+        self.time_exported = 0
+
+    def __reduce_package__(self, exporter: PackageExporter):
+        """
+        Called by ``torch.package.PackageExporter``'s Pickler's ``persistent_id`` when
+        saving an instance of this object. This method should do the work to save this
+        object inside of the ``torch.package`` archive.
+
+        Returns function w/ arguments to load the object from a
+        ``torch.package.PackageImporter``'s Pickler's ``persistent_load`` function.
+        """
+
+        # use this pattern to ensure no naming conflicts with normal dependencies,
+        # anything saved under this module name shouldn't conflict with other
+        # items in the package
+        generated_module_name = f"foo-generated._{exporter.get_unique_id()}"
+        exporter.save_text(
+            generated_module_name,
+            "foo.txt",
+            self.my_string + ", with exporter modification!",
+        )
+        time_exported = time.clock_gettime(1)
+
+        # returns de-packaging function w/ arguments to invoke with
+        return (unpackage_foo, (generated_module_name, time_exported,))
+
+
+def unpackage_foo(
+    importer: PackageImporter, generated_module_name: str, time_exported: float
+) -&gt; Foo:
+    """
+    Called by ``torch.package.PackageImporter``'s Pickler's ``persistent_load`` function
+    when depickling a Foo object.
+    Performs work of loading and returning a Foo instance from a ``torch.package`` archive.
+    """
+    time_imported = time.clock_gettime(1)
+    foo = Foo(importer.load_text(generated_module_name, "foo.txt"))
+    foo.time_imported = time_imported
+    foo.time_exported = time_exported
+    return foo
+</pre> <pre data-language="python"># example of saving instances of class Foo
+
+import torch
+from torch.package import PackageImporter, PackageExporter
+import foo
+
+foo_1 = foo.Foo("foo_1 initial string")
+foo_2 = foo.Foo("foo_2 initial string")
+with PackageExporter('foo_package.pt') as pe:
+    # save as normal, no extra work necessary
+    pe.save_pickle('foo_collection', 'foo1.pkl', foo_1)
+    pe.save_pickle('foo_collection', 'foo2.pkl', foo_2)
+
+pi = PackageImporter('foo_package.pt')
+print(pi.file_structure())
+imported_foo = pi.load_pickle('foo_collection', 'foo1.pkl')
+print(f"foo_1 string: '{imported_foo.my_string}'")
+print(f"foo_1 export time: {imported_foo.time_exported}")
+print(f"foo_1 import time: {imported_foo.time_imported}")
+</pre> <pre data-language="python"># output of running above script
+─── foo_package
+    ├── foo-generated
+    │   ├── _0
+    │   │   └── foo.txt
+    │   └── _1
+    │       └── foo.txt
+    ├── foo_collection
+    │   ├── foo1.pkl
+    │   └── foo2.pkl
+    └── foo.py
+
+foo_1 string: 'foo_1 initial string, with reduction modification!'
+foo_1 export time: 9857706.650140837
+foo_1 import time: 9857706.652698385
+</pre>   <h3 id="test-in-my-source-code-whether-or-not-it-is-executing-inside-a-package">Test in my source code whether or not it is executing inside a package?</h3> <p>A <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> will add the attribute <code>__torch_package__</code> to every module that it initializes. Your code can check for the presence of this attribute to determine whether it is executing in a packaged context or not.</p> <pre data-language="python"># In foo/bar.py:
+
+if "__torch_package__" in dir():  # true if the code is being loaded from a package
+    def is_in_package():
+        return True
+
+    UserException = Exception
+else:
+    def is_in_package():
+        return False
+
+    UserException = UnpackageableException
+</pre> <p>Now, the code will behave differently depending on whether it’s imported normally through your Python environment or imported from a <code>torch.package</code>.</p> <pre data-language="python">from foo.bar import is_in_package
+
+print(is_in_package())  # False
+
+loaded_module = PackageImporter(my_package).import_module("foo.bar")
+loaded_module.is_in_package()  # True
+</pre> <p><strong>Warning</strong>: in general, it’s bad practice to have code that behaves differently depending on whether it’s packaged or not. This can lead to hard-to-debug issues that are sensitive to how you imported your code. If your package is intended to be heavily used, consider restructuring your code so that it behaves the same way no matter how it was loaded.</p>   <h3 id="patch-code-into-a-package">Patch code into a package?</h3> <p><a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a> offers a <code>save_source_string()</code> method that allows one to save arbitrary Python source code to a module of your choosing.</p> <pre data-language="python">with PackageExporter(f) as exporter:
+    # Save the my_module.foo available in your current Python environment.
+    exporter.save_module("my_module.foo")
+
+    # This saves the provided string to my_module/foo.py in the package archive.
+    # It will override the my_module.foo that was previously saved.
+    exporter.save_source_string("my_module.foo", textwrap.dedent(
+        """\
+        def my_function():
+            print('hello world')
+        """
+    ))
+
+    # If you want to treat my_module.bar as a package
+    # (e.g. save to `my_module/bar/__init__.py` instead of `my_module/bar.py)
+    # pass is_package=True,
+    exporter.save_source_string("my_module.bar",
+                                "def foo(): print('hello')\n",
+                                is_package=True)
+
+importer = PackageImporter(f)
+importer.import_module("my_module.foo").my_function()  # prints 'hello world'
+</pre>   <h3 id="access-package-contents-from-packaged-code">Access package contents from packaged code?</h3> <p><a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> implements the <a class="reference external" href="https://docs.python.org/3/library/importlib.html#module-importlib.resources">importlib.resources</a> API for accessing resources from inside a package.</p> <pre data-language="python">with PackageExporter(f) as exporter:
+    # saves text to my_resource/a.txt in the archive
+    exporter.save_text("my_resource", "a.txt", "hello world!")
+    # saves the tensor to my_pickle/obj.pkl
+    exporter.save_pickle("my_pickle", "obj.pkl", torch.ones(2, 2))
+
+    # see below for module contents
+    exporter.save_module("foo")
+    exporter.save_module("bar")
+</pre> <p>The <code>importlib.resources</code> API allows access to resources from within packaged code.</p> <pre data-language="python"># foo.py:
+import importlib.resources
+import my_resource
+
+# returns "hello world!"
+def get_my_resource():
+    return importlib.resources.read_text(my_resource, "a.txt")
+</pre> <p>Using <code>importlib.resources</code> is the recommended way to access package contents from within packaged code, since it complies with the Python standard. However, it is also possible to access the parent <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> instance itself from within packaged code.</p> <pre data-language="python"># bar.py:
+import torch_package_importer # this is the PackageImporter that imported this module.
+
+# Prints "hello world!", equivalent to importlib.resources.read_text
+def get_my_resource():
+    return torch_package_importer.load_text("my_resource", "a.txt")
+
+# You also do things that the importlib.resources API does not support, like loading
+# a pickled object from the package.
+def get_my_pickle():
+    return torch_package_importer.load_pickle("my_pickle", "obj.pkl")
+</pre>   <h3 id="distinguish-between-packaged-code-and-non-packaged-code">Distinguish between packaged code and non-packaged code?</h3> <p>To tell if an object’s code is from a <code>torch.package</code>, use the <code>torch.package.is_from_package()</code> function. Note: if an object is from a package but its definition is from a module marked <code>extern</code> or from <code>stdlib</code>, this check will return <code>False</code>.</p> <pre data-language="python">importer = PackageImporter(f)
+mod = importer.import_module('foo')
+obj = importer.load_pickle('model', 'model.pkl')
+txt = importer.load_text('text', 'my_test.txt')
+
+assert is_from_package(mod)
+assert is_from_package(obj)
+assert not is_from_package(txt) # str is from stdlib, so this will return False
+</pre>   <h3 id="re-export-an-imported-object">Re-export an imported object?</h3> <p>To re-export an object that was previously imported by a <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a>, you must make the new <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a> aware of the original <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> so that it can find source code for your object’s dependencies.</p> <pre data-language="python">importer = PackageImporter(f)
+obj = importer.load_pickle("model", "model.pkl")
+
+# re-export obj in a new package
+with PackageExporter(f2, importer=(importer, sys_importer)) as exporter:
+    exporter.save_pickle("model", "model.pkl", obj)
+</pre>   <h3 id="package-a-torchscript-module">Package a TorchScript module?</h3> <p>To package a TorchScript model, use the same <code>save_pickle</code> and <code>load_pickle</code> APIs as you would with any other object. Saving TorchScript objects that are attributes or submodules is supported as well with no extra work.</p> <pre data-language="python"># save TorchScript just like any other object
+with PackageExporter(file_name) as e:
+    e.save_pickle("res", "script_model.pkl", scripted_model)
+    e.save_pickle("res", "mixed_model.pkl", python_model_with_scripted_submodule)
+# load as normal
+importer = PackageImporter(file_name)
+loaded_script = importer.load_pickle("res", "script_model.pkl")
+loaded_mixed = importer.load_pickle("res", "mixed_model.pkl"
+</pre>    <h2 id="explanation">Explanation</h2>  <h3 id="torch-package-format-overview">
+<code>torch.package</code> Format Overview</h3> <p>A <code>torch.package</code> file is a ZIP archive which conventionally uses the <code>.pt</code> extension. Inside the ZIP archive, there are two kinds of files:</p> <ul class="simple"> <li>Framework files, which are placed in the <code>.data/</code>.</li> <li>User files, which is everything else.</li> </ul> <p>As an example, this is what a fully packaged ResNet model from <code>torchvision</code> looks like:</p> <pre data-language="python">resnet
+├── .data  # All framework-specific data is stored here.
+│   │      # It's named to avoid conflicts with user-serialized code.
+│   ├── 94286146172688.storage  # tensor data
+│   ├── 94286146172784.storage
+│   ├── extern_modules  # text file with names of extern modules (e.g. 'torch')
+│   ├── version         # version metadata
+│   ├── ...
+├── model  # the pickled model
+│   └── model.pkl
+└── torchvision  # all code dependencies are captured as source files
+    └── models
+        ├── resnet.py
+        └── utils.py
+</pre>  <h4 id="framework-files">Framework files</h4> <p>The <code>.data/</code> directory is owned by torch.package, and its contents are considered to be a private implementation detail. The <code>torch.package</code> format makes no guarantees about the contents of <code>.data/</code>, but any changes made will be backward compatible (that is, newer version of PyTorch will always be able to load older <code>torch.packages</code>).</p> <p>Currently, the <code>.data/</code> directory contains the following items:</p> <ul class="simple"> <li>
+<code>version</code>: a version number for the serialized format, so that the <code>torch.package</code> import infrastructures knows how to load this package.</li> <li>
+<code>extern_modules</code>: a list of modules that are considered <code>extern:class:`PackageImporter`. ``extern</code> modules will be imported using the loading environment’s system importer.</li> <li>
+<code>*.storage</code>: serialized tensor data.</li> </ul> <pre data-language="python">.data
+├── 94286146172688.storage
+├── 94286146172784.storage
+├── extern_modules
+├── version
+├── ...
+</pre>   <h4 id="user-files">User files</h4> <p>All other files in the archive were put there by a user. The layout is identical to a Python <a class="reference external" href="https://docs.python.org/3/reference/import.html#regular-packages">regular package</a>. For a deeper dive in how Python packaging works, please consult <a class="reference external" href="https://www.python.org/doc/essays/packages/">this essay</a> (it’s slightly out of date, so double-check implementation details with the <a class="reference external" href="https://docs.python.org/3/library/importlib.html">Python reference documentation</a>).</p> <pre data-language="python">&lt;package root&gt;
+├── model  # the pickled model
+│   └── model.pkl
+├── another_package
+│   ├── __init__.py
+│   ├── foo.txt         # a resource file , see importlib.resources
+│   └── ...
+└── torchvision
+    └── models
+        ├── resnet.py   # torchvision.models.resnet
+        └── utils.py    # torchvision.models.utils
+</pre>    <h3 id="how-torch-package-finds-your-code-s-dependencies">How <code>torch.package</code> finds your code’s dependencies</h3>  <h4 id="analyzing-an-object-s-dependencies">Analyzing an object’s dependencies</h4> <p>When you issue a <code>save_pickle(obj, ...)</code> call, <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a> will pickle the object normally. Then, it uses the <code>pickletools</code> standard library module to parse the pickle bytecode.</p> <p>In a pickle, an object is saved along with a <code>GLOBAL</code> opcode that describes where to find the implementation of the object’s type, like:</p> <pre data-language="python">GLOBAL 'torchvision.models.resnet Resnet`
+</pre> <p>The dependency resolver will gather up all <code>GLOBAL</code> ops and mark them as dependencies of your pickled object. For more information about pickling and the pickle format, please consult <a class="reference external" href="https://docs.python.org/3/library/pickle.html">the Python docs</a>.</p>   <h4 id="analyzing-a-module-s-dependencies">Analyzing a module’s dependencies</h4> <p>When a Python module is identified as a dependency, <code>torch.package</code> walks the module’s python AST representation and looks for import statements with full support for the standard forms: <code>from x import y</code>, <code>import z</code>, <code>from w import v as u</code>, etc. When one of these import statements are encountered, <code>torch.package</code> registers the imported modules as dependencies that are then themselves parsed in the same AST walking way.</p> <p><strong>Note</strong>: AST parsing has limited support for the <code>__import__(...)</code> syntax and does not support <code>importlib.import_module</code> calls. In general, you should not expect dynamic imports to be detected by <code>torch.package</code>.</p>    <h3 id="dependency-management">Dependency Management</h3> <p><code>torch.package</code> automatically finds the Python modules that your code and objects depend on. This process is called dependency resolution. For each module that the dependency resolver finds, you must specify an <em>action</em> to take.</p> <p>The allowed actions are:</p> <ul class="simple"> <li>
+<code>intern</code>: put this module into the package.</li> <li>
+<code>extern</code>: declare this module as an external dependency of the package.</li> <li>
+<code>mock</code>: stub out this module.</li> <li>
+<code>deny</code>: depending on this module will raise an error during package export.</li> </ul> <p>Finally, there is one more important action that is not technically part of <code>torch.package</code>:</p> <ul class="simple"> <li>Refactoring: remove or change the dependencies in your code.</li> </ul> <p>Note that actions are only defined on entire Python modules. There is no way to package “just” a function or class from a module and leave the rest out. This is by design. Python does not offer clean boundaries between objects defined in a module. The only defined unit of dependency organization is a module, so that’s what <code>torch.package</code> uses.</p> <p>Actions are applied to modules using patterns. Patterns can either be module names (<code>"foo.bar"</code>) or globs (like <code>"foo.**"</code>). You associate a pattern with an action using methods on <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a>, e.g.</p> <pre data-language="python">my_exporter.intern("torchvision.**")
+my_exporter.extern("numpy")
+</pre> <p>If a module matches a pattern, the corresponding action is applied to it. For a given module, patterns will be checked in the order that they were defined, and the first action will be taken.</p>  <h4 id="intern"><code>intern</code></h4> <p>If a module is <code>intern</code>-ed, it will be placed into the package.</p> <p>This action is your model code, or any related code you want to package. For example, if you are trying to package a ResNet from <code>torchvision</code>, you will need to <code>intern</code> the module torchvision.models.resnet.</p> <p>On package import, when your packaged code tries to import an <code>intern</code>-ed module, PackageImporter will look inside your package for that module. If it can’t find that module, an error will be raised. This ensures that each <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> is isolated from the loading environment—even if you have <code>my_interned_module</code> available in both your package and the loading environment, <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> will only use the version in your package.</p> <p><strong>Note</strong>: Only Python source modules can be <code>intern</code>-ed. Other kinds of modules, like C extension modules and bytecode modules, will raise an error if you attempt to <code>intern</code> them. These kinds of modules need to be <code>mock</code>-ed or <code>extern</code>-ed.</p>   <h4 id="extern"><code>extern</code></h4> <p>If a module is <code>extern</code>-ed, it will not be packaged. Instead, it will be added to a list of external dependencies for this package. You can find this list on <code>package_exporter.extern_modules</code>.</p> <p>On package import, when the packaged code tries to import an <code>extern</code>-ed module, <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> will use the default Python importer to find that module, as if you did <code>importlib.import_module("my_externed_module")</code>. If it can’t find that module, an error will be raised.</p> <p>In this way, you can depend on third-party libraries like <code>numpy</code> and <code>scipy</code> from within your package without having to package them too.</p> <p><strong>Warning</strong>: If any external library changes in a backwards-incompatible way, your package may fail to load. If you need long-term reproducibility for your package, try to limit your use of <code>extern</code>.</p>   <h4 id="mock"><code>mock</code></h4> <p>If a module is <code>mock</code>-ed, it will not be packaged. Instead a stub module will be packaged in its place. The stub module will allow you to retrieve objects from it (so that <code>from my_mocked_module import foo</code> will not error), but any use of that object will raise a <code>NotImplementedError</code>.</p> <p><code>mock</code> should be used for code that you “know” will not be needed in the loaded package, but you still want available for use in non-packaged contents. For example, initialization/configuration code, or code only used for debugging/training.</p> <p><strong>Warning</strong>: In general, <code>mock</code> should be used as a last resort. It introduces behavioral differences between packaged code and non-packaged code, which may lead to later confusion. Prefer instead to refactor your code to remove unwanted dependencies.</p>   <h4 id="refactoring">Refactoring</h4> <p>The best way to manage dependencies is to not have dependencies at all! Often, code can be refactored to remove unnecessary dependencies. Here are some guidelines for writing code with clean dependencies (which are also generally good practices!):</p> <p><strong>Include only what you use</strong>. Do not leave unused imports in your code. The dependency resolver is not smart enough to tell that they are indeed unused, and will try to process them.</p> <p><strong>Qualify your imports</strong>. For example, instead of writing import foo and later using <code>foo.bar.baz</code>, prefer to write <code>from foo.bar import baz</code>. This more precisely specifies your real dependency (<code>foo.bar</code>) and lets the dependency resolver know you don’t need all of <code>foo</code>.</p> <p><strong>Split up large files with unrelated functionality into smaller ones</strong>. If your <code>utils</code> module contains a hodge-podge of unrelated functionality, any module that depends on <code>utils</code> will need to pull in lots of unrelated dependencies, even if you only needed a small part of it. Prefer instead to define single-purpose modules that can be packaged independently of one another.</p>   <h4 id="patterns">Patterns</h4> <p>Patterns allow you to specify groups of modules with a convenient syntax. The syntax and behavior of patterns follows the Bazel/Buck <a class="reference external" href="https://docs.bazel.build/versions/master/be/functions.html#glob">glob()</a>.</p> <p>A module that we are trying to match against a pattern is called a candidate. A candidate is composed of a list of segments separated by a separator string, e.g. <code>foo.bar.baz</code>.</p> <p>A pattern contains one or more segments. Segments can be:</p> <ul class="simple"> <li>A literal string (e.g. <code>foo</code>), which matches exactly.</li> <li>A string containing a wildcard (e.g. <code>torch</code>, or <code>foo*baz*</code>). The wildcard matches any string, including the empty string.</li> <li>A double wildcard (<code>**</code>). This matches against zero or more complete segments.</li> </ul> <p>Examples:</p> <ul class="simple"> <li>
+<code>torch.**</code>: matches <code>torch</code> and all its submodules, e.g. <code>torch.nn</code> and <code>torch.nn.functional</code>.</li> <li>
+<code>torch.*</code>: matches <code>torch.nn</code> or <code>torch.functional</code>, but not <code>torch.nn.functional</code> or <code>torch</code>
+</li> <li>
+<code>torch*.**</code>: matches <code>torch</code>, <code>torchvision</code>, and all of their submodules</li> </ul> <p>When specifying actions, you can pass multiple patterns, e.g.</p> <pre data-language="python">exporter.intern(["torchvision.models.**", "torchvision.utils.**"])
+</pre> <p>A module will match against this action if it matches any of the patterns.</p> <p>You can also specify patterns to exclude, e.g.</p> <pre data-language="python">exporter.mock("**", exclude=["torchvision.**"])
+</pre> <p>A module will not match against this action if it matches any of the exclude patterns. In this example, we are mocking all modules except <code>torchvision</code> and its submodules.</p> <p>When a module could potentially match against multiple actions, the first action defined will be taken.</p>    <h3 id="torch-package-sharp-edges">
+<code>torch.package</code> sharp edges</h3>  <h4 id="avoid-global-state-in-your-modules">Avoid global state in your modules</h4> <p>Python makes it really easy to bind objects and run code at module-level scope. This is generally fine—after all, functions and classes are bound to names this way. However, things become more complicated when you define an object at module scope with the intention of mutating it, introducing mutable global state.</p> <p>Mutable global state is quite useful—it can reduce boilerplate, allow for open registration into tables, etc. But unless employed very carefully, it can cause complications when used with <code>torch.package</code>.</p> <p>Every <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> creates an independent environment for its contents. This is nice because it means we load multiple packages and ensure they are isolated from each other, but when modules are written in a way that assumes shared mutable global state, this behavior can create hard-to-debug errors.</p>   <h4 id="types-are-not-shared-between-packages-and-the-loading-environment">Types are not shared between packages and the loading environment</h4> <p>Any class that you import from a <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> will be a version of the class specific to that importer. For example:</p> <pre data-language="python">from foo import MyClass
+
+my_class_instance = MyClass()
+
+with PackageExporter(f) as exporter:
+    exporter.save_module("foo")
+
+importer = PackageImporter(f)
+imported_MyClass = importer.import_module("foo").MyClass
+
+assert isinstance(my_class_instance, MyClass)  # works
+assert isinstance(my_class_instance, imported_MyClass)  # ERROR!
+</pre> <p>In this example, <code>MyClass</code> and <code>imported_MyClass</code> are <em>not the same type</em>. In this specific example, <code>MyClass</code> and <code>imported_MyClass</code> have exactly the same implementation, so you might think it’s okay to consider them the same class. But consider the situation where <code>imported_MyClass</code> is coming from an older package with an entirely different implementation of <code>MyClass</code> — in that case, it’s unsafe to consider them the same class.</p> <p>Under the hood, each importer has a prefix that allows it to uniquely identify classes:</p> <pre data-language="python">print(MyClass.__name__)  # prints "foo.MyClass"
+print(imported_MyClass.__name__)  # prints &lt;torch_package_0&gt;.foo.MyClass
+</pre> <p>That means you should not expect <code>isinstance</code> checks to work when one of the arguments is from a package and the other is not. If you need this functionality, consider the following options:</p> <ul class="simple"> <li>Doing duck typing (just using the class instead of explicitly checking that it is of a given type).</li> <li>Make the typing relationship an explicit part of the class contract. For example, you can add an attribute tag <code>self.handler = "handle_me_this_way"</code> and have client code check for the value of <code>handler</code> instead of checking the type directly.</li> </ul>    <h3 id="how-torch-package-keeps-packages-isolated-from-each-other">How <code>torch.package</code> keeps packages isolated from each other</h3> <p>Each <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> instance creates an independent, isolated environment for its modules and objects. Modules in a package can only import other packaged modules, or modules marked <code>extern</code>. If you use multiple <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> instances to load a single package, you will get multiple independent environments that do not interact.</p> <p>This is achieved by extending Python’s import infrastructure with a custom importer. <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> provides the same core API as the <code>importlib</code> importer; namely, it implements the <code>import_module</code> and <code>__import__</code> methods.</p> <p>When you invoke <a class="reference internal" href="#torch.package.PackageImporter.import_module" title="torch.package.PackageImporter.import_module"><code>PackageImporter.import_module()</code></a>, <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> will construct and return a new module, much as the system importer does. However, <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> patches the returned module to use <code>self</code> (i.e. that <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> instance) to fulfill future import requests by looking in the package rather than searching the user’s Python environment.</p>  <h4 id="mangling">Mangling</h4> <p>To avoid confusion (“is this <code>foo.bar</code> object the one from my package, or the one from my Python environment?”), <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> mangles the <code>__name__</code> and <code>__file__</code> of all imported modules, by adding a <em>mangle prefix</em> to them.</p> <p>For <code>__name__</code>, a name like <code>torchvision.models.resnet18</code> becomes <code>&lt;torch_package_0&gt;.torchvision.models.resnet18</code>.</p> <p>For <code>__file__</code>, a name like <code>torchvision/models/resnet18.py</code> becomes <code>&lt;torch_package_0&gt;.torchvision/modules/resnet18.py</code>.</p> <p>Name mangling helps avoid inadvertent punning of module names between different packages, and helps you debug by making stack traces and print statements more clearly show whether they are referring to packaged code or not. For developer-facing details about mangling, consult <code>mangling.md</code> in <code>torch/package/</code>.</p>     <h2 id="api-reference">API Reference</h2> <dl class="py class"> <dt class="sig sig-object py" id="torch.package.PackagingError">
+<code>class torch.package.PackagingError(dependency_graph, debug=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackagingError"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This exception is raised when there is an issue with exporting a package. <code>PackageExporter</code> will attempt to gather up all the errors and present them to you at once.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.package.EmptyMatchError">
+<code>class torch.package.EmptyMatchError</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#EmptyMatchError"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This is an exception that is thrown when a mock or extern is marked as <code>allow_empty=False</code>, and is not matched with any module during packaging.</p> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.package.PackageExporter">
+<code>class torch.package.PackageExporter(f, importer=&lt;torch.package.importer._SysImporter object&gt;, debug=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Exporters allow you to write packages of code, pickled Python data, and arbitrary binary and text resources into a self-contained package.</p> <p>Imports can load this code in a hermetic way, such that code is loaded from the package rather than the normal Python import system. This allows for the packaging of PyTorch model code and data so that it can be run on a server or used in the future for transfer learning.</p> <p>The code contained in packages is copied file-by-file from the original source when it is created, and the file format is a specially organized zip file. Future users of the package can unzip the package, and edit the code in order to perform custom modifications to it.</p> <p>The importer for packages ensures that code in the module can only be loaded from within the package, except for modules explicitly listed as external using <a class="reference internal" href="#torch.package.PackageExporter.extern" title="torch.package.PackageExporter.extern"><code>extern()</code></a>. The file <code>extern_modules</code> in the zip archive lists all the modules that a package externally depends on. This prevents “implicit” dependencies where the package runs locally because it is importing a locally-installed package, but then fails when the package is copied to another machine.</p> <p>When source code is added to the package, the exporter can optionally scan it for further code dependencies (<code>dependencies=True</code>). It looks for import statements, resolves relative references to qualified module names, and performs an action specified by the user (See: <a class="reference internal" href="#torch.package.PackageExporter.extern" title="torch.package.PackageExporter.extern"><code>extern()</code></a>, <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a>, and <a class="reference internal" href="#torch.package.PackageExporter.intern" title="torch.package.PackageExporter.intern"><code>intern()</code></a>).</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.__init__">
+<code>__init__(f, importer=&lt;torch.package.importer._SysImporter object&gt;, debug=False)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.__init__"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Create an exporter.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>f</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.12)">Path</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.BinaryIO" title="(in Python v3.12)">BinaryIO</a><em>]</em>) – The location to export to. Can be a <code>string</code>/<code>Path</code> object containing a filename or a binary I/O object.</li> <li>
+<strong>importer</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><em>Importer</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.12)">Sequence</a><em>[</em><em>Importer</em><em>]</em><em>]</em>) – If a single Importer is passed, use that to search for modules. If a sequence of importers are passed, an <code>OrderedImporter</code> will be constructed out of them.</li> <li>
+<strong>debug</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – If set to True, add path of broken modules to PackagingErrors.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.add_dependency">
+<code>add_dependency(module_name, dependencies=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.add_dependency"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Given a module, add it to the dependency graph according to patterns specified by the user.</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.all_paths">
+<code>all_paths(src, dst)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.all_paths"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl class="simple"> <dt>Return a dot representation of the subgraph</dt>
+<dd>
+<p>that has all paths from src to dst.</p> </dd> </dl> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A dot representation containing all paths from src to dst. (<a class="reference external" href="https://graphviz.org/doc/info/lang.html">https://graphviz.org/doc/info/lang.html</a>)</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.close">
+<code>close()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.close"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Write the package to the filesystem. Any calls after <a class="reference internal" href="#torch.package.PackageExporter.close" title="torch.package.PackageExporter.close"><code>close()</code></a> are now invalid. It is preferable to use resource guard syntax instead:</p> <pre data-language="python">with PackageExporter("file.zip") as e:
+    ...
+</pre> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.denied_modules">
+<code>denied_modules()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.denied_modules"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return all modules that are currently denied.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A list containing the names of modules which will be denied in this package.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.deny">
+<code>deny(include, *, exclude=())</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.deny"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Blocklist modules who names match the given glob patterns from the list of modules the package can import. If a dependency on any matching packages is found, a <a class="reference internal" href="#torch.package.PackagingError" title="torch.package.PackagingError"><code>PackagingError</code></a> is raised.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>include</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – A string e.g. <code>"my_package.my_subpackage"</code>, or list of strings for the names of the modules to be externed. This can also be a glob-style pattern, as described in <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a>.</li> <li>
+<strong>exclude</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional pattern that excludes some patterns that match the include string.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.dependency_graph_string">
+<code>dependency_graph_string()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.dependency_graph_string"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns digraph string representation of dependencies in package.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A string representation of dependencies in package.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.extern">
+<code>extern(include, *, exclude=(), allow_empty=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.extern"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Include <code>module</code> in the list of external modules the package can import. This will prevent dependency discovery from saving it in the package. The importer will load an external module directly from the standard import system. Code for extern modules must also exist in the process loading the package.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>include</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – A string e.g. <code>"my_package.my_subpackage"</code>, or list of strings for the names of the modules to be externed. This can also be a glob-style pattern, as described in <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a>.</li> <li>
+<strong>exclude</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional pattern that excludes some patterns that match the include string.</li> <li>
+<strong>allow_empty</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – An optional flag that specifies whether the extern modules specified by this call to the <code>extern</code> method must be matched to some module during packaging. If an extern module glob pattern is added with <code>allow_empty=False</code>, and <a class="reference internal" href="#torch.package.PackageExporter.close" title="torch.package.PackageExporter.close"><code>close()</code></a> is called (either explicitly or via <code>__exit__</code>) before any modules match that pattern, an exception is thrown. If <code>allow_empty=True</code>, no such exception is thrown.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.externed_modules">
+<code>externed_modules()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.externed_modules"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return all modules that are currently externed.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A list containing the names of modules which will be externed in this package.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.get_rdeps">
+<code>get_rdeps(module_name)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.get_rdeps"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return a list of all modules which depend on the module <code>module_name</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A list containing the names of modules which depend on <code>module_name</code>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.get_unique_id">
+<code>get_unique_id()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.get_unique_id"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Get an id. This id is guaranteed to only be handed out once for this package.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.intern">
+<code>intern(include, *, exclude=(), allow_empty=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.intern"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Specify modules that should be packaged. A module must match some <code>intern</code> pattern in order to be included in the package and have its dependencies processed recursively.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>include</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – A string e.g. “my_package.my_subpackage”, or list of strings for the names of the modules to be externed. This can also be a glob-style pattern, as described in <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a>.</li> <li>
+<strong>exclude</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional pattern that excludes some patterns that match the include string.</li> <li>
+<strong>allow_empty</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – An optional flag that specifies whether the intern modules specified by this call to the <code>intern</code> method must be matched to some module during packaging. If an <code>intern</code> module glob pattern is added with <code>allow_empty=False</code>, and <a class="reference internal" href="#torch.package.PackageExporter.close" title="torch.package.PackageExporter.close"><code>close()</code></a> is called (either explicitly or via <code>__exit__</code>) before any modules match that pattern, an exception is thrown. If <code>allow_empty=True</code>, no such exception is thrown.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.interned_modules">
+<code>interned_modules()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.interned_modules"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return all modules that are currently interned.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A list containing the names of modules which will be interned in this package.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.mock">
+<code>mock(include, *, exclude=(), allow_empty=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.mock"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Replace some required modules with a mock implementation. Mocked modules will return a fake object for any attribute accessed from it. Because we copy file-by-file, the dependency resolution will sometimes find files that are imported by model files but whose functionality is never used (e.g. custom serialization code or training helpers). Use this function to mock this functionality out without having to modify the original code.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<p><strong>include</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – </p>
+<p>A string e.g. <code>"my_package.my_subpackage"</code>, or list of strings for the names of the modules to be mocked out. Strings can also be a glob-style pattern string that may match multiple modules. Any required dependencies that match this pattern string will be mocked out automatically.</p> <dl> <dt>Examples :</dt>
+<dd>
+<p><code>'torch.**'</code> – matches <code>torch</code> and all submodules of torch, e.g. <code>'torch.nn'</code> and <code>'torch.nn.functional'</code></p> <p><code>'torch.*'</code> – matches <code>'torch.nn'</code> or <code>'torch.functional'</code>, but not <code>'torch.nn.functional'</code></p> </dd> </dl> </li> <li>
+<strong>exclude</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional pattern that excludes some patterns that match the include string. e.g. <code>include='torch.**', exclude='torch.foo'</code> will mock all torch packages except <code>'torch.foo'</code>, Default: is <code>[]</code>.</li> <li>
+<strong>allow_empty</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – An optional flag that specifies whether the mock implementation(s) specified by this call to the <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a> method must be matched to some module during packaging. If a mock is added with <code>allow_empty=False</code>, and <a class="reference internal" href="#torch.package.PackageExporter.close" title="torch.package.PackageExporter.close"><code>close()</code></a> is called (either explicitly or via <code>__exit__</code>) and the mock has not been matched to a module used by the package being exported, an exception is thrown. If <code>allow_empty=True</code>, no such exception is thrown.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.mocked_modules">
+<code>mocked_modules()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.mocked_modules"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return all modules that are currently mocked.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A list containing the names of modules which will be mocked in this package.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.register_extern_hook">
+<code>register_extern_hook(hook)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.register_extern_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Registers an extern hook on the exporter.</p> <p>The hook will be called each time a module matches against an <a class="reference internal" href="#torch.package.PackageExporter.extern" title="torch.package.PackageExporter.extern"><code>extern()</code></a> pattern. It should have the following signature:</p> <pre data-language="python">hook(exporter: PackageExporter, module_name: str) -&gt; None
+</pre> <p>Hooks will be called in order of registration.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A handle that can be used to remove the added hook by calling <code>handle.remove()</code>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><code>torch.utils.hooks.RemovableHandle</code></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.register_intern_hook">
+<code>register_intern_hook(hook)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.register_intern_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Registers an intern hook on the exporter.</p> <p>The hook will be called each time a module matches against an <a class="reference internal" href="#torch.package.PackageExporter.intern" title="torch.package.PackageExporter.intern"><code>intern()</code></a> pattern. It should have the following signature:</p> <pre data-language="python">hook(exporter: PackageExporter, module_name: str) -&gt; None
+</pre> <p>Hooks will be called in order of registration.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A handle that can be used to remove the added hook by calling <code>handle.remove()</code>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><code>torch.utils.hooks.RemovableHandle</code></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.register_mock_hook">
+<code>register_mock_hook(hook)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.register_mock_hook"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Registers a mock hook on the exporter.</p> <p>The hook will be called each time a module matches against a <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>mock()</code></a> pattern. It should have the following signature:</p> <pre data-language="python">hook(exporter: PackageExporter, module_name: str) -&gt; None
+</pre> <p>Hooks will be called in order of registration.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A handle that can be used to remove the added hook by calling <code>handle.remove()</code>.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><code>torch.utils.hooks.RemovableHandle</code></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_binary">
+<code>save_binary(package, resource, binary)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_binary"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Save raw bytes to the package.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package this resource should go it (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – A unique name for the resource, used to identify it to load.</li> <li>
+<strong>binary</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The data to save.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_module">
+<code>save_module(module_name, dependencies=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Save the code for <code>module</code> into the package. Code for the module is resolved using the <code>importers</code> path to find the module object, and then using its <code>__file__</code> attribute to find the source code.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – e.g. <code>my_package.my_subpackage</code>, code will be saved to provide code for this package.</li> <li>
+<strong>dependencies</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If <code>True</code>, we scan the source for dependencies.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_pickle">
+<code>save_pickle(package, resource, obj, dependencies=True, pickle_protocol=3)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_pickle"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Save a python object to the archive using pickle. Equivalent to <a class="reference internal" href="generated/torch.save#torch.save" title="torch.save"><code>torch.save()</code></a> but saving into the archive rather than a stand-alone file. Standard pickle does not save the code, only the objects. If <code>dependencies</code> is true, this method will also scan the pickled objects for which modules are required to reconstruct them and save the relevant code.</p> <p>To be able to save an object where <code>type(obj).__name__</code> is <code>my_module.MyObject</code>, <code>my_module.MyObject</code> must resolve to the class of the object according to the <code>importer</code> order. When saving objects that have previously been packaged, the importer’s <code>import_module</code> method will need to be present in the <code>importer</code> list for this to work.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package this resource should go in (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – A unique name for the resource, used to identify it to load.</li> <li>
+<strong>obj</strong> (<em>Any</em>) – The object to save, must be picklable.</li> <li>
+<strong>dependencies</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If <code>True</code>, we scan the source for dependencies.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_source_file">
+<code>save_source_file(module_name, file_or_directory, dependencies=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_source_file"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Adds the local file system <code>file_or_directory</code> to the source package to provide the code for <code>module_name</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – e.g. <code>"my_package.my_subpackage"</code>, code will be saved to provide code for this package.</li> <li>
+<strong>file_or_directory</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – the path to a file or directory of code. When a directory, all python files in the directory are recursively copied using <a class="reference internal" href="#torch.package.PackageExporter.save_source_file" title="torch.package.PackageExporter.save_source_file"><code>save_source_file()</code></a>. If a file is named <code>"/__init__.py"</code> the code is treated as a package.</li> <li>
+<strong>dependencies</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If <code>True</code>, we scan the source for dependencies.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_source_string">
+<code>save_source_string(module_name, src, is_package=False, dependencies=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_source_string"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Adds <code>src</code> as the source code for <code>module_name</code> in the exported package.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – e.g. <code>my_package.my_subpackage</code>, code will be saved to provide code for this package.</li> <li>
+<strong>src</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The Python source code to save for this package.</li> <li>
+<strong>is_package</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If <code>True</code>, this module is treated as a package. Packages are allowed to have submodules (e.g. <code>my_package.my_subpackage.my_subsubpackage</code>), and resources can be saved inside them. Defaults to <code>False</code>.</li> <li>
+<strong>dependencies</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>, </em><em>optional</em>) – If <code>True</code>, we scan the source for dependencies.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageExporter.save_text">
+<code>save_text(package, resource, text)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_exporter.html#PackageExporter.save_text"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Save text data to the package.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package this resource should go it (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – A unique name for the resource, used to identify it to load.</li> <li>
+<strong>text</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The contents to save.</li> </ul> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.package.PackageImporter">
+<code>class torch.package.PackageImporter(file_or_buffer, module_allowed=&lt;function PackageImporter.&lt;lambda&gt;&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Importers allow you to load code written to packages by <a class="reference internal" href="#torch.package.PackageExporter" title="torch.package.PackageExporter"><code>PackageExporter</code></a>. Code is loaded in a hermetic way, using files from the package rather than the normal python import system. This allows for the packaging of PyTorch model code and data so that it can be run on a server or used in the future for transfer learning.</p> <p>The importer for packages ensures that code in the module can only be loaded from within the package, except for modules explicitly listed as external during export. The file <code>extern_modules</code> in the zip archive lists all the modules that a package externally depends on. This prevents “implicit” dependencies where the package runs locally because it is importing a locally-installed package, but then fails when the package is copied to another machine.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.__init__">
+<code>__init__(file_or_buffer, module_allowed=&lt;function PackageImporter.&lt;lambda&gt;&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.__init__"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Open <code>file_or_buffer</code> for importing. This checks that the imported package only requires modules allowed by <code>module_allowed</code></p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>file_or_buffer</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.12)">Union</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>PyTorchFileReader</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.12)">Path</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.BinaryIO" title="(in Python v3.12)">BinaryIO</a><em>]</em>) – a file-like object (has to implement <code>read()</code>, <code>readline()</code>, <code>tell()</code>, and <code>seek()</code>), a string, or an <code>os.PathLike</code> object containing a filename.</li> <li>
+<strong>module_allowed</strong> (<em>Callable</em><em>[</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a><em>]</em><em>, </em><em>optional</em>) – A method to determine if a externally provided module should be allowed. Can be used to ensure packages loaded do not depend on modules that the server does not support. Defaults to allowing anything.</li> </ul> </dd> <dt class="field-even">Raises</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ImportError" title="(in Python v3.12)"><strong>ImportError</strong></a> – If the package will use a disallowed module.</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.file_structure">
+<code>file_structure(*, include='**', exclude=())</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.file_structure"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns a file structure representation of package’s zipfile.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>include</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional string e.g. <code>"my_package.my_subpackage"</code>, or optional list of strings for the names of the files to be included in the zipfile representation. This can also be a glob-style pattern, as described in <a class="reference internal" href="#torch.package.PackageExporter.mock" title="torch.package.PackageExporter.mock"><code>PackageExporter.mock()</code></a>
+</li> <li>
+<strong>exclude</strong> (<em>Union</em><em>[</em><em>List</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>]</em>) – An optional pattern that excludes files whose name match the pattern.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a></p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.package.Directory" title="torch.package.file_structure_representation.Directory">Directory</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.id">
+<code>id()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.id"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns internal identifier that torch.package uses to distinguish <a class="reference internal" href="#torch.package.PackageImporter" title="torch.package.PackageImporter"><code>PackageImporter</code></a> instances. Looks like:</p> <pre data-language="python">&lt;torch_package_0&gt;
+</pre> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.import_module">
+<code>import_module(name, package=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.import_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Load a module from the package if it hasn’t already been loaded, and then return the module. Modules are loaded locally to the importer and will appear in <code>self.modules</code> rather than <code>sys.modules</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – Fully qualified name of the module to load.</li> <li>
+<strong>package</strong> (<em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#type" title="(in Python v3.12)">type</a><em>]</em><em>, </em><em>optional</em>) – Unused, but present to match the signature of importlib.import_module. Defaults to <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The (possibly already) loaded module.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/types.html#types.ModuleType" title="(in Python v3.12)">types.ModuleType</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.load_binary">
+<code>load_binary(package, resource)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.load_binary"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Load raw bytes.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The unique name for the resource.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The loaded data.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#bytes" title="(in Python v3.12)">bytes</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.load_pickle">
+<code>load_pickle(package, resource, map_location=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.load_pickle"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Unpickles the resource from the package, loading any modules that are needed to construct the objects using <a class="reference internal" href="#torch.package.PackageImporter.import_module" title="torch.package.PackageImporter.import_module"><code>import_module()</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The unique name for the resource.</li> <li>
+<strong>map_location</strong> – Passed to <code>torch.load</code> to determine how tensors are mapped to devices. Defaults to <code>None</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The unpickled object.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Any</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.load_text">
+<code>load_text(package, resource, encoding='utf-8', errors='strict')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.load_text"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Load a string.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>package</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The name of module package (e.g. <code>"my_package.my_subpackage"</code>).</li> <li>
+<strong>resource</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – The unique name for the resource.</li> <li>
+<strong>encoding</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>optional</em>) – Passed to <code>decode</code>. Defaults to <code>'utf-8'</code>.</li> <li>
+<strong>errors</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><em>optional</em>) – Passed to <code>decode</code>. Defaults to <code>'strict'</code>.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>The loaded text.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.package.PackageImporter.python_version">
+<code>python_version()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/package_importer.html#PackageImporter.python_version"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the version of python that was used to create this package.</p> <p>Note: this function is experimental and not Forward Compatible. The plan is to move this into a lock file later on.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p><code>Optional[str]</code> a python version e.g. 3.8.9 or None if no version was stored with this package</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.package.Directory">
+<code>class torch.package.Directory(name, is_dir)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/file_structure_representation.html#Directory"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>A file structure representation. Organized as Directory nodes that have lists of their Directory children. Directories for a package are created by calling <a class="reference internal" href="#torch.package.PackageImporter.file_structure" title="torch.package.PackageImporter.file_structure"><code>PackageImporter.file_structure()</code></a>.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.package.Directory.has_file">
+<code>has_file(filename)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/package/file_structure_representation.html#Directory.has_file"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Checks if a file is present in a <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>filename</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – Path of file to search for.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>If a <a class="reference internal" href="#torch.package.Directory" title="torch.package.Directory"><code>Directory</code></a> contains the specified file.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/package.html" class="_attribution-link">https://pytorch.org/docs/2.1/package.html</a>
+  </p>
+</div>

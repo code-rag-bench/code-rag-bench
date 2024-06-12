@@ -1,0 +1,120 @@
+<h1 id="sphx-glr-auto-examples-semi-supervised-plot-semi-supervised-newsgroups-py">Semi-supervised Classification on a Text Dataset</h1> <p>In this example, semi-supervised classifiers are trained on the 20 newsgroups dataset (which will be automatically downloaded).</p> <p>You can adjust the number of categories by giving their names to the dataset loader or setting them to <code>None</code> to get all 20 of them.</p> <p class="sphx-glr-script-out">Out:</p> <pre data-language="none">11314 documents
+20 categories
+
+Supervised SGDClassifier on 100% of the data:
+Number of training samples: 8485
+Unlabeled samples in training set: 0
+Micro-averaged F1 score on test set: 0.909
+----------
+
+Supervised SGDClassifier on 20% of the training data:
+Number of training samples: 1688
+Unlabeled samples in training set: 0
+Micro-averaged F1 score on test set: 0.791
+----------
+
+SelfTrainingClassifier on 20% of the training data (rest is unlabeled):
+Number of training samples: 8485
+Unlabeled samples in training set: 6797
+End of iteration 1, added 2852 new labels.
+End of iteration 2, added 694 new labels.
+End of iteration 3, added 183 new labels.
+End of iteration 4, added 68 new labels.
+End of iteration 5, added 37 new labels.
+End of iteration 6, added 31 new labels.
+End of iteration 7, added 11 new labels.
+End of iteration 8, added 8 new labels.
+End of iteration 9, added 4 new labels.
+End of iteration 10, added 2 new labels.
+Micro-averaged F1 score on test set: 0.835
+----------
+</pre>  <pre data-language="python">import os
+
+import numpy as np
+
+from sklearn.datasets import fetch_20newsgroups
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.linear_model import SGDClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.semi_supervised import SelfTrainingClassifier
+from sklearn.semi_supervised import LabelSpreading
+from sklearn.metrics import f1_score
+
+data = fetch_20newsgroups(subset='train', categories=None)
+print("%d documents" % len(data.filenames))
+print("%d categories" % len(data.target_names))
+print()
+
+# Parameters
+sdg_params = dict(alpha=1e-5, penalty='l2', loss='log')
+vectorizer_params = dict(ngram_range=(1, 2), min_df=5, max_df=0.8)
+
+# Supervised Pipeline
+pipeline = Pipeline([
+    ('vect', CountVectorizer(**vectorizer_params)),
+    ('tfidf', TfidfTransformer()),
+    ('clf', SGDClassifier(**sdg_params)),
+])
+# SelfTraining Pipeline
+st_pipeline = Pipeline([
+    ('vect', CountVectorizer(**vectorizer_params)),
+    ('tfidf', TfidfTransformer()),
+    ('clf', SelfTrainingClassifier(SGDClassifier(**sdg_params), verbose=True)),
+])
+# LabelSpreading Pipeline
+ls_pipeline = Pipeline([
+    ('vect', CountVectorizer(**vectorizer_params)),
+    ('tfidf', TfidfTransformer()),
+    # LabelSpreading does not support dense matrices
+    ('todense', FunctionTransformer(lambda x: x.todense())),
+    ('clf', LabelSpreading()),
+])
+
+
+def eval_and_print_metrics(clf, X_train, y_train, X_test, y_test):
+    print("Number of training samples:", len(X_train))
+    print("Unlabeled samples in training set:",
+          sum(1 for x in y_train if x == -1))
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    print("Micro-averaged F1 score on test set: "
+          "%0.3f" % f1_score(y_test, y_pred, average='micro'))
+    print("-" * 10)
+    print()
+
+
+if __name__ == "__main__":
+    X, y = data.data, data.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+    print("Supervised SGDClassifier on 100% of the data:")
+    eval_and_print_metrics(pipeline, X_train, y_train, X_test, y_test)
+
+    # select a mask of 20% of the train dataset
+    y_mask = np.random.rand(len(y_train)) &lt; 0.2
+
+    # X_20 and y_20 are the subset of the train dataset indicated by the mask
+    X_20, y_20 = map(list, zip(*((x, y)
+                     for x, y, m in zip(X_train, y_train, y_mask) if m)))
+    print("Supervised SGDClassifier on 20% of the training data:")
+    eval_and_print_metrics(pipeline, X_20, y_20, X_test, y_test)
+
+    # set the non-masked subset to be unlabeled
+    y_train[~y_mask] = -1
+    print("SelfTrainingClassifier on 20% of the training data (rest "
+          "is unlabeled):")
+    eval_and_print_metrics(st_pipeline, X_train, y_train, X_test, y_test)
+
+    if 'CI' not in os.environ:
+        # LabelSpreading takes too long to run in the online documentation
+        print("LabelSpreading on 20% of the data (rest is unlabeled):")
+        eval_and_print_metrics(ls_pipeline, X_train, y_train, X_test, y_test)
+</pre> <p class="sphx-glr-timing"><strong>Total running time of the script:</strong> ( 0 minutes 55.262 seconds)</p> <div class="sphx-glr-footer class sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-semi-supervised-plot-semi-supervised-newsgroups-py"> <div class="binder-badge docutils container"> <a class="reference external image-reference" href="https://mybinder.org/v2/gh/scikit-learn/scikit-learn/0.24.X?urlpath=lab/tree/notebooks/auto_examples/semi_supervised/plot_semi_supervised_newsgroups.ipynb"><img alt="Launch binder" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC" style="width: 150px;"></a> </div> <div class="sphx-glr-download sphx-glr-download-python docutils container"> <p><a class="reference download internal" download="" href="https://scikit-learn.org/0.24/_downloads/7f9c06d88a8d544a3815452dacaa0548/plot_semi_supervised_newsgroups.py"><code>Download Python source code: plot_semi_supervised_newsgroups.py</code></a></p> </div> <div class="sphx-glr-download sphx-glr-download-jupyter docutils container"> <p><a class="reference download internal" download="" href="https://scikit-learn.org/0.24/_downloads/ebb639877592982f79ada0c577699e8d/plot_semi_supervised_newsgroups.ipynb"><code>Download Jupyter notebook: plot_semi_supervised_newsgroups.ipynb</code></a></p> </div> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2020 The scikit-learn developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://scikit-learn.org/0.24/auto_examples/semi_supervised/plot_semi_supervised_newsgroups.html" class="_attribution-link">https://scikit-learn.org/0.24/auto_examples/semi_supervised/plot_semi_supervised_newsgroups.html</a>
+  </p>
+</div>

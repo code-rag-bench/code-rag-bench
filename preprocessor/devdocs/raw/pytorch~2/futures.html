@@ -1,0 +1,122 @@
+<h1 id="futures-docs">torch.futures</h1> <p id="torch-futures">This package provides a <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> type that encapsulates an asynchronous execution and a set of utility functions to simplify operations on <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> objects. Currently, the <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> type is primarily used by the <a class="reference internal" href="rpc#distributed-rpc-framework"><span class="std std-ref">Distributed RPC Framework</span></a>.</p> <dl class="py class" id="module-torch.futures"> <dt class="sig sig-object py" id="torch.futures.Future">
+<code>class torch.futures.Future(*, devices=None)</code> </dt> <dd>
+<p>Wrapper around a <code>torch._C.Future</code> which encapsulates an asynchronous execution of a callable, e.g. <a class="reference internal" href="rpc#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a>. It also exposes a set of APIs to add callback functions and set results.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>GPU support is a beta feature, subject to changes.</p> </div>  <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.add_done_callback">
+<code>add_done_callback(callback)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.add_done_callback"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Append the given callback function to this <code>Future</code>, which will be run when the <code>Future</code> is completed. Multiple callbacks can be added to the same <code>Future</code>, but the order in which they will be executed cannot be guaranteed. The callback must take one argument, which is the reference to this <code>Future</code>. The callback function can use the <a class="reference internal" href="#torch.futures.Future.value" title="torch.futures.Future.value"><code>value()</code></a> method to get the value. Note that if this <code>Future</code> is already completed, the given callback will be run inline.</p> <p>We recommend that you use the <a class="reference internal" href="#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a> method as it provides a way to synchronize after your callback has completed. <code>add_done_callback</code> can be cheaper if your callback does not return anything. But both <a class="reference internal" href="#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a> and <code>add_done_callback</code> use the same callback registration API under the hood.</p> <p>With respect to GPU tensors, this method behaves in the same way as <a class="reference internal" href="#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>callback</strong> (<code>Future</code>) – a <code>Callable</code> that takes in one argument, which is the reference to this <code>Future</code>.</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that if the callback function throws, either through the original future being completed with an exception and calling <code>fut.wait()</code>, or through other code in the callback, error handling must be carefully taken care of. For example, if this callback later completes additional futures, those futures are not marked as completed with an error and the user is responsible for handling completion/waiting on those futures independently.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; def callback(fut):
+...     print("This will run after the future has finished.")
+...     print(fut.wait())
+&gt;&gt;&gt; fut = torch.futures.Future()
+&gt;&gt;&gt; fut.add_done_callback(callback)
+&gt;&gt;&gt; fut.set_result(5)
+This will run after the future has finished.
+5
+</pre> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.done">
+<code>done()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.done"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Return <code>True</code> if this <code>Future</code> is done. A <code>Future</code> is done if it has a result or an exception.</p> <p>If the value contains tensors that reside on GPUs, <code>Future.done()</code> will return <code>True</code> even if the asynchronous kernels that are populating those tensors haven’t yet completed running on the device, because at such stage the result is already usable, provided one performs the appropriate synchronizations (see <a class="reference internal" href="#torch.futures.Future.wait" title="torch.futures.Future.wait"><code>wait()</code></a>).</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.set_exception">
+<code>set_exception(result)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.set_exception"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Set an exception for this <code>Future</code>, which will mark this <code>Future</code> as completed with an error and trigger all attached callbacks. Note that when calling wait()/value() on this <code>Future</code>, the exception set here will be raised inline.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>result</strong> (<a class="reference external" href="https://docs.python.org/3/library/exceptions.html#BaseException" title="(in Python v3.12)">BaseException</a>) – the exception for this <code>Future</code>.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; fut = torch.futures.Future()
+&gt;&gt;&gt; fut.set_exception(ValueError("foo"))
+&gt;&gt;&gt; fut.wait()
+Traceback (most recent call last):
+...
+ValueError: foo
+</pre> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.set_result">
+<code>set_result(result)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.set_result"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Set the result for this <code>Future</code>, which will mark this <code>Future</code> as completed and trigger all attached callbacks. Note that a <code>Future</code> cannot be marked completed twice.</p> <p>If the result contains tensors that reside on GPUs, this method can be called even if the asynchronous kernels that are populating those tensors haven’t yet completed running on the device, provided that the streams on which those kernels were enqueued are set as the current ones when this method is called. Put simply, it’s safe to call this method immediately after launching those kernels, without any additional synchronization, as long as one doesn’t change streams in between. This method will record events on all the relevant current streams and will use them to ensure proper scheduling for all the consumers of this <code>Future</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>result</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#object" title="(in Python v3.12)">object</a>) – the result object of this <code>Future</code>.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import threading
+&gt;&gt;&gt; import time
+&gt;&gt;&gt; def slow_set_future(fut, value):
+...     time.sleep(0.5)
+...     fut.set_result(value)
+&gt;&gt;&gt; fut = torch.futures.Future()
+&gt;&gt;&gt; t = threading.Thread(
+...     target=slow_set_future,
+...     args=(fut, torch.ones(2) * 3)
+... )
+&gt;&gt;&gt; t.start()
+&gt;&gt;&gt; print(fut.wait())
+tensor([3., 3.])
+&gt;&gt;&gt; t.join()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.then">
+<code>then(callback)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.then"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Append the given callback function to this <code>Future</code>, which will be run when the <code>Future</code> is completed. Multiple callbacks can be added to the same <code>Future</code>, but the order in which they will be executed cannot be guaranteed (to enforce a certain order consider chaining: <code>fut.then(cb1).then(cb2)</code>). The callback must take one argument, which is the reference to this <code>Future</code>. The callback function can use the <a class="reference internal" href="#torch.futures.Future.value" title="torch.futures.Future.value"><code>value()</code></a> method to get the value. Note that if this <code>Future</code> is already completed, the given callback will be run immediately inline.</p> <p>If the <code>Future</code>’s value contains tensors that reside on GPUs, the callback might be invoked while the async kernels that are populating those tensors haven’t yet finished executing on the device. However, the callback will be invoked with some dedicated streams set as current (fetched from a global pool) which will be synchronized with those kernels. Hence any operation performed by the callback on these tensors will be scheduled on the device after the kernels complete. In other words, as long as the callback doesn’t switch streams, it can safely manipulate the result without any additional synchronization. This is similar to the non-blocking behavior of <a class="reference internal" href="#torch.futures.Future.wait" title="torch.futures.Future.wait"><code>wait()</code></a>.</p> <p>Similarly, if the callback returns a value that contains tensors that reside on a GPU, it can do so even if the kernels that are producing these tensors are still running on the device, as long as the callback didn’t change streams during its execution. If one wants to change streams, one must be careful to re-synchronize them with the original streams, that is, those that were current when the callback was invoked.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>callback</strong> (<code>Callable</code>) – a <code>Callable</code> that takes this <code>Future</code> as the only argument.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A new <code>Future</code> object that holds the return value of the <code>callback</code> and will be marked as completed when the given <code>callback</code> finishes.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.futures.Future" title="torch.jit.Future">Future</a>[<em>S</em>]</p> </dd> </dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Note that if the callback function throws, either through the original future being completed with an exception and calling <code>fut.wait()</code>, or through other code in the callback, the future returned by <code>then</code> will be marked appropriately with the encountered error. However, if this callback later completes additional futures, those futures are not marked as completed with an error and the user is responsible for handling completion/waiting on those futures independently.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; def callback(fut):
+...     print(f"RPC return value is {fut.wait()}.")
+&gt;&gt;&gt; fut = torch.futures.Future()
+&gt;&gt;&gt; # The inserted callback will print the return value when
+&gt;&gt;&gt; # receiving the response from "worker1"
+&gt;&gt;&gt; cb_fut = fut.then(callback)
+&gt;&gt;&gt; chain_cb_fut = cb_fut.then(
+...     lambda x : print(f"Chained cb done. {x.wait()}")
+... )
+&gt;&gt;&gt; fut.set_result(5)
+RPC return value is 5.
+Chained cb done. None
+</pre> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.value">
+<code>value()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.value"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Obtain the value of an already-completed future.</p> <p>This method should only be called after a call to <a class="reference internal" href="#torch.futures.Future.wait" title="torch.futures.Future.wait"><code>wait()</code></a> has completed, or inside a callback function passed to <a class="reference internal" href="#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a>. In other cases this <code>Future</code> may not yet hold a value and calling <code>value()</code> could fail.</p> <p>If the value contains tensors that reside on GPUs, then this method will <em>not</em> perform any additional synchronization. This should be done beforehand, separately, through a call to <a class="reference internal" href="#torch.futures.Future.wait" title="torch.futures.Future.wait"><code>wait()</code></a> (except within callbacks, for which it’s already being taken care of by <a class="reference internal" href="#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a>).</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The value held by this <code>Future</code>. If the function (callback or RPC) creating the value has thrown an error, this <code>value()</code> method will also throw an error.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><em>T</em></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.futures.Future.wait">
+<code>wait()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#Future.wait"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Block until the value of this <code>Future</code> is ready.</p> <p>If the value contains tensors that reside on GPUs, then an additional synchronization is performed with the kernels (executing on the device) which may be asynchronously populating those tensors. Such sync is non-blocking, which means that <code>wait()</code> will insert the necessary instructions in the current streams to ensure that further operations enqueued on those streams will be properly scheduled after the async kernels but, once that is done, <code>wait()</code> will return, even if those kernels are still running. No further synchronization is required when accessing and using the values, as long as one doesn’t change streams.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>The value held by this <code>Future</code>. If the function (callback or RPC) creating the value has thrown an error, this <code>wait</code> method will also throw an error.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><em>T</em></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.futures.collect_all">
+<code>torch.futures.collect_all(futures)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#collect_all"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Collects the provided <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> objects into a single combined <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> that is completed when all of the sub-futures are completed.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>futures</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.12)">list</a>) – a list of <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> objects.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object to a list of the passed in Futures.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#torch.futures.Future" title="torch.jit.Future">Future</a>[<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.futures.Future" title="torch.jit.Future">Future</a>]]</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; fut0 = torch.futures.Future()
+&gt;&gt;&gt; fut1 = torch.futures.Future()
+&gt;&gt;&gt; fut = torch.futures.collect_all([fut0, fut1])
+&gt;&gt;&gt; fut0.set_result(0)
+&gt;&gt;&gt; fut1.set_result(1)
+&gt;&gt;&gt; fut_list = fut.wait()
+&gt;&gt;&gt; print(f"fut0 result = {fut_list[0].wait()}")
+fut0 result = 0
+&gt;&gt;&gt; print(f"fut1 result = {fut_list[1].wait()}")
+fut1 result = 1
+</pre> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.futures.wait_all">
+<code>torch.futures.wait_all(futures)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/futures.html#wait_all"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Waits for all provided futures to be complete, and returns the list of completed values. If any of the futures encounters an error, the method will exit early and report the error not waiting for other futures to complete.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>futures</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.12)">list</a>) – a list of <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A list of the completed <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> results. This method will throw an error if <code>wait</code> on any <a class="reference internal" href="#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> throws.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a></p> </dd> </dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/futures.html" class="_attribution-link">https://pytorch.org/docs/2.1/futures.html</a>
+  </p>
+</div>

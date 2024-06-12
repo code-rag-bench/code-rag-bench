@@ -1,0 +1,616 @@
+# TorchDynamo-based ONNX Exporter
+
+  * Overview
+  * Dependencies
+  * A simple example
+  * Inspecting the ONNX model using GUI
+  * Diagnosing issues with SARIF
+  * API Reference
+
+Warning
+
+The ONNX exporter for TorchDynamo is a rapidly evolving beta technology.
+
+## Overview
+
+The ONNX exporter leverages TorchDynamo engine to hook into Python’s frame
+evaluation API and dynamically rewrite its bytecode into an FX Graph. The
+resulting FX Graph is then polished before it is finally translated into an
+ONNX graph.
+
+The main advantage of this approach is that the FX graph is captured using
+bytecode analysis that preserves the dynamic nature of the model instead of
+using traditional static tracing techniques.
+
+The exporter is designed to be modular and extensible. It is composed of the
+following components:
+
+  * ONNX Exporter: `Exporter` main class that orchestrates the export process.
+  * ONNX Export Options: `ExportOptions` has a set of options that control the export process.
+  * ONNX Registry: `OnnxRegistry` is the registry of ONNX operators and functions.
+  * FX Graph Extractor: `FXGraphExtractor` extracts the FX graph from the PyTorch model.
+  * Fake Mode: `ONNXFakeContext` is a context manager that enables fake mode for large scale models.
+  * ONNX Export Output: `ExportOutput` is the output of the exporter that contains the exported ONNX graph and diagnostics.
+  * ONNX Export Output Serializer: `ExportOutputSerializer` serializes the exported model to a file.
+  * ONNX Diagnostic Options: `DiagnosticOptions` has a set of options that control the diagnostics emitted by the exporter.
+
+## Dependencies
+
+The ONNX exporter depends on extra Python packages:
+
+  * ONNX
+  * ONNX Script
+
+They can be installed through pip:
+
+    
+    pip install --upgrade onnx onnxscript
+    
+## A simple example
+
+See below a demonstration of exporter API in action with a simple Multilayer
+Perceptron (MLP) as example:
+
+    
+    import torch
+    
+    class MLPModel(nn.Module):
+      def __init__(self):
+          super().__init__()
+          self.fc0 = nn.Linear(8, 8, bias=True)
+          self.fc1 = nn.Linear(8, 4, bias=True)
+          self.fc2 = nn.Linear(4, 2, bias=True)
+          self.fc3 = nn.Linear(2, 2, bias=True)
+    
+      def forward(self, tensor_x: torch.Tensor):
+          tensor_x = self.fc0(tensor_x)
+          tensor_x = torch.sigmoid(tensor_x)
+          tensor_x = self.fc1(tensor_x)
+          tensor_x = torch.sigmoid(tensor_x)
+          tensor_x = self.fc2(tensor_x)
+          tensor_x = torch.sigmoid(tensor_x)
+          output = self.fc3(tensor_x)
+          return output
+    
+    model = MLPModel()
+    tensor_x = torch.rand((97, 8), dtype=torch.float32)
+    export_output = torch.onnx.dynamo_export(model, tensor_x)
+    
+As the code above shows, all you need is to provide
+`torch.onnx.dynamo_export()` with an instance of the model and its input. The
+exporter will then return an instance of `torch.onnx.ExportOutput` that
+contains the exported ONNX graph along with extra information.
+
+The in-memory model available through `export_output.model_proto` is an
+`onnx.ModelProto` object in compliance with the ONNX IR spec. The ONNX model
+may then be serialized into a Protobuf file using the
+`torch.onnx.ExportOutput.save()` API.
+
+    
+    export_output.save("mlp.onnx")
+    
+## Inspecting the ONNX model using GUI
+
+You can view the exported model using Netron.
+
+![MLP model as viewed using
+Netron](data:image/png;base64,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)
+
+Note that each layer is represented in a rectangular box with a f icon in the
+top right corner.
+
+![ONNX function highlighted on MLP
+model](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAWcAAACHCAMAAAD9VWiJAAAAVFBMVEUAAAA8PDyCgoJmZmaYmJgYGBgcHBz////tHCQzMzPy8vLV1dW8vLz4+Pjk5OScnJxdXV1CQkKkpKQtLS3s7OzZ2dlHR0fExMRYWFixsbG6uroPDw/WcGLoAAAIYUlEQVR42u2di3ajIBCGDWZDvcUUb0n7/u+5zACKeCUxbUyHc3abIOD4+ftDnFwCvrtSXPcXMw+IM3EmzsSZOBNn4kyc7yofuhDnpyO2CnF+PuMl1MR5Q8ozpHfIObi+LuVJ0sT5EcoT9cR5Q8xzG4nzNpj9GxDnbVfLU22I82Zinm1GnDd/6TfacmecS8O5fFnM4213xvkcIuf48ktyvrv13nwjPMRBUJ2Ov4L5gfZ743wOTkHwfXpxzMMeu5sHw0CW/JVNY7TL7jifJebXl/Ogz/7WdeEvyfmxXvvjLAX9G3J+8PSMxXxk9SGiYoritbLx4cpu6zhX16goTv+o6KJwubWnaBzRqSiiMB6CHnAWUfQdUOmKojWojv5NdThFUbnIuYwKQjvkHHhwltsuA0G7nFlEZNfIeZbzdyTcGdThfCbTWCfnWc7Bv3qB8xfJeQvO39F5njPZxkrbmOccRF+OQTucQ5oF18l5ifPRMQ7iTJyJM3FeybkFfR/nz3O6yVHkGeuesJhNtUsS+e/86Tn65znxCIXz3APzdpznWL445zS++HK+xPnYARrOzuYB588z74W3Y84eRXP2isTuwjLObc5wv3uesysC4ryGc5r09ZykC3q+xOm9voE5i0SdW6DB4jyGk5rI6lSGkarqFoQ+53nMYuzXwjuesYOuNMPhQPFNPkxBCnBcijNUXyBye3z0jcTaDVyoeKVCO7XfPGvbt76RBlakRqUmhCRJ24sdjkrWwSbs6+kbg83eek4hIviPxSWDShnZRcijTNVjAwIoJjLEnON/eXcJAspMxsGy3BoOO6uNNmeslphw57chZ7ObS6wdO83VVZFn58vQnyFIEykEhbpLmGqRxImjZ4xb+HOG05M8xFlfEPIYWZbaRwBwrAsdjh1JYqjWBITdkAoM0g2nrtPU5YxGIp84HtJyNrtJlebzNtLcNtAeZxheDqtiMvYAXRPbKnI8eemd82DuGpUvZ22gMnCUozFKFbSq6gwU4lR77KYFBKaiBrrtcKpF7nJW1Yn0x17knW+o3aj9ayWAkfWdvu8bKlIVLIYD8pOnpTd3QdzWyfXknLprIW/OKmL5xwIWdNH7cm6HUydsyFmFkcD13rN/l7Nql8oOudJzbx4b5Yw9QNhyYNRz4ijSGsOT82CefkDPm3Du9DzB2Qo44fk059QZfpmzEWtuLGcNZwN6nvNw+eXvz7nxZ4xTXyD3cu6GS1t/1set/dnCZUXvcm4vVO0DKzi3o7Uz3oCzBdOP88hWj/sbGIdaILTmhTMarDfu49wNhwPlHC9hWANwa70hVwTsNhi+xxm7fyYXeIxLikXOaqZkCT6+xGOcVXS99cZPcJaOlqh1tLW4QGfM7+bcDofz11nAgUGVMOtnHD8xU9UkZzP9tZ37nPV7eHucsSmeZvknH/MNKzo/zr1JmO7XPS2fMny5ujHni3pHyMjLXD29e99jWzn8Fs0Xw0xbUrOc85E9as6T+UHS89o7o6vuixJn4rwTg17D+YM4Pwx6NWdOnJ/M+YM4Pw56mfPc+5+J8w9xjk5U3KKAOZVRMddFcp79fEp4oDIsCplPj+j4Mc855FQ2+Pyg4cyJ81M/2RYtfB6WOP/M57uJ8yagP4jzYxa91fdvEOfHQa/5PhnivIjv464TQpy3BT3ViDhvSbptEB1/hXNZi8ltoi73B3oMtb3Rh3NVBGGmH2dhwKZ2zoIOohhvJtRATVHx3vhBA0MLvkfQPdZuvQfnsg5azvi2Vh/OWWgjLetmvLKqK/iChJLvlfTU9+V6cK6K7oJm9Yyee8LVzcraRmrkHF6tSsCbhXAC2I4Ezdd9//N6zg2m3fEPQ9EyXR1mUumNrGikmQTyXICeZVV9k5skZyHdACyhOzFazuW1Ac5V0aBfg18oKaOq34N0dx/Jj7MIHM6gcrlJZGFd1bAxzCTnEh8iZyh10+Os5cxEiXou6xuCl6dJXzGM8b2VhS/Y9vQNyU8YE+6MV9QFqwoG0oanknOjdA2cw6wqisr2DS3nRl4IyjdUBTxplV7xPZbp1Ycn586jDWfpwF8hC6VJNEq7yBltuVG+gd7c82fUM5iD1vO1AbwCBmxwVMH4mxV/PTc8u9mcpXSLRhRMylovR5Bzq+cRzjjbqbMiLw8ELv2547xXOW/HGRd0nT+bGQ8cGqdDBCdrq6L1Z8PZXgg2en3YA6p4N28pZ/91nUCUFmeUrfJtBI2cYdYMjxZn6McsQYshZ3ydIt5TzvyJr7sl9Uldzr4UYe8n52dxzkI1Jd7Dcner59/m3N4MocJ/6X4dcSbOxJk4UyHOxJk4E+c9crayrk1REecFzuN5WJMNFNOvsu2s6zu+qN6W80QedplzL+v6jjeJtuU8kYe1s9vzclZZV8GIM/fPwwJnBu+7EHojJAJC/NOXs866mqfEeZbzIA+r7vwHkE1hKkcCiSubs5N1Nc+J84xvDPOw+EAKWGh/lg8bZt+qG2Rd1Xs0iPMc55E8rM6piFbP6t0a3frNybq2SSviPKtnNw/LMDMF2W5W1vo9M6BqawnYWFnXvynnDfKwyp/rEjkrPbeNtLP3sq5/Us4b5GFZcAwDTLSib3yFirNFs5d1/Zty/pnX3XbWVfzNbNbP3Edi7lsYibP7+yk1p7LBFa1/P2WSc6p/yIbKQ+U2wDj4fStBlDYwziuf58xZVBKmR0sT3ZY488OVOD1YztHwHuWAcxIdUkL1kGlEI4uJkd/hPUZ1eKRyZwnrwZpugjNvjiH93vGd5cBEwldyfvES7DBm4kyciTNxJs7EmTjvLOQrcSbOxJk4E2fiTJyJM3EmzsSZOL9WKYgzcSbOxJk4E2fiTJyJ81tw3mX5Dwp+aBv0HFzeAAAAAElFTkSuQmCC)
+
+By expanding it, the function body is shown.
+
+![ONNX function
+body](data:image/png;base64,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)
+
+The function body is a sequence of ONNX operators or other functions.
+
+## Diagnosing issues with SARIF
+
+ONNX diagnostics goes beyond regular logs through the adoption of Static
+Analysis Results Interchange Format (aka SARIF) to help users debug and
+improve their model using a GUI, such as Visual Studio Code’s SARIF Viewer.
+
+The main advantages are:
+
+  * The diagnostics are emitted in machine parseable Static Analysis Results Interchange Format (SARIF).
+  * A new clearer, structured way to add new and keep track of diagnostic rules.
+  * Serve as foundation for more future improvements consuming the diagnostics.
+
+ONNX Diagnostic SARIF Rules
+
+  * FXE0007:fx-graph-to-onnx
+  * FXE0008:fx-node-to-onnx
+  * FXE0010:fx-pass
+  * FXE0011:no-symbolic-function-for-call-function
+  * FXE0012:unsupported-fx-node-analysis
+  * FXE0013:op-level-debugging
+  * FXE0014:find-opschema-matched-symbolic-function
+  * FXE0015:fx-node-insert-type-promotion
+  * FXE0016:find-operator-overloads-in-onnx-registry
+
+## API Reference
+
+`torch.onnx.dynamo_export(model, /, *model_args, export_options=None,
+**model_kwargs)`
+
+    
+Export a torch.nn.Module to an ONNX graph.
+
+Parameters
+
+    
+  * model (Union[Module, Callable]) – The PyTorch model to be exported to ONNX.
+  * model_args – Positional inputs to `model`.
+  * model_kwargs – Keyword inputs to `model`.
+  * export_options (Optional[ExportOptions]) – Options to influence the export to ONNX.
+
+Returns
+
+    
+An in-memory representation of the exported ONNX model.
+
+Return type
+
+    
+ExportOutput
+
+Example 1 - Simplest export
+
+    
+    class MyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(2, 2)
+        def forward(self, x, bias=None):
+            out = self.linear(x)
+            out = out + bias
+            return out
+    model = MyModel()
+    kwargs = {"bias": 3.}
+    args = (torch.randn(2, 2, 2),)
+    export_output = torch.onnx.dynamo_export(
+        model,
+        *args,
+        **kwargs).save("my_simple_model.onnx")
+    
+Example 2 - Exporting with dynamic shapes
+
+    
+    # The previous model can be exported with dynamic shapes
+    export_options = torch.onnx.ExportOptions(dynamic_shapes=True)
+    export_output = torch.onnx.dynamo_export(
+        model,
+        *args,
+        **kwargs,
+        export_options=export_options)
+    export_output.save("my_dynamic_model.onnx")
+    
+By printing input dynamic dimensions we can see the input shape is no longer
+(2,2,2)
+
+    
+    >>> print(export_output.model_proto.graph.input[0])
+    name: "arg0"
+    type {
+      tensor_type {
+        elem_type: 1
+        shape {
+          dim {
+            dim_param: "arg0_dim_0"
+          }
+          dim {
+            dim_param: "arg0_dim_1"
+          }
+          dim {
+            dim_param: "arg0_dim_2"
+          }
+        }
+      }
+    }
+    
+`class torch.onnx.ExportOptions(*, dynamic_shapes=None, op_level_debug=None,
+fake_context=None, onnx_registry=None, diagnostic_options=None)`
+
+    
+Options to influence the TorchDynamo ONNX exporter.
+
+Variables
+
+    
+  * dynamic_shapes (Optional[bool]) – Shape information hint for input/output tensors. When `None`, the exporter determines the most compatible setting. When `True`, all input shapes are considered dynamic. When `False`, all input shapes are considered static.
+  * op_level_debug (Optional[bool]) – Whether to export the model with op-level debug information
+  * diagnostic_options (DiagnosticOptions) – The diagnostic options for the exporter.
+  * fake_context (Optional[ONNXFakeContext]) – The fake context used for symbolic tracing.
+  * onnx_registry (Optional[OnnxRegistry]) – The ONNX registry used to register ATen operators to ONNX functions.
+
+`torch.onnx.enable_fake_mode()`
+
+    
+Enable fake mode for the duration of the context.
+
+Internally it instantiates a `torch._subclasses.fake_tensor.FakeTensorMode`
+context manager that converts user input and model parameters into
+`torch._subclasses.fake_tensor.FakeTensor`.
+
+A `torch._subclasses.fake_tensor.FakeTensor` is a `torch.Tensor` with the
+ability to run PyTorch code without having to actually do computation through
+tensors allocated on a `meta` device. Because there is no actual data being
+allocated on the device, this API allows for exporting large models without
+the actual memory footprint needed for executing it.
+
+It is highly recommended to enable fake mode when exporting models that are
+too large to fit into memory.
+
+Returns
+
+    
+A `ONNXFakeContext` object that must be passed to `dynamo_export()` through
+the `ExportOptions.fake_context` argument.
+
+Example:
+
+    
+    # xdoctest: +REQUIRES(env:TORCH_DOCTEST_ONNX)
+    >>> import torch
+    >>> import torch.onnx
+    >>> class MyModel(torch.nn.Module):  # Dummy model
+    ...     def __init__(self) -> None:
+    ...         super().__init__()
+    ...         self.linear = torch.nn.Linear(2, 2)
+    ...     def forward(self, x):
+    ...         out = self.linear(x)
+    ...         return out
+    >>> with torch.onnx.enable_fake_mode() as fake_context:
+    ...     my_nn_module = MyModel()
+    ...     arg1 = torch.randn(2, 2, 2)  # positional input 1
+    >>> export_options = torch.onnx.ExportOptions(fake_context=fake_context)
+    >>> export_output = torch.onnx.dynamo_export(
+    ...     my_nn_module,
+    ...     arg1,
+    ...     export_options=export_options
+    ... )
+    >>> # Saving model WITHOUT initializers
+    >>> export_output.save("my_model_without_initializers.onnx")
+    >>> # Saving model WITH initializers
+    >>> export_output.save("my_model_with_initializers.onnx", model_state_dict=MyModel().state_dict())
+    
+Warning
+
+This API is experimental and is NOT backward-compatible.
+
+`class torch.onnx.ExportOutput(model_proto, input_adapter, output_adapter,
+diagnostic_context, *, fake_context=None, export_exception=None)`
+
+    
+An in-memory representation of a PyTorch model that has been exported to ONNX.
+
+`adapt_torch_inputs_to_onnx(*model_args, **model_kwargs)` [source]
+
+    
+Converts the PyTorch model inputs to exported ONNX model inputs format.
+
+Due to design differences, input/output format between PyTorch model and
+exported ONNX model are often not the same. E.g., None is allowed for PyTorch
+model, but are not supported by ONNX. Nested constructs of tensors are allowed
+for PyTorch model, but only flattened tensors are supported by ONNX, etc.
+
+The actual adapting steps are associated with each individual export. It
+depends on the PyTorch model, the particular set of model_args and
+model_kwargs used for the export, and export options.
+
+This method replays the adapting steps recorded during export.
+
+Parameters
+
+    
+  * model_args – The PyTorch model inputs.
+  * model_kwargs – The PyTorch model keyword inputs.
+
+Returns
+
+    
+A sequence of tensors converted from PyTorch model inputs.
+
+Return type
+
+    
+Sequence[Union[Tensor, int, float, bool]]
+
+Example:
+
+    
+    # xdoctest: +REQUIRES(env:TORCH_DOCTEST_ONNX)
+    >>> import torch
+    >>> import torch.onnx
+    >>> from typing import Dict, Tuple
+    >>> def func_with_nested_input_structure(
+    ...     x_dict: Dict[str, torch.Tensor],
+    ...     y_tuple: Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
+    ... ):
+    ...     if "a" in x_dict:
+    ...         x = x_dict["a"]
+    ...     elif "b" in x_dict:
+    ...         x = x_dict["b"]
+    ...     else:
+    ...         x = torch.randn(3)
+    ...
+    ...     y1, (y2, y3) = y_tuple
+    ...
+    ...     return x + y1 + y2 + y3
+    >>> x_dict = {"a": torch.tensor(1.)}
+    >>> y_tuple = (torch.tensor(2.), (torch.tensor(3.), torch.tensor(4.)))
+    >>> export_output = torch.onnx.dynamo_export(func_with_nested_input_structure, x_dict, y_tuple)
+    >>> print(x_dict, y_tuple)
+    {'a': tensor(1.)} (tensor(2.), (tensor(3.), tensor(4.)))
+    >>> print(export_output.adapt_torch_inputs_to_onnx(x_dict, y_tuple))
+    (tensor(1.), tensor(2.), tensor(3.), tensor(4.))
+    
+Warning
+
+This API is experimental and is NOT backward-compatible.
+
+`adapt_torch_outputs_to_onnx(model_outputs)` [source]
+
+    
+Converts the PyTorch model outputs to exported ONNX model outputs format.
+
+Due to design differences, input/output format between PyTorch model and
+exported ONNX model are often not the same. E.g., None is allowed for PyTorch
+model, but are not supported by ONNX. Nested constructs of tensors are allowed
+for PyTorch model, but only flattened tensors are supported by ONNX, etc.
+
+The actual adapting steps are associated with each individual export. It
+depends on the PyTorch model, the particular set of model_args and
+model_kwargs used for the export, and export options.
+
+This method replays the adapting steps recorded during export.
+
+Parameters
+
+    
+model_outputs (Any) – The PyTorch model outputs.
+
+Returns
+
+    
+PyTorch model outputs in exported ONNX model outputs format.
+
+Return type
+
+    
+Sequence[Union[Tensor, int, float, bool]]
+
+Example:
+
+    
+    # xdoctest: +REQUIRES(env:TORCH_DOCTEST_ONNX)
+    >>> import torch
+    >>> import torch.onnx
+    >>> def func_returning_tuples(x, y, z):
+    ...     x = x + y
+    ...     y = y + z
+    ...     z = x + y
+    ...     return (x, (y, z))
+    >>> x = torch.tensor(1.)
+    >>> y = torch.tensor(2.)
+    >>> z = torch.tensor(3.)
+    >>> export_output = torch.onnx.dynamo_export(func_returning_tuples, x, y, z)
+    >>> pt_output = func_returning_tuples(x, y, z)
+    >>> print(pt_output)
+    (tensor(3.), (tensor(5.), tensor(8.)))
+    >>> print(export_output.adapt_torch_outputs_to_onnx(pt_output))
+    [tensor(3.), tensor(5.), tensor(8.)]
+    
+Warning
+
+This API is experimental and is NOT backward-compatible.
+
+`property diagnostic_context: diagnostics.DiagnosticContext`
+
+    
+The diagnostic context associated with the export.
+
+`property fake_context: Optional[ONNXFakeContext]`
+
+    
+The fake context associated with the export.
+
+`property model_proto: onnx.ModelProto`
+
+    
+The exported ONNX model as an `onnx.ModelProto`.
+
+`save(destination, *, model_state_dict=None, serializer=None)` [source]
+
+    
+Saves the in-memory ONNX model to `destination` using specified `serializer`.
+
+Parameters
+
+    
+  * destination (Union[str, BufferedIOBase]) – The destination to save the ONNX model. It can be either a string or a file-like object. When used with `model_state_dict`, it must be a string with a full path to the destination. In that case, besides saving the ONNX model, a folder with “_initializers” suffix (without extension) will be created to store the each initializer of the ONNX model in a separate file. For example, if the destination is “/path/model.onnx”, the initializers will be saved in “/path/model_initializers/” folder.
+  * model_state_dict (Optional[Union[Dict[str, Any], str]]) – The state_dict of the PyTorch model containing all weights on it. It can be either a dict as returned by `model.state_dict()`, or a string with a file name. Required when `enable_fake_mode()` is used but real initializers are needed on the ONNX graph. It can be either a string with the path to a checkpoint or a dictionary with the actual model state.
+  * serializer (Optional[ExportOutputSerializer]) – The serializer to use. If not specified, the model will be serialized as Protobuf.
+
+`save_diagnostics(destination)` [source]
+
+    
+Saves the export diagnostics as a SARIF log to the specified destination path.
+
+Parameters
+
+    
+destination (str) – The destination to save the diagnostics SARIF log. It must
+have a `.sarif` extension.
+
+Raises
+
+    
+ValueError – If the destination path does not end with `.sarif` extension.
+
+`class torch.onnx.ExportOutputSerializer(*args, **kwargs)`
+
+    
+Protocol for serializing an ONNX graph into a specific format (e.g. Protobuf).
+Note that this is an advanced usage scenario.
+
+`serialize(export_output, destination)` [source]
+
+    
+Protocol method that must be implemented for serialization.
+
+Parameters
+
+    
+  * export_output (ExportOutput) – Represents the in-memory exported ONNX model
+  * destination (BufferedIOBase) – A binary IO stream or pre-allocated buffer into which the serialized model should be written.
+
+#### Example
+
+A simple serializer that writes the exported `onnx.ModelProto` in Protobuf
+format to `destination`:
+
+    
+    # xdoctest: +REQUIRES(env:TORCH_DOCTEST_ONNX)
+    >>> import io
+    >>> import torch
+    >>> import torch.onnx
+    >>> class MyModel(torch.nn.Module):  # Dummy model
+    ...     def __init__(self) -> None:
+    ...         super().__init__()
+    ...         self.linear = torch.nn.Linear(2, 2)
+    ...     def forward(self, x):
+    ...         out = self.linear(x)
+    ...         return out
+    >>> class ProtobufExportOutputSerializer:
+    ...     def serialize(
+    ...         self, export_output: torch.onnx.ExportOutput, destination: io.BufferedIOBase
+    ...     ) -> None:
+    ...         destination.write(export_output.model_proto.SerializeToString())
+    >>> model = MyModel()
+    >>> arg1 = torch.randn(2, 2, 2)  # positional input 1
+    >>> torch.onnx.dynamo_export(model, arg1).save(
+    ...     destination="exported_model.onnx",
+    ...     serializer=ProtobufExportOutputSerializer(),
+    ... )
+    
+`class torch.onnx.OnnxExporterError(export_output, message)`
+
+    
+Raised when an ONNX exporter error occurs.
+
+This exception is thrown when there’s an error during the ONNX export process.
+It encapsulates the `ExportOutput` object generated until the failure,
+allowing access to the partial export results and associated metadata.
+
+`class torch.onnx.OnnxRegistry`
+
+    
+Registry for ONNX functions.
+
+The registry maintains a mapping from qualified names to symbolic functions
+under a fixed opset version. It supports registering custom onnx-script
+functions and for dispatcher to dispatch calls to the appropriate function.
+
+`get_op_functions(namespace, op_name, overload=None)` [source]
+
+    
+Returns a list of ONNXFunctions for the given op:
+torch.ops.<namespace>.<op_name>.<overload>.
+
+The list is ordered by the time of registration. The custom operators should
+be in the second half of the list.
+
+Parameters
+
+    
+  * namespace (str) – The namespace of the operator to get.
+  * op_name (str) – The name of the operator to get.
+  * overload (Optional[str]) – The overload of the operator to get. If it’s default overload, leave it to None.
+
+Returns
+
+    
+A list of ONNXFunctions corresponding to the given name, or None if the name
+is not in the registry.
+
+Return type
+
+    
+Optional[List[ONNXFunction]]
+
+`is_registered_op(namespace, op_name, overload=None)` [source]
+
+    
+Returns whether the given op is registered:
+torch.ops.<namespace>.<op_name>.<overload>.
+
+Parameters
+
+    
+  * namespace (str) – The namespace of the operator to check.
+  * op_name (str) – The name of the operator to check.
+  * overload (Optional[str]) – The overload of the operator to check. If it’s default overload, leave it to None.
+
+Returns
+
+    
+True if the given op is registered, otherwise False.
+
+Return type
+
+    
+bool
+
+`property opset_version: int`
+
+    
+The ONNX opset version the exporter should target. Defaults to the latest
+supported ONNX opset version: 18. The default version will increment over time
+as ONNX continues to evolve.
+
+`register_op(function, namespace, op_name, overload=None, is_complex=False)`
+[source]
+
+    
+Registers a custom operator: torch.ops.<namespace>.<op_name>.<overload>.
+
+Parameters
+
+    
+  * function (Union[onnxscript.OnnxFunction, onnxscript.TracedOnnxFunction]) – The onnx-sctip function to register.
+  * namespace (str) – The namespace of the operator to register.
+  * op_name (str) – The name of the operator to register.
+  * overload (Optional[str]) – The overload of the operator to register. If it’s default overload, leave it to None.
+  * is_complex (bool) – Whether the function is a function that handles complex valued inputs.
+
+Raises
+
+    
+ValueError – If the name is not in the form of ‘namespace::op’.
+
+`class torch.onnx.DiagnosticOptions(verbosity_level=20,
+warnings_as_errors=False)`
+
+    
+Options for diagnostic context.
+
+Variables
+
+    
+  * verbosity_level (int) – Set the amount of information logged for each diagnostics, equivalent to the ‘level’ in Python logging module.
+  * warnings_as_errors (bool) – When True, warning diagnostics are treated as error diagnostics.
+
+© 2024, PyTorch Contributors  
+PyTorch has a BSD-style license, as found in the LICENSE file.  
+https://pytorch.org/docs/2.1/onnx_dynamo.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

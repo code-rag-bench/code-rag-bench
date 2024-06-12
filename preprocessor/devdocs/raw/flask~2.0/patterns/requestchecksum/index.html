@@ -1,0 +1,37 @@
+<h1>Request Content Checksums</h1> <p>Various pieces of code can consume the request data and preprocess it. For instance JSON data ends up on the request object already read and processed, form data ends up there as well but goes through a different code path. This seems inconvenient when you want to calculate the checksum of the incoming request data. This is necessary sometimes for some APIs.</p> <p>Fortunately this is however very simple to change by wrapping the input stream.</p> <p>The following example calculates the SHA1 checksum of the incoming data as it gets read and stores it in the WSGI environment:</p> <pre data-language="python">import hashlib
+
+class ChecksumCalcStream(object):
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._hash = hashlib.sha1()
+
+    def read(self, bytes):
+        rv = self._stream.read(bytes)
+        self._hash.update(rv)
+        return rv
+
+    def readline(self, size_hint):
+        rv = self._stream.readline(size_hint)
+        self._hash.update(rv)
+        return rv
+
+def generate_checksum(request):
+    env = request.environ
+    stream = ChecksumCalcStream(env['wsgi.input'])
+    env['wsgi.input'] = stream
+    return stream._hash
+</pre> <p>To use this, all you need to do is to hook the calculating stream in before the request starts consuming data. (Eg: be careful accessing <code>request.form</code> or anything of that nature. <code>before_request_handlers</code> for instance should be careful not to access it).</p> <p>Example usage:</p> <pre data-language="python">@app.route('/special-api', methods=['POST'])
+def special_api():
+    hash = generate_checksum(request)
+    # Accessing this parses the input stream
+    files = request.files
+    # At this point the hash is fully constructed.
+    checksum = hash.hexdigest()
+    return f"Hash was: {checksum}"
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/patterns/requestchecksum/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/patterns/requestchecksum/</a>
+  </p>
+</div>

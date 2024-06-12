@@ -1,0 +1,415 @@
+<ul> <li><a class="reference internal" href="#supported-type" id="id8">Types</a></li> <li><a class="reference internal" href="#expressions" id="id9">Expressions</a></li> <li><a class="reference internal" href="#statements" id="id10">Statements</a></li> <li><a class="reference internal" href="#variable-resolution" id="id11">Variable Resolution</a></li> <li><a class="reference internal" href="#use-of-python-values" id="id12">Use of Python Values</a></li> </ul>
+   <h1 id="language-reference">TorchScript Language Reference</h1> <p id="torchscript-language-reference">TorchScript is a statically typed subset of Python that can either be written directly (using the <a class="reference internal" href="generated/torch.jit.script#torch.jit.script" title="torch.jit.script"><code>@torch.jit.script</code></a> decorator) or generated automatically from Python code via tracing. When using tracing, code is automatically converted into this subset of Python by recording only the actual operators on tensors and simply executing and discarding the other surrounding Python code.</p> <p>When writing TorchScript directly using <code>@torch.jit.script</code> decorator, the programmer must only use the subset of Python supported in TorchScript. This section documents what is supported in TorchScript as if it were a language reference for a stand alone language. Any features of Python not mentioned in this reference are not part of TorchScript. See <code>Builtin Functions</code> for a complete reference of available Pytorch tensor methods, modules, and functions.</p> <p>As a subset of Python, any valid TorchScript function is also a valid Python function. This makes it possible to <code>disable TorchScript</code> and debug the function using standard Python tools like <code>pdb</code>. The reverse is not true: there are many valid Python programs that are not valid TorchScript programs. Instead, TorchScript focuses specifically on the features of Python that are needed to represent neural network models in PyTorch.</p>  <h2 id="id1">Types</h2> <p id="supported-type">The largest difference between TorchScript and the full Python language is that TorchScript only supports a small set of types that are needed to express neural net models. In particular, TorchScript supports:</p> <table class="docutils colwidths-auto align-default"> <thead> <tr>
+<th class="head"><p>Type</p></th> <th class="head"><p>Description</p></th> </tr> </thead>  <tr>
+<td><p><code>Tensor</code></p></td> <td><p>A PyTorch tensor of any dtype, dimension, or backend</p></td> </tr> <tr>
+<td><p><code>Tuple[T0, T1, ..., TN]</code></p></td> <td><p>A tuple containing subtypes <code>T0</code>, <code>T1</code>, etc. (e.g. <code>Tuple[Tensor, Tensor]</code>)</p></td> </tr> <tr>
+<td><p><code>bool</code></p></td> <td><p>A boolean value</p></td> </tr> <tr>
+<td><p><code>int</code></p></td> <td><p>A scalar integer</p></td> </tr> <tr>
+<td><p><code>float</code></p></td> <td><p>A scalar floating point number</p></td> </tr> <tr>
+<td><p><code>str</code></p></td> <td><p>A string</p></td> </tr> <tr>
+<td><p><code>List[T]</code></p></td> <td><p>A list of which all members are type <code>T</code></p></td> </tr> <tr>
+<td><p><code>Optional[T]</code></p></td> <td><p>A value which is either None or type <code>T</code></p></td> </tr> <tr>
+<td><p><code>Dict[K, V]</code></p></td> <td><p>A dict with key type <code>K</code> and value type <code>V</code>. Only <code>str</code>, <code>int</code>, and <code>float</code> are allowed as key types.</p></td> </tr> <tr>
+<td><p><code>T</code></p></td> <td><p>A <a class="reference internal" href="#torchscript-class">TorchScript Class</a></p></td> </tr> <tr>
+<td><p><code>E</code></p></td> <td><p>A <a class="reference internal" href="#torchscript-enum">TorchScript Enum</a></p></td> </tr> <tr>
+<td><p><code>NamedTuple[T0, T1, ...]</code></p></td> <td><p>A <a class="reference external" href="https://docs.python.org/3/library/collections.html#collections.namedtuple" title="(in Python v3.9)"><code>collections.namedtuple</code></a> tuple type</p></td> </tr>  </table> <p>Unlike Python, each variable in TorchScript function must have a single static type. This makes it easier to optimize TorchScript functions.</p> <p>Example (a type mismatch)</p> <pre data-language="python">import torch
+
+@torch.jit.script
+def an_error(x):
+    if x:
+        r = torch.rand(1)
+    else:
+        r = 4
+    return r
+</pre> <pre data-language="none">Traceback (most recent call last):
+  ...
+RuntimeError: ...
+
+Type mismatch: r is set to type Tensor in the true branch and type int in the false branch:
+@torch.jit.script
+def an_error(x):
+    if x:
+    ~~~~~
+        r = torch.rand(1)
+        ~~~~~~~~~~~~~~~~~
+    else:
+    ~~~~~
+        r = 4
+        ~~~~~ &lt;--- HERE
+    return r
+and was used here:
+    else:
+        r = 4
+    return r
+           ~ &lt;--- HERE...
+</pre>  <h3 id="unsupported-typing-constructs">Unsupported Typing Constructs</h3> <p>TorchScript does not support all features and types of the <a class="reference external" href="https://docs.python.org/3/library/typing.html#module-typing" title="(in Python v3.9)"><code>typing</code></a> module. Some of these are more fundamental things that are unlikely to be added in the future while others may be added if there is enough user demand to make it a priority.</p> <p>These types and features from the <a class="reference external" href="https://docs.python.org/3/library/typing.html#module-typing" title="(in Python v3.9)"><code>typing</code></a> module are unavailble in TorchScript.</p> <table class="docutils colwidths-auto align-default"> <thead> <tr>
+<th class="head"><p>Item</p></th> <th class="head"><p>Description</p></th> </tr> </thead>  <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.9)"><code>typing.Any</code></a></p></td> <td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Any" title="(in Python v3.9)"><code>typing.Any</code></a> is currently in development but not yet released</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.NoReturn" title="(in Python v3.9)"><code>typing.NoReturn</code></a></p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Union" title="(in Python v3.9)"><code>typing.Union</code></a></p></td> <td><p>Unlikely to be implemented (however <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.9)"><code>typing.Optional</code></a> is supported)</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Sequence" title="(in Python v3.9)"><code>typing.Sequence</code></a></p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.9)"><code>typing.Callable</code></a></p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Literal" title="(in Python v3.9)"><code>typing.Literal</code></a></p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.ClassVar" title="(in Python v3.9)"><code>typing.ClassVar</code></a></p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Final" title="(in Python v3.9)"><code>typing.Final</code></a></p></td> <td><p>This is supported for <a class="reference internal" href="#module-attributes"><span class="std std-ref">module attributes</span></a> class attribute annotations but not for functions</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.AnyStr" title="(in Python v3.9)"><code>typing.AnyStr</code></a></p></td> <td><p>TorchScript does not support <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#bytes" title="(in Python v3.9)"><code>bytes</code></a> so this type is not used</p></td> </tr> <tr>
+<td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.overload" title="(in Python v3.9)"><code>typing.overload</code></a></p></td> <td><p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.overload" title="(in Python v3.9)"><code>typing.overload</code></a> is currently in development but not yet released</p></td> </tr> <tr>
+<td><p>Type aliases</p></td> <td><p>Not implemented</p></td> </tr> <tr>
+<td><p>Nominal vs structural subtyping</p></td> <td><p>Nominal typing is in development, but structural typing is not</p></td> </tr> <tr>
+<td><p>NewType</p></td> <td><p>Unlikely to be implemented</p></td> </tr> <tr>
+<td><p>Generics</p></td> <td><p>Unlikely to be implemented</p></td> </tr>  </table> <p>Any other functionality from the <a class="reference external" href="https://docs.python.org/3/library/typing.html#module-typing" title="(in Python v3.9)"><code>typing</code></a> module not explitily listed in this documentation is unsupported.</p>   <h3 id="default-types">Default Types</h3> <p>By default, all parameters to a TorchScript function are assumed to be Tensor. To specify that an argument to a TorchScript function is another type, it is possible to use MyPy-style type annotations using the types listed above.</p> <pre data-language="python">import torch
+
+@torch.jit.script
+def foo(x, tup):
+    # type: (int, Tuple[Tensor, Tensor]) -&gt; Tensor
+    t0, t1 = tup
+    return t0 + t1 + x
+
+print(foo(3, (torch.rand(3), torch.rand(3))))
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is also possible to annotate types with Python 3 type hints from the <code>typing</code> module.</p> <pre data-language="python">import torch
+from typing import Tuple
+
+@torch.jit.script
+def foo(x: int, tup: Tuple[torch.Tensor, torch.Tensor]) -&gt; torch.Tensor:
+    t0, t1 = tup
+    return t0 + t1 + x
+
+print(foo(3, (torch.rand(3), torch.rand(3))))
+</pre> </div> <p>An empty list is assumed to be <code>List[Tensor]</code> and empty dicts <code>Dict[str, Tensor]</code>. To instantiate an empty list or dict of other types, use <code>Python 3 type hints</code>.</p> <p>Example (type annotations for Python 3):</p> <pre data-language="python">import torch
+import torch.nn as nn
+from typing import Dict, List, Tuple
+
+class EmptyDataStructures(torch.nn.Module):
+    def __init__(self):
+        super(EmptyDataStructures, self).__init__()
+
+    def forward(self, x: torch.Tensor) -&gt; Tuple[List[Tuple[int, float]], Dict[str, int]]:
+        # This annotates the list to be a `List[Tuple[int, float]]`
+        my_list: List[Tuple[int, float]] = []
+        for i in range(10):
+            my_list.append((i, x.item()))
+
+        my_dict: Dict[str, int] = {}
+        return my_list, my_dict
+
+x = torch.jit.script(EmptyDataStructures())
+</pre>   <h3 id="optional-type-refinement">Optional Type Refinement</h3> <p>TorchScript will refine the type of a variable of type <code>Optional[T]</code> when a comparison to <code>None</code> is made inside the conditional of an if-statement or checked in an <code>assert</code>. The compiler can reason about multiple <code>None</code> checks that are combined with <code>and</code>, <code>or</code>, and <code>not</code>. Refinement will also occur for else blocks of if-statements that are not explicitly written.</p> <p>The <code>None</code> check must be within the if-statement’s condition; assigning a <code>None</code> check to a variable and using it in the if-statement’s condition will not refine the types of variables in the check. Only local variables will be refined, an attribute like <code>self.x</code> will not and must assigned to a local variable to be refined.</p> <p>Example (refining types on parameters and locals):</p> <pre data-language="python">import torch
+import torch.nn as nn
+from typing import Optional
+
+class M(nn.Module):
+    z: Optional[int]
+
+    def __init__(self, z):
+        super(M, self).__init__()
+        # If `z` is None, its type cannot be inferred, so it must
+        # be specified (above)
+        self.z = z
+
+    def forward(self, x, y, z):
+        # type: (Optional[int], Optional[int], Optional[int]) -&gt; int
+        if x is None:
+            x = 1
+            x = x + 1
+
+        # Refinement for an attribute by assigning it to a local
+        z = self.z
+        if y is not None and z is not None:
+            x = y + z
+
+        # Refinement via an `assert`
+        assert z is not None
+        x += z
+        return x
+
+module = torch.jit.script(M(2))
+module = torch.jit.script(M(None))
+</pre>   <h3 id="id3">TorchScript Classes</h3> <div class="admonition warning" id="id2"> <p class="admonition-title">Warning</p> <p>TorchScript class support is experimental. Currently it is best suited for simple record-like types (think a <code>NamedTuple</code> with methods attached).</p> </div> <p>Python classes can be used in TorchScript if they are annotated with <a class="reference internal" href="generated/torch.jit.script#torch.jit.script" title="torch.jit.script"><code>@torch.jit.script</code></a>, similar to how you would declare a TorchScript function:</p> <pre data-language="python">@torch.jit.script
+class Foo:
+  def __init__(self, x, y):
+    self.x = x
+
+  def aug_add_x(self, inc):
+    self.x += inc
+</pre> <p>This subset is restricted:</p> <ul> <li>All functions must be valid TorchScript functions (including <code>__init__()</code>).</li> <li>Classes must be new-style classes, as we use <code>__new__()</code> to construct them with pybind11.</li> <li>
+<p>TorchScript classes are statically typed. Members can only be declared by assigning to self in the <code>__init__()</code> method.</p>  <p>For example, assigning to <code>self</code> outside of the <code>__init__()</code> method:</p> <pre data-language="python">@torch.jit.script
+class Foo:
+  def assign_x(self):
+    self.x = torch.rand(2, 3)
+</pre> <p>Will result in:</p> <pre data-language="python">RuntimeError:
+Tried to set nonexistent attribute: x. Did you forget to initialize it in __init__()?:
+def assign_x(self):
+  self.x = torch.rand(2, 3)
+  ~~~~~~~~~~~~~~~~~~~~~~~~ &lt;--- HERE
+</pre>  </li> <li>No expressions except method definitions are allowed in the body of the class.</li> <li>No support for inheritance or any other polymorphism strategy, except for inheriting from <code>object</code> to specify a new-style class.</li> </ul> <p>After a class is defined, it can be used in both TorchScript and Python interchangeably like any other TorchScript type:</p> <pre data-language="python"># Declare a TorchScript class
+@torch.jit.script
+class Pair:
+  def __init__(self, first, second):
+    self.first = first
+    self.second = second
+
+@torch.jit.script
+def sum_pair(p):
+  # type: (Pair) -&gt; Tensor
+  return p.first + p.second
+
+p = Pair(torch.rand(2, 3), torch.rand(2, 3))
+print(sum_pair(p))
+</pre>   <h3 id="id5">TorchScript Enums</h3> <p id="id4">Python enums can be used in TorchScript without any extra annotation or code:</p> <pre data-language="python">from enum import Enum
+
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+@torch.jit.script
+def enum_fn(x: Color, y: Color) -&gt; bool:
+    if x == Color.RED:
+        return True
+
+    return x == y
+</pre> <p>After an enum is defined, it can be used in both TorchScript and Python interchangeably like any other TorchScript type. The type of the values of an enum must be <code>int</code>, <code>float</code>, or <code>str</code>. All values must be of the same type; heterogenous types for enum values are not supported.</p>   <h3 id="named-tuples">Named Tuples</h3> <p>Types produced by <a class="reference external" href="https://docs.python.org/3/library/collections.html#collections.namedtuple" title="(in Python v3.9)"><code>collections.namedtuple</code></a> can be used in TorchScript.</p> <pre data-language="python">import torch
+import collections
+
+Point = collections.namedtuple('Point', ['x', 'y'])
+
+@torch.jit.script
+def total(point):
+    # type: (Point) -&gt; Tensor
+    return point.x + point.y
+
+p = Point(x=torch.rand(3), y=torch.rand(3))
+print(total(p))
+</pre>   <h3 id="jit-iterables">Iterables</h3> <p id="iterables">Some functions (for example, <a class="reference external" href="https://docs.python.org/3/library/functions.html#zip" title="(in Python v3.9)"><code>zip</code></a> and <a class="reference external" href="https://docs.python.org/3/library/functions.html#enumerate" title="(in Python v3.9)"><code>enumerate</code></a>) can only operate on iterable types. Iterable types in TorchScript include <code>Tensor</code>s, lists, tuples, dictionaries, strings, <a class="reference internal" href="generated/torch.nn.modulelist#torch.nn.ModuleList" title="torch.nn.ModuleList"><code>torch.nn.ModuleList</code></a> and <a class="reference internal" href="generated/torch.nn.moduledict#torch.nn.ModuleDict" title="torch.nn.ModuleDict"><code>torch.nn.ModuleDict</code></a>.</p>    <h2 id="expressions">Expressions</h2> <p>The following Python Expressions are supported.</p>  <h3 id="literals">Literals</h3> <pre data-language="python">True
+False
+None
+'string literals'
+"string literals"
+3  # interpreted as int
+3.4  # interpreted as a float
+</pre>  <h4 id="list-construction">List Construction</h4> <p>An empty list is assumed have type <code>List[Tensor]</code>. The types of other list literals are derived from the type of the members. See <a class="reference internal" href="#default-types">Default Types</a> for more details.</p> <pre data-language="python">[3, 4]
+[]
+[torch.rand(3), torch.rand(4)]
+</pre>   <h4 id="tuple-construction">Tuple Construction</h4> <pre data-language="python">(3, 4)
+(3,)
+</pre>   <h4 id="dict-construction">Dict Construction</h4> <p>An empty dict is assumed have type <code>Dict[str, Tensor]</code>. The types of other dict literals are derived from the type of the members. See <a class="reference internal" href="#default-types">Default Types</a> for more details.</p> <pre data-language="python">{'hello': 3}
+{}
+{'a': torch.rand(3), 'b': torch.rand(4)}
+</pre>    <h3 id="variables">Variables</h3> <p>See <a class="reference internal" href="#variable-resolution">Variable Resolution</a> for how variables are resolved.</p> <pre data-language="python">my_variable_name
+</pre>   <h3 id="arithmetic-operators">Arithmetic Operators</h3> <pre data-language="python">a + b
+a - b
+a * b
+a / b
+a ^ b
+a @ b
+</pre>   <h3 id="comparison-operators">Comparison Operators</h3> <pre data-language="python">a == b
+a != b
+a &lt; b
+a &gt; b
+a &lt;= b
+a &gt;= b
+</pre>   <h3 id="logical-operators">Logical Operators</h3> <pre data-language="python">a and b
+a or b
+not b
+</pre>   <h3 id="subscripts-and-slicing">Subscripts and Slicing</h3> <pre data-language="python">t[0]
+t[-1]
+t[0:2]
+t[1:]
+t[:1]
+t[:]
+t[0, 1]
+t[0, 1:2]
+t[0, :1]
+t[-1, 1:, 0]
+t[1:, -1, 0]
+t[i:j, i]
+</pre>   <h3 id="function-calls">Function Calls</h3> <p>Calls to <code>builtin functions</code></p> <pre data-language="python">torch.rand(3, dtype=torch.int)
+</pre> <p>Calls to other script functions:</p> <pre data-language="python">import torch
+
+@torch.jit.script
+def foo(x):
+    return x + 1
+
+@torch.jit.script
+def bar(x):
+    return foo(x)
+</pre>   <h3 id="method-calls">Method Calls</h3> <p>Calls to methods of builtin types like tensor: <code>x.mm(y)</code></p> <p>On modules, methods must be compiled before they can be called. The TorchScript compiler recursively compiles methods it sees when compiling other methods. By default, compilation starts on the <code>forward</code> method. Any methods called by <code>forward</code> will be compiled, and any methods called by those methods, and so on. To start compilation at a method other than <code>forward</code>, use the <a class="reference internal" href="jit#torch.jit.export" title="torch.jit.export"><code>@torch.jit.export</code></a> decorator (<code>forward</code> implicitly is marked <code>@torch.jit.export</code>).</p> <p>Calling a submodule directly (e.g. <code>self.resnet(input)</code>) is equivalent to calling its <code>forward</code> method (e.g. <code>self.resnet.forward(input)</code>).</p> <pre data-language="python">import torch
+import torch.nn as nn
+import torchvision
+
+class MyModule(nn.Module):
+    def __init__(self):
+        super(MyModule, self).__init__()
+        means = torch.tensor([103.939, 116.779, 123.68])
+        self.means = torch.nn.Parameter(means.resize_(1, 3, 1, 1))
+        resnet = torchvision.models.resnet18()
+        self.resnet = torch.jit.trace(resnet, torch.rand(1, 3, 224, 224))
+
+    def helper(self, input):
+        return self.resnet(input - self.means)
+
+    def forward(self, input):
+        return self.helper(input)
+
+    # Since nothing in the model calls `top_level_method`, the compiler
+    # must be explicitly told to compile this method
+    @torch.jit.export
+    def top_level_method(self, input):
+        return self.other_helper(input)
+
+    def other_helper(self, input):
+        return input + 10
+
+# `my_script_module` will have the compiled methods `forward`, `helper`,
+# `top_level_method`, and `other_helper`
+my_script_module = torch.jit.script(MyModule())
+</pre>   <h3 id="ternary-expressions">Ternary Expressions</h3> <pre data-language="python">x if x &gt; y else y
+</pre>   <h3 id="casts">Casts</h3> <pre data-language="python">float(ten)
+int(3.5)
+bool(ten)
+str(2)``
+</pre>   <h3 id="accessing-module-parameters">Accessing Module Parameters</h3> <pre data-language="python">self.my_parameter
+self.my_submodule.my_parameter
+</pre>    <h2 id="statements">Statements</h2> <p>TorchScript supports the following types of statements:</p>  <h3 id="simple-assignments">Simple Assignments</h3> <pre data-language="python">a = b
+a += b # short-hand for a = a + b, does not operate in-place on a
+a -= b
+</pre>   <h3 id="pattern-matching-assignments">Pattern Matching Assignments</h3> <pre data-language="python">a, b = tuple_or_list
+a, b, *c = a_tuple
+</pre> <p>Multiple Assignments</p> <pre data-language="python">a = b, c = tup
+</pre>   <h3 id="print-statements">Print Statements</h3> <pre data-language="python">print("the result of an add:", a + b)
+</pre>   <h3 id="if-statements">If Statements</h3> <pre data-language="python">if a &lt; 4:
+    r = -a
+elif a &lt; 3:
+    r = a + a
+else:
+    r = 3 * a
+</pre> <p>In addition to bools, floats, ints, and Tensors can be used in a conditional and will be implicitly casted to a boolean.</p>   <h3 id="while-loops">While Loops</h3> <pre data-language="python">a = 0
+while a &lt; 4:
+    print(a)
+    a += 1
+</pre>   <h3 id="for-loops-with-range">For loops with range</h3> <pre data-language="python">x = 0
+for i in range(10):
+    x *= i
+</pre>   <h3 id="for-loops-over-tuples">For loops over tuples</h3> <p>These unroll the loop, generating a body for each member of the tuple. The body must type-check correctly for each member.</p> <pre data-language="python">tup = (3, torch.rand(4))
+for x in tup:
+    print(x)
+</pre>   <h3 id="for-loops-over-constant-nn-modulelist">For loops over constant nn.ModuleList</h3> <p>To use a <code>nn.ModuleList</code> inside a compiled method, it must be marked constant by adding the name of the attribute to the <code>__constants__</code> list for the type. For loops over a <code>nn.ModuleList</code> will unroll the body of the loop at compile time, with each member of the constant module list.</p> <pre data-language="python">class SubModule(torch.nn.Module):
+    def __init__(self):
+        super(SubModule, self).__init__()
+        self.weight = nn.Parameter(torch.randn(2))
+
+    def forward(self, input):
+        return self.weight + input
+
+class MyModule(torch.nn.Module):
+    __constants__ = ['mods']
+
+    def __init__(self):
+        super(MyModule, self).__init__()
+        self.mods = torch.nn.ModuleList([SubModule() for i in range(10)])
+
+    def forward(self, v):
+        for module in self.mods:
+            v = module(v)
+        return v
+
+
+m = torch.jit.script(MyModule())
+</pre>   <h3 id="break-and-continue">Break and Continue</h3> <pre data-language="python">for i in range(5):
+    if i == 1:
+    continue
+    if i == 3:
+    break
+    print(i)
+</pre>   <h3 id="return">Return</h3> <pre data-language="python">return a, b
+</pre>    <h2 id="variable-resolution">Variable Resolution</h2> <p>TorchScript supports a subset of Python’s variable resolution (i.e. scoping) rules. Local variables behave the same as in Python, except for the restriction that a variable must have the same type along all paths through a function. If a variable has a different type on different branches of an if statement, it is an error to use it after the end of the if statement.</p> <p>Similarly, a variable is not allowed to be used if it is only <em>defined</em> along some paths through the function.</p> <p>Example:</p> <pre data-language="python">@torch.jit.script
+def foo(x):
+    if x &lt; 0:
+        y = 4
+    print(y)
+</pre> <pre data-language="none">Traceback (most recent call last):
+  ...
+RuntimeError: ...
+
+y is not defined in the false branch...
+@torch.jit.script...
+def foo(x):
+    if x &lt; 0:
+    ~~~~~~~~~
+        y = 4
+        ~~~~~ &lt;--- HERE
+    print(y)
+and was used here:
+    if x &lt; 0:
+        y = 4
+    print(y)
+          ~ &lt;--- HERE...
+</pre> <p>Non-local variables are resolved to Python values at compile time when the function is defined. These values are then converted into TorchScript values using the rules described in <a class="reference internal" href="#use-of-python-values">Use of Python Values</a>.</p>   <h2 id="use-of-python-values">Use of Python Values</h2> <p>To make writing TorchScript more convenient, we allow script code to refer to Python values in the surrounding scope. For instance, any time there is a reference to <code>torch</code>, the TorchScript compiler is actually resolving it to the <code>torch</code> Python module when the function is declared. These Python values are not a first class part of TorchScript. Instead they are de-sugared at compile-time into the primitive types that TorchScript supports. This depends on the dynamic type of the Python valued referenced when compilation occurs. This section describes the rules that are used when accessing Python values in TorchScript.</p>  <h3 id="functions">Functions</h3> <p>TorchScript can call Python functions. This functionality is very useful when incrementally converting a model to TorchScript. The model can be moved function-by-function to TorchScript, leaving calls to Python functions in place. This way you can incrementally check the correctness of the model as you go.</p> <dl class="function"> <dt id="torch.jit.is_scripting">
+<code>torch.jit.is_scripting()</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/_jit_internal.html#is_scripting"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Function that returns True when in compilation and False otherwise. This is useful especially with the @unused decorator to leave code in your model that is not yet TorchScript compatible. .. testcode:</p> <pre data-language="python">import torch
+
+@torch.jit.unused
+def unsupported_linear_op(x):
+    return x
+
+def linear(x):
+   if not torch.jit.is_scripting():
+      return torch.linear(x)
+   else:
+      return unsupported_linear_op(x)
+</pre> </dd>
+</dl>   <h3 id="attribute-lookup-on-python-modules">Attribute Lookup On Python Modules</h3> <p>TorchScript can lookup attributes on modules. <code>Builtin functions</code> like <code>torch.add</code> are accessed this way. This allows TorchScript to call functions defined in other modules.</p>   <h3 id="constant">Python-defined Constants</h3> <p id="python-defined-constants">TorchScript also provides a way to use constants that are defined in Python. These can be used to hard-code hyper-parameters into the function, or to define universal constants. There are two ways of specifying that a Python value should be treated as a constant.</p> <ol class="arabic simple"> <li>Values looked up as attributes of a module are assumed to be constant:</li> </ol> <pre data-language="python">import math
+import torch
+
+@torch.jit.script
+def fn():
+    return math.pi
+</pre> <ol class="arabic simple" start="2"> <li>Attributes of a ScriptModule can be marked constant by annotating them with <code>Final[T]</code>
+</li> </ol> <pre data-language="python">import torch
+import torch.nn as nn
+
+class Foo(nn.Module):
+    # `Final` from the `typing_extensions` module can also be used
+    a : torch.jit.Final[int]
+
+    def __init__(self):
+        super(Foo, self).__init__()
+        self.a = 1 + 4
+
+    def forward(self, input):
+        return self.a + input
+
+f = torch.jit.script(Foo())
+</pre> <p>Supported constant Python types are</p> <ul class="simple"> <li><code>int</code></li> <li><code>float</code></li> <li><code>bool</code></li> <li><code>torch.device</code></li> <li><code>torch.layout</code></li> <li><code>torch.dtype</code></li> <li>tuples containing supported types</li> <li>
+<code>torch.nn.ModuleList</code> which can be used in a TorchScript for loop</li> </ul>   <h3 id="id6">Module Attributes</h3> <p id="module-attributes">The <code>torch.nn.Parameter</code> wrapper and <code>register_buffer</code> can be used to assign tensors to a module. Other values assigned to a module that is compiled will be added to the compiled module if their types can be inferred. All <a class="reference internal" href="#types">types</a> available in TorchScript can be used as module attributes. Tensor attributes are semantically the same as buffers. The type of empty lists and dictionaries and <code>None</code> values cannot be inferred and must be specified via <a class="reference external" href="https://www.python.org/dev/peps/pep-0526/#class-and-instance-variable-annotations">PEP 526-style</a> class annotations. If a type cannot be inferred and is not explicilty annotated, it will not be added as an attribute to the resulting <code>ScriptModule</code>.</p> <p>Example:</p> <pre data-language="python">from typing import List, Dict
+
+class Foo(nn.Module):
+    # `words` is initialized as an empty list, so its type must be specified
+    words: List[str]
+
+    # The type could potentially be inferred if `a_dict` (below) was not
+    # empty, but this annotation ensures `some_dict` will be made into the
+    # proper type
+    some_dict: Dict[str, int]
+
+    def __init__(self, a_dict):
+        super(Foo, self).__init__()
+        self.words = []
+        self.some_dict = a_dict
+
+        # `int`s can be inferred
+        self.my_int = 10
+
+    def forward(self, input):
+        # type: (str) -&gt; int
+        self.words.append(input)
+        return self.some_dict[input] + self.my_int
+
+f = torch.jit.script(Foo({'hi': 2}))
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/jit_language_reference.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/jit_language_reference.html</a>
+  </p>
+</div>

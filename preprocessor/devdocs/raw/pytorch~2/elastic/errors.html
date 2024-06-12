@@ -1,0 +1,54 @@
+<h1 id="elastic-errors-api">Error Propagation</h1> <p id="module-torch.distributed.elastic.multiprocessing.errors">Each host in a distributed PyTorch job runs with a single TorchElastic agent, and multiple workers (as children processes of the TorchElastic agent). Since the workers are user-provided (your PyTorch script/job), TorchElastic has a way to propagate errors on the trainers through the agent and up to the scheduler, which ultimately informs the end-user about the state of the job and applies any retry policies.</p> <p>TorchElastic categorizes errors into 3 categories:</p> <table class="docutils colwidths-auto align-default"> <thead> <tr>
+<th class="head"><p>Category</p></th> <th class="head"><p>Sub-Category</p></th> <th class="head"><p>Description</p></th> </tr> </thead>  <tr>
+<td rowspan="2"><p>User Error</p></td> <td><p>Input Error</p></td> <td><p>invalid inputs to TorchElastic APIs (e.g. min &gt; max nodes)</p></td> </tr> <tr>
+<td><p>Worker Failure</p></td> <td><p>any failures on the worker child process</p></td> </tr> <tr>
+<td><p>Platform Error</p></td> <td><p>n/a</p></td> <td><p>failures caused by the agent</p></td> </tr> <tr>
+<td><p>Infra Error</p></td> <td><p>n/a</p></td> <td><p>failures outside the domain of the agent and workers (e.g. host failures)</p></td> </tr>  </table> <p>All errors other than “Worker Failure” are either raised canonically from the agent process or implicitly or explicitly crash the agent process. So the standard language (python) provided exception handling strategies apply.</p> <p>Worker Failures are special because the exception/failure originates on a different process from the agent so the error needs to be propagated inter-process (e.g. the agent cannot simply <code>try-catch</code> an exception raised on the worker process).</p> <p>TorchElastic agents use <a class="reference internal" href="multiprocessing#torch.distributed.elastic.multiprocessing.start_processes" title="torch.distributed.elastic.multiprocessing.start_processes"><code>torch.distributed.elastic.multiprocessing.start_processes()</code></a> to launch the workers which has a simple file based inter-process error propagation built-in.</p> <p>Any function or binary entrypoint decorated with <a class="reference internal" href="#torch.distributed.elastic.multiprocessing.errors.record" title="torch.distributed.elastic.multiprocessing.errors.record"><code>record()</code></a> will write uncaught exceptions (with the trace information) to a file specified by the environment variable <code>TORCHELASTIC_ERROR_FILE</code>. The parent process (e.g. agent) sets this env var on each child it launches, then aggregates the error files for all children, and propagates the one with the <strong>smallest</strong> timestamp (e.g. the <strong>first</strong> error).</p>  <h2 id="methods-and-classes">Methods and Classes</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.errors.record">
+<code>torch.distributed.elastic.multiprocessing.errors.record(fn, error_handler=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/errors.html#record"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Syntactic sugar to record errors/exceptions that happened in the decorated function using the provided <code>error_handler</code>.</p> <p>Using this decorator is equivalent to:</p> <pre data-language="python">error_handler = get_error_handler()
+error_handler.initialize()
+try:
+   foobar()
+except ChildFailedError as e:
+   _, failure = e.get_first_failure()
+   error_handler.dump_error_file(failure.error_file, failure.exitcode)
+   raise
+except Exception as e:
+   error_handler.record(e)
+   raise
+</pre> <div class="admonition important"> <p class="admonition-title">Important</p> <p>use this decorator once per process at the top level method, typically this is the main method.</p> </div> <p>Example</p> <pre data-language="python">@record
+def main():
+    pass
+
+if __name__=="__main__":
+   main()
+</pre> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a>[[…], <em>T</em>]</p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.errors.ChildFailedError">
+<code>class torch.distributed.elastic.multiprocessing.errors.ChildFailedError(name, failures)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/errors.html#ChildFailedError"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Special exception type that can be raised from a function annotated with the <code>@record</code> decorator to have the child process’ (root exception) propagate up the stack as-is (e.g. without being wrapped in the parent’s traceback).</p> <p>Useful in cases where the parent is a simple nanny process and the child (worker) processes are actually doing meaningful compute. In this case, errors typically occur on the child process as the parent is not doing anything non-trivial, and child errors should be propagated to the scheduler for accurate root cause diagnostics.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The propagation relies on error files rather than exception handling to support both function and binary launches.</p> </div> <p>Example:</p> <pre data-language="python"># process tree on a host (container)
+0: scheduler-init-process:
+           |- 1: torchelastic_agent:
+                    |- 2: trainer_0 (ok)
+                    |- 3: trainer_1 (fail) -&gt; error.json
+                    |- ...
+                    |- n+2: trainer_n (ok)
+           |- n+3: other processes
+           |- ...
+</pre> <p>In the example above, trainer 1’s failure (written into error.json) is the root cause and should be reported to the scheduler’s init process. The torchelastic agent raises a <code>ChildFailedError("trainer", {1: "trainer_1/error.json"})</code> upon detecting trainer 1’s failure which would propagate the contents of trainer 1’s error file to the scheduler’s init process.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.errors.ErrorHandler">
+<code>class torch.distributed.elastic.multiprocessing.errors.ErrorHandler</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/errors/error_handler.html#ErrorHandler"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Writes the provided exception object along with some other metadata about the error in a structured way in JSON format to an error file specified by the environment variable: <code>TORCHELASTIC_ERROR_FILE</code>. If this environment variable is not set, then simply logs the contents of what would have been written to the error file.</p> <p>This handler may be subclassed to customize the handling of the error. Subclasses should override <code>initialize()</code> and <code>record_exception()</code>.</p> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.multiprocessing.errors.ProcessFailure">
+<code>class torch.distributed.elastic.multiprocessing.errors.ProcessFailure(local_rank, pid, exitcode, error_file)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/multiprocessing/errors.html#ProcessFailure"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Represents the failed process result. When the worker process fails, it may record failure root cause into the file. Tries to read the failure timestamp from the provided <code>error_file</code>, if the <code>error_file</code> does not exist, the timestamp is the current timestamp (seconds since epoch).</p> <p>The <code>message</code> field is a concise explanation of the failure. If the error file exists then the message is obtained from the error file. Otherwise one is generated based on the failure signature.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is assumed that the <code>error_file</code> is written by <code>torch.distributed.elastic.multiprocessing.errors.error_handler.ErrorHandler</code>. Otherwise the behavior is undefined.</p> </div>  </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/elastic/errors.html" class="_attribution-link">https://pytorch.org/docs/2.1/elastic/errors.html</a>
+  </p>
+</div>

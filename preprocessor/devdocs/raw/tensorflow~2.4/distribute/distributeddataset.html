@@ -1,0 +1,127 @@
+<h1 class="devsite-page-title">tf.distribute.DistributedDataset</h1>       <p>Represents a dataset distributed among devices and machines.</p>  <p>A <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> could be thought of as a "distributed" dataset. When you use <a href="../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> API to scale training to multiple devices or machines, you also need to distribute the input data, which leads to a <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> instance, instead of a <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance in the non-distributed case. In TF 2.x, <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> objects are Python iterables.</p> <blockquote class="note">
+<strong>Note:</strong><span> <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> instances are <em>not</em> of type <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a>. It only supports two usages we will mention below: iteration and <code translate="no" dir="ltr">element_spec</code>. We don't support any other APIs to transform or inspect the dataset.</span>
+</blockquote> <p>There are two APIs to create a <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> object: <a href="strategy#experimental_distribute_dataset"><code translate="no" dir="ltr">tf.distribute.Strategy.experimental_distribute_dataset(dataset)</code></a>and <a href="strategy#distribute_datasets_from_function"><code translate="no" dir="ltr">tf.distribute.Strategy.distribute_datasets_from_function(dataset_fn)</code></a>. <em>When to use which?</em> When you have a <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance, and the regular batch splitting (i.e. re-batch the input <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance with a new batch size that is equal to the global batch size divided by the number of replicas in sync) and autosharding (i.e. the <a href="../data/experimental/autoshardpolicy"><code translate="no" dir="ltr">tf.data.experimental.AutoShardPolicy</code></a> options) work for you, use the former API. Otherwise, if you are <em>not</em> using a canonical <a href="../data/dataset"><code translate="no" dir="ltr">tf.data.Dataset</code></a> instance, or you would like to customize the batch splitting or sharding, you can wrap these logic in a <code translate="no" dir="ltr">dataset_fn</code> and use the latter API. Both API handles prefetch to device for the user. For more details and examples, follow the links to the APIs.</p> <p>There are two main usages of a <code translate="no" dir="ltr">DistributedDataset</code> object:</p> <ol> <li>
+<p>Iterate over it to generate the input for a single device or multiple devices, which is a <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> instance. To do this, you can:</p> <ul> <li>use a pythonic for-loop construct:</li> </ul>
+</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 4
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+dataset = tf.data.Dataset.from_tensors(([1.],[1.])).repeat(4).batch(global_batch_size)
+dist_dataset = strategy.experimental_distribute_dataset(dataset)
+@tf.function
+def train_step(input):
+  features, labels = input
+  return labels - 0.3 * features
+for x in dist_dataset:
+  # train_step trains the model using the dataset elements
+  loss = strategy.run(train_step, args=(x,))
+  print("Loss is", loss)
+    Loss is PerReplica:{
+      0: tf.Tensor(
+    [[0.7]
+     [0.7]], shape=(2, 1), dtype=float32),
+      1: tf.Tensor(
+    [[0.7]
+     [0.7]], shape=(2, 1), dtype=float32)
+    }
+    
+</pre> <pre class="prettyprint" translate="no" dir="ltr" data-language="cpp">Placing the loop inside a &lt;a href="../../tf/function"&gt;&lt;code&gt;tf.function&lt;/code&gt;&lt;/a&gt; will give a performance boost.
+However `break` and `return` are currently not supported if the loop is
+placed inside a &lt;a href="../../tf/function"&gt;&lt;code&gt;tf.function&lt;/code&gt;&lt;/a&gt;. We also don't support placing the loop
+inside a &lt;a href="../../tf/function"&gt;&lt;code&gt;tf.function&lt;/code&gt;&lt;/a&gt; when using
+&lt;a href="../../tf/distribute/experimental/MultiWorkerMirroredStrategy"&gt;&lt;code&gt;tf.distribute.experimental.MultiWorkerMirroredStrategy&lt;/code&gt;&lt;/a&gt; or
+&lt;a href="../../tf/distribute/experimental/TPUStrategy"&gt;&lt;code&gt;tf.distribute.experimental.TPUStrategy&lt;/code&gt;&lt;/a&gt; with multiple workers.
+</pre> <ul> <li>use <code translate="no" dir="ltr">__iter__</code> to create an explicit iterator, which is of type <a href="distributediterator"><code translate="no" dir="ltr">tf.distribute.DistributedIterator</code></a>
+</li> </ul> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 4
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+train_dataset = tf.data.Dataset.from_tensors(([1.],[1.])).repeat(50).batch(global_batch_size)
+train_dist_dataset = strategy.experimental_distribute_dataset(train_dataset)
+@tf.function
+def distributed_train_step(dataset_inputs):
+  def train_step(input):
+    loss = tf.constant(0.1)
+    return loss
+  per_replica_losses = strategy.run(train_step, args=(dataset_inputs,))
+  return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses,axis=None)
+EPOCHS = 2
+STEPS = 3
+for epoch in range(EPOCHS):
+  total_loss = 0.0
+  num_batches = 0
+  dist_dataset_iterator = iter(train_dist_dataset)
+  for _ in range(STEPS):
+    total_loss += distributed_train_step(next(dist_dataset_iterator))
+    num_batches += 1
+  average_train_loss = total_loss / num_batches
+  template = ("Epoch {}, Loss: {:.4f}")
+  print (template.format(epoch+1, average_train_loss))
+    Epoch 1, Loss: 0.2000
+    Epoch 2, Loss: 0.2000
+    
+</pre> <p>To achieve a performance improvement, you can also wrap the <code translate="no" dir="ltr">strategy.run</code> call with a <a href="../range"><code translate="no" dir="ltr">tf.range</code></a> inside a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. This runs multiple steps in a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. Autograph will convert it to a <a href="../while_loop"><code translate="no" dir="ltr">tf.while_loop</code></a> on the worker. However, it is less flexible comparing with running a single step inside <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. For example, you cannot run things eagerly or arbitrary python code within the steps.</p> <ol> <li>
+<p>Inspect the <a href="../typespec"><code translate="no" dir="ltr">tf.TypeSpec</code></a> of the data generated by <code translate="no" dir="ltr">DistributedDataset</code>.</p> <p><a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> generates <a href="distributedvalues"><code translate="no" dir="ltr">tf.distribute.DistributedValues</code></a> as input to the devices. If you pass the input to a <a href="../function"><code translate="no" dir="ltr">tf.function</code></a> and would like to specify the shape and type of each Tensor argument to the function, you can pass a <a href="../typespec"><code translate="no" dir="ltr">tf.TypeSpec</code></a> object to the <code translate="no" dir="ltr">input_signature</code> argument of the <a href="../function"><code translate="no" dir="ltr">tf.function</code></a>. To get the <a href="../typespec"><code translate="no" dir="ltr">tf.TypeSpec</code></a> of the input, you can use the <code translate="no" dir="ltr">element_spec</code> property of the <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> or <a href="distributediterator"><code translate="no" dir="ltr">tf.distribute.DistributedIterator</code></a> object.</p> <p>For example:</p>
+</li> </ol> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 4
+epochs = 1
+steps_per_epoch = 1
+mirrored_strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+dataset = tf.data.Dataset.from_tensors(([2.])).repeat(100).batch(global_batch_size)
+dist_dataset = mirrored_strategy.experimental_distribute_dataset(dataset)
+@tf.function(input_signature=[dist_dataset.element_spec])
+def train_step(per_replica_inputs):
+  def step_fn(inputs):
+    return tf.square(inputs)
+  return mirrored_strategy.run(step_fn, args=(per_replica_inputs,))
+for _ in range(epochs):
+  iterator = iter(dist_dataset)
+  for _ in range(steps_per_epoch):
+    output = train_step(next(iterator))
+    print(output)
+  PerReplica:{
+    0: tf.Tensor(
+  [[4.]
+   [4.]], shape=(2, 1), dtype=float32),
+    1: tf.Tensor(
+  [[4.]
+   [4.]], shape=(2, 1), dtype=float32)
+  }
+  
+</pre> <p>Visit the <a href="https://www.tensorflow.org/tutorials/distribute/input">tutorial</a> on distributed input for more examples and caveats.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">element_spec</code> </td> <td> The type specification of an element of this <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a>. <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 16
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+dataset = tf.data.Dataset.from_tensors(([1.],[2])).repeat(100).batch(global_batch_size)
+dist_dataset = strategy.experimental_distribute_dataset(dataset)
+dist_dataset.element_spec
+(PerReplicaSpec(TensorSpec(shape=(None, 1), dtype=tf.float32, name=None),
+TensorSpec(shape=(None, 1), dtype=tf.float32, name=None)),
+PerReplicaSpec(TensorSpec(shape=(None, 1), dtype=tf.int32, name=None),
+TensorSpec(shape=(None, 1), dtype=tf.int32, name=None)))
+</pre> 
+</td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="__iter__" data-text="__iter__"><code translate="no" dir="ltr">__iter__</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/input_lib.py#L434-L456">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+__iter__()
+</pre> <p>Creates an iterator for the <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a>.</p> <p>The returned iterator implements the Python Iterator protocol.</p> <h4 id="example_usage" data-text="Example usage:">Example usage:</h4> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+global_batch_size = 4
+strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
+dataset = tf.data.Dataset.from_tensor_slices([1, 2, 3, 4]).repeat().batch(global_batch_size)
+distributed_iterator = iter(strategy.experimental_distribute_dataset(dataset))
+print(next(distributed_iterator))
+PerReplica:{
+  0: tf.Tensor([1 2], shape=(2,), dtype=int32),
+  1: tf.Tensor([3 4], shape=(2,), dtype=int32)
+}
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> An <a href="distributediterator"><code translate="no" dir="ltr">tf.distribute.DistributedIterator</code></a> instance for the given <a href="distributeddataset"><code translate="no" dir="ltr">tf.distribute.DistributedDataset</code></a> object to enumerate over the distributed data. </td> </tr> 
+</table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/DistributedDataset" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/DistributedDataset</a>
+  </p>
+</div>

@@ -1,0 +1,322 @@
+<h1>Duplicate Labels</h1> <p><code class="xref py py-class docutils literal notranslate"><span class="pre">Index</span></code> objects are not required to be unique; you can have duplicate row or column labels. This may be a bit confusing at first. If you’re familiar with SQL, you know that row labels are similar to a primary key on a table, and you would never want duplicates in a SQL table. But one of pandas’ roles is to clean messy, real-world data before it goes to some downstream system. And real-world data has duplicates, even in fields that are supposed to be unique.</p> <p>This section describes how duplicate labels change the behavior of certain operations, and how prevent duplicates from arising during operations, or to detect them if they do.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [1]: import pandas as pd
+
+In [2]: import numpy as np
+</pre></div> </div> <section id="consequences-of-duplicate-labels"> <h2>Consequences of Duplicate Labels</h2> <p>Some pandas methods (<code class="xref py py-meth docutils literal notranslate"><span class="pre">Series.reindex()</span></code> for example) just don’t work with duplicates present. The output can’t be determined, and so pandas raises.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [3]: s1 = pd.Series([0, 1, 2], index=["a", "b", "b"])
+
+In [4]: s1.reindex(["a", "b", "c"])
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Input In [4], in &lt;module&gt;
+----&gt; 1 s1.reindex(["a", "b", "c"])
+
+File /pandas/pandas/core/series.py:4669, in Series.reindex(self, *args, **kwargs)
+   4665         raise TypeError(
+   4666             "'index' passed as both positional and keyword argument"
+   4667         )
+   4668     kwargs.update({"index": index})
+-&gt; 4669 return super().reindex(**kwargs)
+
+File /pandas/pandas/core/generic.py:4974, in NDFrame.reindex(self, *args, **kwargs)
+   4971     return self._reindex_multi(axes, copy, fill_value)
+   4973 # perform the reindex on the axes
+-&gt; 4974 return self._reindex_axes(
+   4975     axes, level, limit, tolerance, method, fill_value, copy
+   4976 ).__finalize__(self, method="reindex")
+
+File /pandas/pandas/core/generic.py:4994, in NDFrame._reindex_axes(self, axes, level, limit, tolerance, method, fill_value, copy)
+   4989 new_index, indexer = ax.reindex(
+   4990     labels, level=level, limit=limit, tolerance=tolerance, method=method
+   4991 )
+   4993 axis = self._get_axis_number(a)
+-&gt; 4994 obj = obj._reindex_with_indexers(
+   4995     {axis: [new_index, indexer]},
+   4996     fill_value=fill_value,
+   4997     copy=copy,
+   4998     allow_dups=False,
+   4999 )
+   5000 # If we've made a copy once, no need to make another one
+   5001 copy = False
+
+File /pandas/pandas/core/generic.py:5040, in NDFrame._reindex_with_indexers(self, reindexers, fill_value, copy, allow_dups)
+   5037     indexer = ensure_platform_int(indexer)
+   5039 # TODO: speed up on homogeneous DataFrame objects (see _reindex_multi)
+-&gt; 5040 new_data = new_data.reindex_indexer(
+   5041     index,
+   5042     indexer,
+   5043     axis=baxis,
+   5044     fill_value=fill_value,
+   5045     allow_dups=allow_dups,
+   5046     copy=copy,
+   5047 )
+   5048 # If we've made a copy once, no need to make another one
+   5049 copy = False
+
+File /pandas/pandas/core/internals/managers.py:679, in BaseBlockManager.reindex_indexer(self, new_axis, indexer, axis, fill_value, allow_dups, copy, consolidate, only_slice, use_na_proxy)
+    677 # some axes don't allow reindexing with dups
+    678 if not allow_dups:
+--&gt; 679     self.axes[axis]._validate_can_reindex(indexer)
+    681 if axis &gt;= self.ndim:
+    682     raise IndexError("Requested axis not found in manager")
+
+File /pandas/pandas/core/indexes/base.py:4107, in Index._validate_can_reindex(self, indexer)
+   4105 # trying to reindex on an axis with duplicates
+   4106 if not self._index_as_unique and len(indexer):
+-&gt; 4107     raise ValueError("cannot reindex on an axis with duplicate labels")
+
+ValueError: cannot reindex on an axis with duplicate labels
+</pre></div> </div> <p>Other methods, like indexing, can give very surprising results. Typically indexing with a scalar will <em>reduce dimensionality</em>. Slicing a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> with a scalar will return a <code class="docutils literal notranslate"><span class="pre">Series</span></code>. Slicing a <code class="docutils literal notranslate"><span class="pre">Series</span></code> with a scalar will return a scalar. But with duplicates, this isn’t the case.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [5]: df1 = pd.DataFrame([[0, 1, 2], [3, 4, 5]], columns=["A", "A", "B"])
+
+In [6]: df1
+Out[6]: 
+   A  A  B
+0  0  1  2
+1  3  4  5
+</pre></div> </div> <p>We have duplicates in the columns. If we slice <code class="docutils literal notranslate"><span class="pre">'B'</span></code>, we get back a <code class="docutils literal notranslate"><span class="pre">Series</span></code></p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [7]: df1["B"]  # a series
+Out[7]: 
+0    2
+1    5
+Name: B, dtype: int64
+</pre></div> </div> <p>But slicing <code class="docutils literal notranslate"><span class="pre">'A'</span></code> returns a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [8]: df1["A"]  # a DataFrame
+Out[8]: 
+   A  A
+0  0  1
+1  3  4
+</pre></div> </div> <p>This applies to row labels as well</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [9]: df2 = pd.DataFrame({"A": [0, 1, 2]}, index=["a", "a", "b"])
+
+In [10]: df2
+Out[10]: 
+   A
+a  0
+a  1
+b  2
+
+In [11]: df2.loc["b", "A"]  # a scalar
+Out[11]: 2
+
+In [12]: df2.loc["a", "A"]  # a Series
+Out[12]: 
+a    0
+a    1
+Name: A, dtype: int64
+</pre></div> </div> </section> <section id="duplicate-label-detection"> <h2>Duplicate Label Detection</h2> <p>You can check whether an <code class="xref py py-class docutils literal notranslate"><span class="pre">Index</span></code> (storing the row or column labels) is unique with <code class="xref py py-attr docutils literal notranslate"><span class="pre">Index.is_unique</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [13]: df2
+Out[13]: 
+   A
+a  0
+a  1
+b  2
+
+In [14]: df2.index.is_unique
+Out[14]: False
+
+In [15]: df2.columns.is_unique
+Out[15]: True
+</pre></div> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Checking whether an index is unique is somewhat expensive for large datasets. pandas does cache this result, so re-checking on the same index is very fast.</p> </div> <p><code class="xref py py-meth docutils literal notranslate"><span class="pre">Index.duplicated()</span></code> will return a boolean ndarray indicating whether a label is repeated.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [16]: df2.index.duplicated()
+Out[16]: array([False,  True, False])
+</pre></div> </div> <p>Which can be used as a boolean filter to drop duplicate rows.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [17]: df2.loc[~df2.index.duplicated(), :]
+Out[17]: 
+   A
+a  0
+b  2
+</pre></div> </div> <p>If you need additional logic to handle duplicate labels, rather than just dropping the repeats, using <code class="xref py py-meth docutils literal notranslate"><span class="pre">groupby()</span></code> on the index is a common trick. For example, we’ll resolve duplicates by taking the average of all rows with the same label.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [18]: df2.groupby(level=0).mean()
+Out[18]: 
+     A
+a  0.5
+b  2.0
+</pre></div> </div> </section> <section id="disallowing-duplicate-labels"> <h2>Disallowing Duplicate Labels</h2> <div class="versionadded"> <p><span class="versionmodified added">New in version 1.2.0.</span></p> </div> <p>As noted above, handling duplicates is an important feature when reading in raw data. That said, you may want to avoid introducing duplicates as part of a data processing pipeline (from methods like <a class="reference internal" href="../reference/api/pandas.concat#pandas.concat" title="pandas.concat"><code class="xref py py-meth docutils literal notranslate"><span class="pre">pandas.concat()</span></code></a>, <code class="xref py py-meth docutils literal notranslate"><span class="pre">rename()</span></code>, etc.). Both <code class="xref py py-class docutils literal notranslate"><span class="pre">Series</span></code> and <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code> <em>disallow</em> duplicate labels by calling <code class="docutils literal notranslate"><span class="pre">.set_flags(allows_duplicate_labels=False)</span></code>. (the default is to allow them). If there are duplicate labels, an exception will be raised.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [19]: pd.Series([0, 1, 2], index=["a", "b", "b"]).set_flags(allows_duplicate_labels=False)
+---------------------------------------------------------------------------
+DuplicateLabelError                       Traceback (most recent call last)
+Input In [19], in &lt;module&gt;
+----&gt; 1 pd.Series([0, 1, 2], index=["a", "b", "b"]).set_flags(allows_duplicate_labels=False)
+
+File /pandas/pandas/core/generic.py:438, in NDFrame.set_flags(self, copy, allows_duplicate_labels)
+    436 df = self.copy(deep=copy)
+    437 if allows_duplicate_labels is not None:
+--&gt; 438     df.flags["allows_duplicate_labels"] = allows_duplicate_labels
+    439 return df
+
+File /pandas/pandas/core/flags.py:105, in Flags.__setitem__(self, key, value)
+    103 if key not in self._keys:
+    104     raise ValueError(f"Unknown flag {key}. Must be one of {self._keys}")
+--&gt; 105 setattr(self, key, value)
+
+File /pandas/pandas/core/flags.py:92, in Flags.allows_duplicate_labels(self, value)
+     90 if not value:
+     91     for ax in obj.axes:
+---&gt; 92         ax._maybe_check_unique()
+     94 self._allows_duplicate_labels = value
+
+File /pandas/pandas/core/indexes/base.py:715, in Index._maybe_check_unique(self)
+    712 duplicates = self._format_duplicate_message()
+    713 msg += f"\n{duplicates}"
+--&gt; 715 raise DuplicateLabelError(msg)
+
+DuplicateLabelError: Index has duplicates.
+      positions
+label          
+b        [1, 2]
+</pre></div> </div> <p>This applies to both row and column labels for a <code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [20]: pd.DataFrame([[0, 1, 2], [3, 4, 5]], columns=["A", "B", "C"],).set_flags(
+   ....:     allows_duplicate_labels=False
+   ....: )
+   ....: 
+Out[20]: 
+   A  B  C
+0  0  1  2
+1  3  4  5
+</pre></div> </div> <p>This attribute can be checked or set with <code class="xref py py-attr docutils literal notranslate"><span class="pre">allows_duplicate_labels</span></code>, which indicates whether that object can have duplicate labels.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [21]: df = pd.DataFrame({"A": [0, 1, 2, 3]}, index=["x", "y", "X", "Y"]).set_flags(
+   ....:     allows_duplicate_labels=False
+   ....: )
+   ....: 
+
+In [22]: df
+Out[22]: 
+   A
+x  0
+y  1
+X  2
+Y  3
+
+In [23]: df.flags.allows_duplicate_labels
+Out[23]: False
+</pre></div> </div> <p><code class="xref py py-meth docutils literal notranslate"><span class="pre">DataFrame.set_flags()</span></code> can be used to return a new <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> with attributes like <code class="docutils literal notranslate"><span class="pre">allows_duplicate_labels</span></code> set to some value</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [24]: df2 = df.set_flags(allows_duplicate_labels=True)
+
+In [25]: df2.flags.allows_duplicate_labels
+Out[25]: True
+</pre></div> </div> <p>The new <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> returned is a view on the same data as the old <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>. Or the property can just be set directly on the same object</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [26]: df2.flags.allows_duplicate_labels = False
+
+In [27]: df2.flags.allows_duplicate_labels
+Out[27]: False
+</pre></div> </div> <p>When processing raw, messy data you might initially read in the messy data (which potentially has duplicate labels), deduplicate, and then disallow duplicates going forward, to ensure that your data pipeline doesn’t introduce duplicates.</p> <div class="highlight-python notranslate">
+<div class="highlight"><pre data-language="python">&gt;&gt;&gt; raw = pd.read_csv("...")
+&gt;&gt;&gt; deduplicated = raw.groupby(level=0).first()  # remove duplicates
+&gt;&gt;&gt; deduplicated.flags.allows_duplicate_labels = False  # disallow going forward
+</pre></div> </div> <p>Setting <code class="docutils literal notranslate"><span class="pre">allows_duplicate_labels=True</span></code> on a <code class="docutils literal notranslate"><span class="pre">Series</span></code> or <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> with duplicate labels or performing an operation that introduces duplicate labels on a <code class="docutils literal notranslate"><span class="pre">Series</span></code> or <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> that disallows duplicates will raise an <code class="xref py py-class docutils literal notranslate"><span class="pre">errors.DuplicateLabelError</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [28]: df.rename(str.upper)
+---------------------------------------------------------------------------
+DuplicateLabelError                       Traceback (most recent call last)
+Input In [28], in &lt;module&gt;
+----&gt; 1 df.rename(str.upper)
+
+File /pandas/pandas/core/frame.py:5085, in DataFrame.rename(self, mapper, index, columns, axis, copy, inplace, level, errors)
+   4966 def rename(
+   4967     self,
+   4968     mapper: Renamer | None = None,
+   (...)
+   4976     errors: str = "ignore",
+   4977 ) -&gt; DataFrame | None:
+   4978     """
+   4979     Alter axes labels.
+   4980 
+   (...)
+   5083     4  3  6
+   5084     """
+-&gt; 5085     return super()._rename(
+   5086         mapper=mapper,
+   5087         index=index,
+   5088         columns=columns,
+   5089         axis=axis,
+   5090         copy=copy,
+   5091         inplace=inplace,
+   5092         level=level,
+   5093         errors=errors,
+   5094     )
+
+File /pandas/pandas/core/generic.py:1171, in NDFrame._rename(self, mapper, index, columns, axis, copy, inplace, level, errors)
+   1169     return None
+   1170 else:
+-&gt; 1171     return result.__finalize__(self, method="rename")
+
+File /pandas/pandas/core/generic.py:5549, in NDFrame.__finalize__(self, other, method, **kwargs)
+   5546 for name in other.attrs:
+   5547     self.attrs[name] = other.attrs[name]
+-&gt; 5549 self.flags.allows_duplicate_labels = other.flags.allows_duplicate_labels
+   5550 # For subclasses using _metadata.
+   5551 for name in set(self._metadata) &amp; set(other._metadata):
+
+File /pandas/pandas/core/flags.py:92, in Flags.allows_duplicate_labels(self, value)
+     90 if not value:
+     91     for ax in obj.axes:
+---&gt; 92         ax._maybe_check_unique()
+     94 self._allows_duplicate_labels = value
+
+File /pandas/pandas/core/indexes/base.py:715, in Index._maybe_check_unique(self)
+    712 duplicates = self._format_duplicate_message()
+    713 msg += f"\n{duplicates}"
+--&gt; 715 raise DuplicateLabelError(msg)
+
+DuplicateLabelError: Index has duplicates.
+      positions
+label          
+X        [0, 2]
+Y        [1, 3]
+</pre></div> </div> <p>This error message contains the labels that are duplicated, and the numeric positions of all the duplicates (including the “original”) in the <code class="docutils literal notranslate"><span class="pre">Series</span></code> or <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code></p> <section id="duplicate-label-propagation"> <h3>Duplicate Label Propagation</h3> <p>In general, disallowing duplicates is “sticky”. It’s preserved through operations.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [29]: s1 = pd.Series(0, index=["a", "b"]).set_flags(allows_duplicate_labels=False)
+
+In [30]: s1
+Out[30]: 
+a    0
+b    0
+dtype: int64
+
+In [31]: s1.head().rename({"a": "b"})
+---------------------------------------------------------------------------
+DuplicateLabelError                       Traceback (most recent call last)
+Input In [31], in &lt;module&gt;
+----&gt; 1 s1.head().rename({"a": "b"})
+
+File /pandas/pandas/core/series.py:4598, in Series.rename(self, index, axis, copy, inplace, level, errors)
+   4595     axis = self._get_axis_number(axis)
+   4597 if callable(index) or is_dict_like(index):
+-&gt; 4598     return super()._rename(
+   4599         index, copy=copy, inplace=inplace, level=level, errors=errors
+   4600     )
+   4601 else:
+   4602     return self._set_name(index, inplace=inplace)
+
+File /pandas/pandas/core/generic.py:1171, in NDFrame._rename(self, mapper, index, columns, axis, copy, inplace, level, errors)
+   1169     return None
+   1170 else:
+-&gt; 1171     return result.__finalize__(self, method="rename")
+
+File /pandas/pandas/core/generic.py:5549, in NDFrame.__finalize__(self, other, method, **kwargs)
+   5546 for name in other.attrs:
+   5547     self.attrs[name] = other.attrs[name]
+-&gt; 5549 self.flags.allows_duplicate_labels = other.flags.allows_duplicate_labels
+   5550 # For subclasses using _metadata.
+   5551 for name in set(self._metadata) &amp; set(other._metadata):
+
+File /pandas/pandas/core/flags.py:92, in Flags.allows_duplicate_labels(self, value)
+     90 if not value:
+     91     for ax in obj.axes:
+---&gt; 92         ax._maybe_check_unique()
+     94 self._allows_duplicate_labels = value
+
+File /pandas/pandas/core/indexes/base.py:715, in Index._maybe_check_unique(self)
+    712 duplicates = self._format_duplicate_message()
+    713 msg += f"\n{duplicates}"
+--&gt; 715 raise DuplicateLabelError(msg)
+
+DuplicateLabelError: Index has duplicates.
+      positions
+label          
+b        [0, 1]
+</pre></div> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>This is an experimental feature. Currently, many methods fail to propagate the <code class="docutils literal notranslate"><span class="pre">allows_duplicate_labels</span></code> value. In future versions it is expected that every method taking or returning one or more DataFrame or Series objects will propagate <code class="docutils literal notranslate"><span class="pre">allows_duplicate_labels</span></code>.</p> </div> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2008&ndash;2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/duplicates.html" class="_attribution-link">https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/duplicates.html</a>
+  </p>
+</div>

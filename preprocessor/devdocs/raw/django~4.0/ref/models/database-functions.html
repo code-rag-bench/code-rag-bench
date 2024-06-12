@@ -1,0 +1,874 @@
+<h1 id="database-functions">Database Functions</h1> <p id="s-module-django.db.models.functions">The classes documented below provide a way for users to use functions provided by the underlying database as annotations, aggregations, or filters in Django. Functions are also <a class="reference internal" href="expressions"><span class="doc">expressions</span></a>, so they can be used and combined with other expressions like <a class="reference internal" href="querysets#aggregation-functions"><span class="std std-ref">aggregate functions</span></a>.</p> <p>We’ll be using the following model in examples of each function:</p> <pre data-language="python">class Author(models.Model):
+    name = models.CharField(max_length=50)
+    age = models.PositiveIntegerField(null=True, blank=True)
+    alias = models.CharField(max_length=50, null=True, blank=True)
+    goes_by = models.CharField(max_length=50, null=True, blank=True)
+</pre> <p>We don’t usually recommend allowing <code>null=True</code> for <code>CharField</code> since this allows the field to have two “empty values”, but it’s important for the <code>Coalesce</code> example below.</p>  <h2 id="comparison-functions">Comparison and conversion functions</h2>  <h3 id="cast"><code>Cast</code></h3> <dl class="class" id="s-comparison-and-conversion-functions"> <dt id="django.db.models.functions.Cast">
+<code>class Cast(expression, output_field)</code> </dt> 
+</dl> <p>Forces the result type of <code>expression</code> to be the one from <code>output_field</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Cast
+&gt;&gt;&gt; Author.objects.create(age=25, name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(
+...    age_as_float=Cast('age', output_field=FloatField()),
+... ).get()
+&gt;&gt;&gt; print(author.age_as_float)
+25.0
+</pre>   <h3 id="coalesce"><code>Coalesce</code></h3> <dl class="class" id="s-coalesce"> <dt id="django.db.models.functions.Coalesce">
+<code>class Coalesce(*expressions, **extra)</code> </dt> 
+</dl> <p>Accepts a list of at least two field names or expressions and returns the first non-null value (note that an empty string is not considered a null value). Each argument must be of a similar type, so mixing text and numbers will result in a database error.</p> <p>Usage examples:</p> <pre data-language="python">&gt;&gt;&gt; # Get a screen name from least to most public
+&gt;&gt;&gt; from django.db.models import Sum
+&gt;&gt;&gt; from django.db.models.functions import Coalesce
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith', goes_by='Maggie')
+&gt;&gt;&gt; author = Author.objects.annotate(
+...    screen_name=Coalesce('alias', 'goes_by', 'name')).get()
+&gt;&gt;&gt; print(author.screen_name)
+Maggie
+
+&gt;&gt;&gt; # Prevent an aggregate Sum() from returning None
+&gt;&gt;&gt; # The aggregate default argument uses Coalesce() under the hood.
+&gt;&gt;&gt; aggregated = Author.objects.aggregate(
+...    combined_age=Sum('age'),
+...    combined_age_default=Sum('age', default=0),
+...    combined_age_coalesce=Coalesce(Sum('age'), 0),
+... )
+&gt;&gt;&gt; print(aggregated['combined_age'])
+None
+&gt;&gt;&gt; print(aggregated['combined_age_default'])
+0
+&gt;&gt;&gt; print(aggregated['combined_age_coalesce'])
+0
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>A Python value passed to <code>Coalesce</code> on MySQL may be converted to an incorrect type unless explicitly cast to the correct database type:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import DateTimeField
+&gt;&gt;&gt; from django.db.models.functions import Cast, Coalesce
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; now = timezone.now()
+&gt;&gt;&gt; Coalesce('updated', Cast(now, DateTimeField()))
+</pre> </div>   <h3 id="collate"><code>Collate</code></h3> <dl class="class" id="s-collate"> <dt id="django.db.models.functions.Collate">
+<code>class Collate(expression, collation)</code> </dt> 
+</dl> <div class="versionadded"> <span class="title">New in Django 3.2.</span> </div> <p>Takes an expression and a collation name to query against.</p> <p>For example, to filter case-insensitively in SQLite:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.filter(name=Collate(Value('john'), 'nocase'))
+&lt;QuerySet [&lt;Author: John&gt;, &lt;Author: john&gt;]&gt;
+</pre> <p>It can also be used when ordering, for example with PostgreSQL:</p> <pre data-language="python">&gt;&gt;&gt; Author.objects.order_by(Collate('name', 'et-x-icu'))
+&lt;QuerySet [&lt;Author: Ursula&gt;, &lt;Author: Veronika&gt;, &lt;Author: Ülle&gt;]&gt;
+</pre>   <h3 id="greatest"><code>Greatest</code></h3> <dl class="class" id="s-greatest"> <dt id="django.db.models.functions.Greatest">
+<code>class Greatest(*expressions, **extra)</code> </dt> 
+</dl> <p>Accepts a list of at least two field names or expressions and returns the greatest value. Each argument must be of a similar type, so mixing text and numbers will result in a database error.</p> <p>Usage example:</p> <pre data-language="python">class Blog(models.Model):
+    body = models.TextField()
+    modified = models.DateTimeField(auto_now=True)
+
+class Comment(models.Model):
+    body = models.TextField()
+    modified = models.DateTimeField(auto_now=True)
+    blog = models.ForeignKey(Blog, on_delete=models.CASCADE)
+
+&gt;&gt;&gt; from django.db.models.functions import Greatest
+&gt;&gt;&gt; blog = Blog.objects.create(body='Greatest is the best.')
+&gt;&gt;&gt; comment = Comment.objects.create(body='No, Least is better.', blog=blog)
+&gt;&gt;&gt; comments = Comment.objects.annotate(last_updated=Greatest('modified', 'blog__modified'))
+&gt;&gt;&gt; annotated_comment = comments.get()
+</pre> <p><code>annotated_comment.last_updated</code> will be the most recent of <code>blog.modified</code> and <code>comment.modified</code>.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>The behavior of <code>Greatest</code> when one or more expression may be <code>null</code> varies between databases:</p> <ul class="simple"> <li>PostgreSQL: <code>Greatest</code> will return the largest non-null expression, or <code>null</code> if all expressions are <code>null</code>.</li> <li>SQLite, Oracle, and MySQL: If any expression is <code>null</code>, <code>Greatest</code> will return <code>null</code>.</li> </ul> <p class="last">The PostgreSQL behavior can be emulated using <code>Coalesce</code> if you know a sensible minimum value to provide as a default.</p> </div>   <h3 id="jsonobject"><code>JSONObject</code></h3> <dl class="class" id="s-jsonobject"> <dt id="django.db.models.functions.JSONObject">
+<code>class JSONObject(**fields)</code> </dt> 
+</dl> <div class="versionadded"> <span class="title">New in Django 3.2.</span> </div> <p>Takes a list of key-value pairs and returns a JSON object containing those pairs.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import F
+&gt;&gt;&gt; from django.db.models.functions import JSONObject, Lower
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith', alias='msmith', age=25)
+&gt;&gt;&gt; author = Author.objects.annotate(json_object=JSONObject(
+...     name=Lower('name'),
+...     alias='alias',
+...     age=F('age') * 2,
+... )).get()
+&gt;&gt;&gt; author.json_object
+{'name': 'margaret smith', 'alias': 'msmith', 'age': 50}
+</pre>   <h3 id="least"><code>Least</code></h3> <dl class="class" id="s-least"> <dt id="django.db.models.functions.Least">
+<code>class Least(*expressions, **extra)</code> </dt> 
+</dl> <p>Accepts a list of at least two field names or expressions and returns the least value. Each argument must be of a similar type, so mixing text and numbers will result in a database error.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>The behavior of <code>Least</code> when one or more expression may be <code>null</code> varies between databases:</p> <ul class="simple"> <li>PostgreSQL: <code>Least</code> will return the smallest non-null expression, or <code>null</code> if all expressions are <code>null</code>.</li> <li>SQLite, Oracle, and MySQL: If any expression is <code>null</code>, <code>Least</code> will return <code>null</code>.</li> </ul> <p class="last">The PostgreSQL behavior can be emulated using <code>Coalesce</code> if you know a sensible maximum value to provide as a default.</p> </div>   <h3 id="nullif"><code>NullIf</code></h3> <dl class="class" id="s-nullif"> <dt id="django.db.models.functions.NullIf">
+<code>class NullIf(expression1, expression2)</code> </dt> 
+</dl> <p>Accepts two expressions and returns <code>None</code> if they are equal, otherwise returns <code>expression1</code>.</p> <div class="admonition-caveats-on-oracle admonition"> <p class="first admonition-title">Caveats on Oracle</p> <p>Due to an <a class="reference internal" href="../databases#oracle-null-empty-strings"><span class="std std-ref">Oracle convention</span></a>, this function returns the empty string instead of <code>None</code> when the expressions are of type <a class="reference internal" href="fields#django.db.models.CharField" title="django.db.models.CharField"><code>CharField</code></a>.</p> <p class="last">Passing <code>Value(None)</code> to <code>expression1</code> is prohibited on Oracle since Oracle doesn’t accept <code>NULL</code> as the first argument.</p> </div>    <h2 id="id1">Date functions</h2> <p id="s-date-functions">We’ll be using the following model in examples of each function:</p> <pre data-language="python">class Experiment(models.Model):
+    start_datetime = models.DateTimeField()
+    start_date = models.DateField(null=True, blank=True)
+    start_time = models.TimeField(null=True, blank=True)
+    end_datetime = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+</pre>  <h3 id="extract"><code>Extract</code></h3> <dl class="class" id="s-extract"> <dt id="django.db.models.functions.Extract">
+<code>class Extract(expression, lookup_name=None, tzinfo=None, **extra)</code> </dt> 
+</dl> <p>Extracts a component of a date as a number.</p> <p>Takes an <code>expression</code> representing a <code>DateField</code>, <code>DateTimeField</code>, <code>TimeField</code>, or <code>DurationField</code> and a <code>lookup_name</code>, and returns the part of the date referenced by <code>lookup_name</code> as an <code>IntegerField</code>. Django usually uses the databases’ extract function, so you may use any <code>lookup_name</code> that your database supports. A <code>tzinfo</code> subclass, usually provided by <a class="reference external" href="https://docs.python.org/3/library/zoneinfo.html#module-zoneinfo" title="(in Python v3.10)"><code>zoneinfo</code></a>, can be passed to extract a value in a specific timezone.</p> <p>Given the datetime <code>2015-06-15 23:30:01.000321+00:00</code>, the built-in <code>lookup_name</code>s return:</p> <ul class="simple"> <li>“year”: 2015</li> <li>“iso_year”: 2015</li> <li>“quarter”: 2</li> <li>“month”: 6</li> <li>“day”: 15</li> <li>“week”: 25</li> <li>“week_day”: 2</li> <li>“iso_week_day”: 1</li> <li>“hour”: 23</li> <li>“minute”: 30</li> <li>“second”: 1</li> </ul> <p>If a different timezone like <code>Australia/Melbourne</code> is active in Django, then the datetime is converted to the timezone before the value is extracted. The timezone offset for Melbourne in the example date above is +10:00. The values returned when this timezone is active will be the same as above except for:</p> <ul class="simple"> <li>“day”: 16</li> <li>“week_day”: 3</li> <li>“iso_week_day”: 2</li> <li>“hour”: 9</li> </ul> <div class="admonition-week-day-values admonition"> <p class="first admonition-title"><code>week_day</code> values</p> <p>The <code>week_day</code> <code>lookup_type</code> is calculated differently from most databases and from Python’s standard functions. This function will return <code>1</code> for Sunday, <code>2</code> for Monday, through <code>7</code> for Saturday.</p> <p>The equivalent calculation in Python is:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; dt = datetime(2015, 6, 15)
+&gt;&gt;&gt; (dt.isoweekday() % 7) + 1
+2
+</pre> </div> <div class="admonition-week-values admonition"> <p class="first admonition-title"><code>week</code> values</p> <p class="last">The <code>week</code> <code>lookup_type</code> is calculated based on <a class="reference external" href="https://en.wikipedia.org/wiki/ISO-8601">ISO-8601</a>, i.e., a week starts on a Monday. The first week of a year is the one that contains the year’s first Thursday, i.e. the first week has the majority (four or more) of its days in the year. The value returned is in the range 1 to 52 or 53.</p> </div> <p>Each <code>lookup_name</code> above has a corresponding <code>Extract</code> subclass (listed below) that should typically be used instead of the more verbose equivalent, e.g. use <code>ExtractYear(...)</code> rather than <code>Extract(..., lookup_name='year')</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.db.models.functions import Extract
+&gt;&gt;&gt; start = datetime(2015, 6, 15)
+&gt;&gt;&gt; end = datetime(2015, 7, 2)
+&gt;&gt;&gt; Experiment.objects.create(
+...    start_datetime=start, start_date=start.date(),
+...    end_datetime=end, end_date=end.date())
+&gt;&gt;&gt; # Add the experiment start year as a field in the QuerySet.
+&gt;&gt;&gt; experiment = Experiment.objects.annotate(
+...    start_year=Extract('start_datetime', 'year')).get()
+&gt;&gt;&gt; experiment.start_year
+2015
+&gt;&gt;&gt; # How many experiments completed in the same year in which they started?
+&gt;&gt;&gt; Experiment.objects.filter(
+...    start_datetime__year=Extract('end_datetime', 'year')).count()
+1
+</pre>  <h4 id="datefield-extracts">
+<code>DateField</code> extracts</h4> <dl class="class" id="s-datefield-extracts"> <dt id="django.db.models.functions.ExtractYear">
+<code>class ExtractYear(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'year'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractIsoYear">
+<code>class ExtractIsoYear(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<p>Returns the ISO-8601 week-numbering year.</p> <dl class="attribute"> <dt>
+<code>lookup_name = 'iso_year'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractMonth">
+<code>class ExtractMonth(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'month'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractDay">
+<code>class ExtractDay(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'day'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractWeekDay">
+<code>class ExtractWeekDay(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'week_day'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractIsoWeekDay">
+<code>class ExtractIsoWeekDay(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<p>Returns the ISO-8601 week day with day 1 being Monday and day 7 being Sunday.</p> <dl class="attribute"> <dt>
+<code>lookup_name = 'iso_week_day'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractWeek">
+<code>class ExtractWeek(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'week'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractQuarter">
+<code>class ExtractQuarter(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'quarter'</code> </dt> 
+</dl> </dd>
+</dl> <p>These are logically equivalent to <code>Extract('date_field', lookup_name)</code>. Each class is also a <code>Transform</code> registered on <code>DateField</code> and <code>DateTimeField</code> as <code>__(lookup_name)</code>, e.g. <code>__year</code>.</p> <p>Since <code>DateField</code>s don’t have a time component, only <code>Extract</code> subclasses that deal with date-parts can be used with <code>DateField</code>:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; from django.db.models.functions import (
+...     ExtractDay, ExtractMonth, ExtractQuarter, ExtractWeek,
+...     ExtractIsoWeekDay, ExtractWeekDay, ExtractIsoYear, ExtractYear,
+... )
+&gt;&gt;&gt; start_2015 = datetime(2015, 6, 15, 23, 30, 1, tzinfo=timezone.utc)
+&gt;&gt;&gt; end_2015 = datetime(2015, 6, 16, 13, 11, 27, tzinfo=timezone.utc)
+&gt;&gt;&gt; Experiment.objects.create(
+...    start_datetime=start_2015, start_date=start_2015.date(),
+...    end_datetime=end_2015, end_date=end_2015.date())
+&gt;&gt;&gt; Experiment.objects.annotate(
+...     year=ExtractYear('start_date'),
+...     isoyear=ExtractIsoYear('start_date'),
+...     quarter=ExtractQuarter('start_date'),
+...     month=ExtractMonth('start_date'),
+...     week=ExtractWeek('start_date'),
+...     day=ExtractDay('start_date'),
+...     weekday=ExtractWeekDay('start_date'),
+...     isoweekday=ExtractIsoWeekDay('start_date'),
+... ).values(
+...     'year', 'isoyear', 'quarter', 'month', 'week', 'day', 'weekday',
+...     'isoweekday',
+... ).get(end_date__year=ExtractYear('start_date'))
+{'year': 2015, 'isoyear': 2015, 'quarter': 2, 'month': 6, 'week': 25,
+ 'day': 15, 'weekday': 2, 'isoweekday': 1}
+</pre>   <h4 id="datetimefield-extracts">
+<code>DateTimeField</code> extracts</h4> <p id="s-datetimefield-extracts">In addition to the following, all extracts for <code>DateField</code> listed above may also be used on <code>DateTimeField</code>s .</p> <dl class="class"> <dt id="django.db.models.functions.ExtractHour">
+<code>class ExtractHour(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'hour'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractMinute">
+<code>class ExtractMinute(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'minute'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.ExtractSecond">
+<code>class ExtractSecond(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'second'</code> </dt> 
+</dl> </dd>
+</dl> <p>These are logically equivalent to <code>Extract('datetime_field', lookup_name)</code>. Each class is also a <code>Transform</code> registered on <code>DateTimeField</code> as <code>__(lookup_name)</code>, e.g. <code>__minute</code>.</p> <p><code>DateTimeField</code> examples:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; from django.db.models.functions import (
+...     ExtractDay, ExtractHour, ExtractMinute, ExtractMonth,
+...     ExtractQuarter, ExtractSecond, ExtractWeek, ExtractIsoWeekDay,
+...     ExtractWeekDay, ExtractIsoYear, ExtractYear,
+... )
+&gt;&gt;&gt; start_2015 = datetime(2015, 6, 15, 23, 30, 1, tzinfo=timezone.utc)
+&gt;&gt;&gt; end_2015 = datetime(2015, 6, 16, 13, 11, 27, tzinfo=timezone.utc)
+&gt;&gt;&gt; Experiment.objects.create(
+...    start_datetime=start_2015, start_date=start_2015.date(),
+...    end_datetime=end_2015, end_date=end_2015.date())
+&gt;&gt;&gt; Experiment.objects.annotate(
+...     year=ExtractYear('start_datetime'),
+...     isoyear=ExtractIsoYear('start_datetime'),
+...     quarter=ExtractQuarter('start_datetime'),
+...     month=ExtractMonth('start_datetime'),
+...     week=ExtractWeek('start_datetime'),
+...     day=ExtractDay('start_datetime'),
+...     weekday=ExtractWeekDay('start_datetime'),
+...     isoweekday=ExtractIsoWeekDay('start_datetime'),
+...     hour=ExtractHour('start_datetime'),
+...     minute=ExtractMinute('start_datetime'),
+...     second=ExtractSecond('start_datetime'),
+... ).values(
+...     'year', 'isoyear', 'month', 'week', 'day',
+...     'weekday', 'isoweekday', 'hour', 'minute', 'second',
+... ).get(end_datetime__year=ExtractYear('start_datetime'))
+{'year': 2015, 'isoyear': 2015, 'quarter': 2, 'month': 6, 'week': 25,
+ 'day': 15, 'weekday': 2, 'isoweekday': 1, 'hour': 23, 'minute': 30,
+ 'second': 1}
+</pre> <p>When <a class="reference internal" href="../settings#std:setting-USE_TZ"><code>USE_TZ</code></a> is <code>True</code> then datetimes are stored in the database in UTC. If a different timezone is active in Django, the datetime is converted to that timezone before the value is extracted. The example below converts to the Melbourne timezone (UTC +10:00), which changes the day, weekday, and hour values that are returned:</p> <pre data-language="python">&gt;&gt;&gt; import zoneinfo
+&gt;&gt;&gt; melb = zoneinfo.ZoneInfo('Australia/Melbourne')  # UTC+10:00
+&gt;&gt;&gt; with timezone.override(melb):
+...    Experiment.objects.annotate(
+...        day=ExtractDay('start_datetime'),
+...        weekday=ExtractWeekDay('start_datetime'),
+...        isoweekday=ExtractIsoWeekDay('start_datetime'),
+...        hour=ExtractHour('start_datetime'),
+...    ).values('day', 'weekday', 'isoweekday', 'hour').get(
+...        end_datetime__year=ExtractYear('start_datetime'),
+...    )
+{'day': 16, 'weekday': 3, 'isoweekday': 2, 'hour': 9}
+</pre> <p>Explicitly passing the timezone to the <code>Extract</code> function behaves in the same way, and takes priority over an active timezone:</p> <pre data-language="python">&gt;&gt;&gt; import zoneinfo
+&gt;&gt;&gt; melb = zoneinfo.ZoneInfo('Australia/Melbourne')
+&gt;&gt;&gt; Experiment.objects.annotate(
+...     day=ExtractDay('start_datetime', tzinfo=melb),
+...     weekday=ExtractWeekDay('start_datetime', tzinfo=melb),
+...     isoweekday=ExtractIsoWeekDay('start_datetime', tzinfo=melb),
+...     hour=ExtractHour('start_datetime', tzinfo=melb),
+... ).values('day', 'weekday', 'isoweekday', 'hour').get(
+...     end_datetime__year=ExtractYear('start_datetime'),
+... )
+{'day': 16, 'weekday': 3, 'isoweekday': 2, 'hour': 9}
+</pre>    <h3 id="now"><code>Now</code></h3> <dl class="class" id="s-now"> <dt id="django.db.models.functions.Now">
+<code>class Now</code> </dt> 
+</dl> <p>Returns the database server’s current date and time when the query is executed, typically using the SQL <code>CURRENT_TIMESTAMP</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Now
+&gt;&gt;&gt; Article.objects.filter(published__lte=Now())
+&lt;QuerySet [&lt;Article: How to Django&gt;]&gt;
+</pre> <div class="admonition-postgresql-considerations admonition"> <p class="first admonition-title">PostgreSQL considerations</p> <p class="last">On PostgreSQL, the SQL <code>CURRENT_TIMESTAMP</code> returns the time that the current transaction started. Therefore for cross-database compatibility, <code>Now()</code> uses <code>STATEMENT_TIMESTAMP</code> instead. If you need the transaction timestamp, use <a class="reference internal" href="../contrib/postgres/functions#django.contrib.postgres.functions.TransactionNow" title="django.contrib.postgres.functions.TransactionNow"><code>django.contrib.postgres.functions.TransactionNow</code></a>.</p> </div>   <h3 id="trunc"><code>Trunc</code></h3> <dl class="class" id="s-trunc"> <dt id="django.db.models.functions.Trunc">
+<code>class Trunc(expression, kind, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> 
+</dl> <p>Truncates a date up to a significant component.</p> <p>When you only care if something happened in a particular year, hour, or day, but not the exact second, then <code>Trunc</code> (and its subclasses) can be useful to filter or aggregate your data. For example, you can use <code>Trunc</code> to calculate the number of sales per day.</p> <p><code>Trunc</code> takes a single <code>expression</code>, representing a <code>DateField</code>, <code>TimeField</code>, or <code>DateTimeField</code>, a <code>kind</code> representing a date or time part, and an <code>output_field</code> that’s either <code>DateTimeField()</code>, <code>TimeField()</code>, or <code>DateField()</code>. It returns a datetime, date, or time depending on <code>output_field</code>, with fields up to <code>kind</code> set to their minimum value. If <code>output_field</code> is omitted, it will default to the <code>output_field</code> of <code>expression</code>. A <code>tzinfo</code> subclass, usually provided by <a class="reference external" href="https://docs.python.org/3/library/zoneinfo.html#module-zoneinfo" title="(in Python v3.10)"><code>zoneinfo</code></a>, can be passed to truncate a value in a specific timezone.</p> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span>The <code>is_dst</code> parameter indicates whether or not <code>pytz</code> should interpret nonexistent and ambiguous datetimes in daylight saving time. By default (when <code>is_dst=None</code>), <code>pytz</code> raises an exception for such datetimes.</p> <p>The <code>is_dst</code> parameter is deprecated and will be removed in Django 5.0.</p> </div> <p>Given the datetime <code>2015-06-15 14:30:50.000321+00:00</code>, the built-in <code>kind</code>s return:</p> <ul class="simple"> <li>“year”: 2015-01-01 00:00:00+00:00</li> <li>“quarter”: 2015-04-01 00:00:00+00:00</li> <li>“month”: 2015-06-01 00:00:00+00:00</li> <li>“week”: 2015-06-15 00:00:00+00:00</li> <li>“day”: 2015-06-15 00:00:00+00:00</li> <li>“hour”: 2015-06-15 14:00:00+00:00</li> <li>“minute”: 2015-06-15 14:30:00+00:00</li> <li>“second”: 2015-06-15 14:30:50+00:00</li> </ul> <p>If a different timezone like <code>Australia/Melbourne</code> is active in Django, then the datetime is converted to the new timezone before the value is truncated. The timezone offset for Melbourne in the example date above is +10:00. The values returned when this timezone is active will be:</p> <ul class="simple"> <li>“year”: 2015-01-01 00:00:00+11:00</li> <li>“quarter”: 2015-04-01 00:00:00+10:00</li> <li>“month”: 2015-06-01 00:00:00+10:00</li> <li>“week”: 2015-06-16 00:00:00+10:00</li> <li>“day”: 2015-06-16 00:00:00+10:00</li> <li>“hour”: 2015-06-16 00:00:00+10:00</li> <li>“minute”: 2015-06-16 00:30:00+10:00</li> <li>“second”: 2015-06-16 00:30:50+10:00</li> </ul> <p>The year has an offset of +11:00 because the result transitioned into daylight saving time.</p> <p>Each <code>kind</code> above has a corresponding <code>Trunc</code> subclass (listed below) that should typically be used instead of the more verbose equivalent, e.g. use <code>TruncYear(...)</code> rather than <code>Trunc(..., kind='year')</code>.</p> <p>The subclasses are all defined as transforms, but they aren’t registered with any fields, because the lookup names are already reserved by the <code>Extract</code> subclasses.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.db.models import Count, DateTimeField
+&gt;&gt;&gt; from django.db.models.functions import Trunc
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=datetime(2015, 6, 15, 14, 30, 50, 321))
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=datetime(2015, 6, 15, 14, 40, 2, 123))
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=datetime(2015, 12, 25, 10, 5, 27, 999))
+&gt;&gt;&gt; experiments_per_day = Experiment.objects.annotate(
+...    start_day=Trunc('start_datetime', 'day', output_field=DateTimeField())
+... ).values('start_day').annotate(experiments=Count('id'))
+&gt;&gt;&gt; for exp in experiments_per_day:
+...     print(exp['start_day'], exp['experiments'])
+...
+2015-06-15 00:00:00 2
+2015-12-25 00:00:00 1
+&gt;&gt;&gt; experiments = Experiment.objects.annotate(
+...    start_day=Trunc('start_datetime', 'day', output_field=DateTimeField())
+... ).filter(start_day=datetime(2015, 6, 15))
+&gt;&gt;&gt; for exp in experiments:
+...     print(exp.start_datetime)
+...
+2015-06-15 14:30:50.000321
+2015-06-15 14:40:02.000123
+</pre>  <h4 id="datefield-truncation">
+<code>DateField</code> truncation</h4> <dl class="class" id="s-datefield-truncation"> <dt id="django.db.models.functions.TruncYear">
+<code>class TruncYear(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'year'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncMonth">
+<code>class TruncMonth(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'month'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncWeek">
+<code>class TruncWeek(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<p>Truncates to midnight on the Monday of the week.</p> <dl class="attribute"> <dt>
+<code>kind = 'week'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncQuarter">
+<code>class TruncQuarter(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'quarter'</code> </dt> 
+</dl> </dd>
+</dl> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span>The <code>is_dst</code> parameter is deprecated and will be removed in Django 5.0.</p> </div> <p>These are logically equivalent to <code>Trunc('date_field', kind)</code>. They truncate all parts of the date up to <code>kind</code> which allows grouping or filtering dates with less precision. <code>expression</code> can have an <code>output_field</code> of either <code>DateField</code> or <code>DateTimeField</code>.</p> <p>Since <code>DateField</code>s don’t have a time component, only <code>Trunc</code> subclasses that deal with date-parts can be used with <code>DateField</code>:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.db.models import Count
+&gt;&gt;&gt; from django.db.models.functions import TruncMonth, TruncYear
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
+&gt;&gt;&gt; start2 = datetime(2015, 6, 15, 14, 40, 2, 123, tzinfo=timezone.utc)
+&gt;&gt;&gt; start3 = datetime(2015, 12, 31, 17, 5, 27, 999, tzinfo=timezone.utc)
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start1, start_date=start1.date())
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start2, start_date=start2.date())
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start3, start_date=start3.date())
+&gt;&gt;&gt; experiments_per_year = Experiment.objects.annotate(
+...    year=TruncYear('start_date')).values('year').annotate(
+...    experiments=Count('id'))
+&gt;&gt;&gt; for exp in experiments_per_year:
+...     print(exp['year'], exp['experiments'])
+...
+2014-01-01 1
+2015-01-01 2
+
+&gt;&gt;&gt; import zoneinfo
+&gt;&gt;&gt; melb = zoneinfo.ZoneInfo('Australia/Melbourne')
+&gt;&gt;&gt; experiments_per_month = Experiment.objects.annotate(
+...    month=TruncMonth('start_datetime', tzinfo=melb)).values('month').annotate(
+...    experiments=Count('id'))
+&gt;&gt;&gt; for exp in experiments_per_month:
+...     print(exp['month'], exp['experiments'])
+...
+2015-06-01 00:00:00+10:00 1
+2016-01-01 00:00:00+11:00 1
+2014-06-01 00:00:00+10:00 1
+</pre>   <h4 id="datetimefield-truncation">
+<code>DateTimeField</code> truncation</h4> <dl class="class" id="s-datetimefield-truncation"> <dt id="django.db.models.functions.TruncDate">
+<code>class TruncDate(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'date'</code> </dt> 
+</dl> <dl class="attribute"> <dt>
+<code>output_field = DateField()</code> </dt> 
+</dl> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>tzinfo</code> parameter was added.</p> </div> </dd>
+</dl> <p><code>TruncDate</code> casts <code>expression</code> to a date rather than using the built-in SQL truncate function. It’s also registered as a transform on <code>DateTimeField</code> as <code>__date</code>.</p> <dl class="class"> <dt id="django.db.models.functions.TruncTime">
+<code>class TruncTime(expression, tzinfo=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>lookup_name = 'time'</code> </dt> 
+</dl> <dl class="attribute"> <dt>
+<code>output_field = TimeField()</code> </dt> 
+</dl> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>tzinfo</code> parameter was added.</p> </div> </dd>
+</dl> <p><code>TruncTime</code> casts <code>expression</code> to a time rather than using the built-in SQL truncate function. It’s also registered as a transform on <code>DateTimeField</code> as <code>__time</code>.</p> <dl class="class"> <dt id="django.db.models.functions.TruncDay">
+<code>class TruncDay(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'day'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncHour">
+<code>class TruncHour(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'hour'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncMinute">
+<code>class TruncMinute(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'minute'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.db.models.functions.TruncSecond">
+<code>class TruncSecond(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'second'</code> </dt> 
+</dl> </dd>
+</dl> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span>The <code>is_dst</code> parameter is deprecated and will be removed in Django 5.0.</p> </div> <p>These are logically equivalent to <code>Trunc('datetime_field', kind)</code>. They truncate all parts of the date up to <code>kind</code> and allow grouping or filtering datetimes with less precision. <code>expression</code> must have an <code>output_field</code> of <code>DateTimeField</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import date, datetime
+&gt;&gt;&gt; from django.db.models import Count
+&gt;&gt;&gt; from django.db.models.functions import (
+...     TruncDate, TruncDay, TruncHour, TruncMinute, TruncSecond,
+... )
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; import zoneinfo
+&gt;&gt;&gt; start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start1, start_date=start1.date())
+&gt;&gt;&gt; melb = zoneinfo.ZoneInfo('Australia/Melbourne')
+&gt;&gt;&gt; Experiment.objects.annotate(
+...     date=TruncDate('start_datetime'),
+...     day=TruncDay('start_datetime', tzinfo=melb),
+...     hour=TruncHour('start_datetime', tzinfo=melb),
+...     minute=TruncMinute('start_datetime'),
+...     second=TruncSecond('start_datetime'),
+... ).values('date', 'day', 'hour', 'minute', 'second').get()
+{'date': datetime.date(2014, 6, 15),
+ 'day': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=zoneinfo.ZoneInfo('Australia/Melbourne')),
+ 'hour': datetime.datetime(2014, 6, 16, 0, 0, tzinfo=zoneinfo.ZoneInfo('Australia/Melbourne')),
+ 'minute': 'minute': datetime.datetime(2014, 6, 15, 14, 30, tzinfo=zoneinfo.ZoneInfo('UTC')),
+ 'second': datetime.datetime(2014, 6, 15, 14, 30, 50, tzinfo=zoneinfo.ZoneInfo('UTC'))
+}
+</pre>   <h4 id="timefield-truncation">
+<code>TimeField</code> truncation</h4> <dl class="class" id="s-timefield-truncation"> <dt>
+<code>class TruncHour(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'hour'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt>
+<code>class TruncMinute(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'minute'</code> </dt> 
+</dl> </dd>
+</dl> <dl class="class"> <dt>
+<code>class TruncSecond(expression, output_field=None, tzinfo=None, is_dst=None, **extra)</code> </dt> <dd>
+<dl class="attribute"> <dt>
+<code>kind = 'second'</code> </dt> 
+</dl> </dd>
+</dl> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span>The <code>is_dst</code> parameter is deprecated and will be removed in Django 5.0.</p> </div> <p>These are logically equivalent to <code>Trunc('time_field', kind)</code>. They truncate all parts of the time up to <code>kind</code> which allows grouping or filtering times with less precision. <code>expression</code> can have an <code>output_field</code> of either <code>TimeField</code> or <code>DateTimeField</code>.</p> <p>Since <code>TimeField</code>s don’t have a date component, only <code>Trunc</code> subclasses that deal with time-parts can be used with <code>TimeField</code>:</p> <pre data-language="python">&gt;&gt;&gt; from datetime import datetime
+&gt;&gt;&gt; from django.db.models import Count, TimeField
+&gt;&gt;&gt; from django.db.models.functions import TruncHour
+&gt;&gt;&gt; from django.utils import timezone
+&gt;&gt;&gt; start1 = datetime(2014, 6, 15, 14, 30, 50, 321, tzinfo=timezone.utc)
+&gt;&gt;&gt; start2 = datetime(2014, 6, 15, 14, 40, 2, 123, tzinfo=timezone.utc)
+&gt;&gt;&gt; start3 = datetime(2015, 12, 31, 17, 5, 27, 999, tzinfo=timezone.utc)
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start1, start_time=start1.time())
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start2, start_time=start2.time())
+&gt;&gt;&gt; Experiment.objects.create(start_datetime=start3, start_time=start3.time())
+&gt;&gt;&gt; experiments_per_hour = Experiment.objects.annotate(
+...    hour=TruncHour('start_datetime', output_field=TimeField()),
+... ).values('hour').annotate(experiments=Count('id'))
+&gt;&gt;&gt; for exp in experiments_per_hour:
+...     print(exp['hour'], exp['experiments'])
+...
+14:00:00 2
+17:00:00 1
+
+&gt;&gt;&gt; import zoneinfo
+&gt;&gt;&gt; melb = zoneinfo.ZoneInfo('Australia/Melbourne')
+&gt;&gt;&gt; experiments_per_hour = Experiment.objects.annotate(
+...    hour=TruncHour('start_datetime', tzinfo=melb),
+... ).values('hour').annotate(experiments=Count('id'))
+&gt;&gt;&gt; for exp in experiments_per_hour:
+...     print(exp['hour'], exp['experiments'])
+...
+2014-06-16 00:00:00+10:00 2
+2016-01-01 04:00:00+11:00 1
+</pre>     <h2 id="id2">Math Functions</h2> <p id="s-math-functions">We’ll be using the following model in math function examples:</p> <pre data-language="python">class Vector(models.Model):
+    x = models.FloatField()
+    y = models.FloatField()
+</pre>  <h3 id="abs"><code>Abs</code></h3> <dl class="class" id="s-abs"> <dt id="django.db.models.functions.Abs">
+<code>class Abs(expression, **extra)</code> </dt> 
+</dl> <p>Returns the absolute value of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Abs
+&gt;&gt;&gt; Vector.objects.create(x=-0.5, y=1.1)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_abs=Abs('x'), y_abs=Abs('y')).get()
+&gt;&gt;&gt; vector.x_abs, vector.y_abs
+(0.5, 1.1)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Abs
+&gt;&gt;&gt; FloatField.register_lookup(Abs)
+&gt;&gt;&gt; # Get vectors inside the unit cube
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__abs__lt=1, y__abs__lt=1)
+</pre>   <h3 id="acos"><code>ACos</code></h3> <dl class="class" id="s-acos"> <dt id="django.db.models.functions.ACos">
+<code>class ACos(expression, **extra)</code> </dt> 
+</dl> <p>Returns the arccosine of a numeric field or expression. The expression value must be within the range -1 to 1.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import ACos
+&gt;&gt;&gt; Vector.objects.create(x=0.5, y=-0.9)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_acos=ACos('x'), y_acos=ACos('y')).get()
+&gt;&gt;&gt; vector.x_acos, vector.y_acos
+(1.0471975511965979, 2.6905658417935308)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import ACos
+&gt;&gt;&gt; FloatField.register_lookup(ACos)
+&gt;&gt;&gt; # Get vectors whose arccosine is less than 1
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__acos__lt=1, y__acos__lt=1)
+</pre>   <h3 id="asin"><code>ASin</code></h3> <dl class="class" id="s-asin"> <dt id="django.db.models.functions.ASin">
+<code>class ASin(expression, **extra)</code> </dt> 
+</dl> <p>Returns the arcsine of a numeric field or expression. The expression value must be in the range -1 to 1.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import ASin
+&gt;&gt;&gt; Vector.objects.create(x=0, y=1)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_asin=ASin('x'), y_asin=ASin('y')).get()
+&gt;&gt;&gt; vector.x_asin, vector.y_asin
+(0.0, 1.5707963267948966)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import ASin
+&gt;&gt;&gt; FloatField.register_lookup(ASin)
+&gt;&gt;&gt; # Get vectors whose arcsine is less than 1
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__asin__lt=1, y__asin__lt=1)
+</pre>   <h3 id="atan"><code>ATan</code></h3> <dl class="class" id="s-atan"> <dt id="django.db.models.functions.ATan">
+<code>class ATan(expression, **extra)</code> </dt> 
+</dl> <p>Returns the arctangent of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import ATan
+&gt;&gt;&gt; Vector.objects.create(x=3.12, y=6.987)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_atan=ATan('x'), y_atan=ATan('y')).get()
+&gt;&gt;&gt; vector.x_atan, vector.y_atan
+(1.2606282660069106, 1.428638798133829)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import ATan
+&gt;&gt;&gt; FloatField.register_lookup(ATan)
+&gt;&gt;&gt; # Get vectors whose arctangent is less than 2
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__atan__lt=2, y__atan__lt=2)
+</pre>   <h3 id="atan2"><code>ATan2</code></h3> <dl class="class" id="s-atan2"> <dt id="django.db.models.functions.ATan2">
+<code>class ATan2(expression1, expression2, **extra)</code> </dt> 
+</dl> <p>Returns the arctangent of <code>expression1 / expression2</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import ATan2
+&gt;&gt;&gt; Vector.objects.create(x=2.5, y=1.9)
+&gt;&gt;&gt; vector = Vector.objects.annotate(atan2=ATan2('x', 'y')).get()
+&gt;&gt;&gt; vector.atan2
+0.9209258773829491
+</pre>   <h3 id="ceil"><code>Ceil</code></h3> <dl class="class" id="s-ceil"> <dt id="django.db.models.functions.Ceil">
+<code>class Ceil(expression, **extra)</code> </dt> 
+</dl> <p>Returns the smallest integer greater than or equal to a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Ceil
+&gt;&gt;&gt; Vector.objects.create(x=3.12, y=7.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_ceil=Ceil('x'), y_ceil=Ceil('y')).get()
+&gt;&gt;&gt; vector.x_ceil, vector.y_ceil
+(4.0, 7.0)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Ceil
+&gt;&gt;&gt; FloatField.register_lookup(Ceil)
+&gt;&gt;&gt; # Get vectors whose ceil is less than 10
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__ceil__lt=10, y__ceil__lt=10)
+</pre>   <h3 id="cos"><code>Cos</code></h3> <dl class="class" id="s-cos"> <dt id="django.db.models.functions.Cos">
+<code>class Cos(expression, **extra)</code> </dt> 
+</dl> <p>Returns the cosine of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Cos
+&gt;&gt;&gt; Vector.objects.create(x=-8.0, y=3.1415926)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_cos=Cos('x'), y_cos=Cos('y')).get()
+&gt;&gt;&gt; vector.x_cos, vector.y_cos
+(-0.14550003380861354, -0.9999999999999986)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Cos
+&gt;&gt;&gt; FloatField.register_lookup(Cos)
+&gt;&gt;&gt; # Get vectors whose cosine is less than 0.5
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__cos__lt=0.5, y__cos__lt=0.5)
+</pre>   <h3 id="cot"><code>Cot</code></h3> <dl class="class" id="s-cot"> <dt id="django.db.models.functions.Cot">
+<code>class Cot(expression, **extra)</code> </dt> 
+</dl> <p>Returns the cotangent of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Cot
+&gt;&gt;&gt; Vector.objects.create(x=12.0, y=1.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_cot=Cot('x'), y_cot=Cot('y')).get()
+&gt;&gt;&gt; vector.x_cot, vector.y_cot
+(-1.5726734063976826, 0.642092615934331)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Cot
+&gt;&gt;&gt; FloatField.register_lookup(Cot)
+&gt;&gt;&gt; # Get vectors whose cotangent is less than 1
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__cot__lt=1, y__cot__lt=1)
+</pre>   <h3 id="degrees"><code>Degrees</code></h3> <dl class="class" id="s-degrees"> <dt id="django.db.models.functions.Degrees">
+<code>class Degrees(expression, **extra)</code> </dt> 
+</dl> <p>Converts a numeric field or expression from radians to degrees.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Degrees
+&gt;&gt;&gt; Vector.objects.create(x=-1.57, y=3.14)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_d=Degrees('x'), y_d=Degrees('y')).get()
+&gt;&gt;&gt; vector.x_d, vector.y_d
+(-89.95437383553924, 179.9087476710785)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Degrees
+&gt;&gt;&gt; FloatField.register_lookup(Degrees)
+&gt;&gt;&gt; # Get vectors whose degrees are less than 360
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__degrees__lt=360, y__degrees__lt=360)
+</pre>   <h3 id="exp"><code>Exp</code></h3> <dl class="class" id="s-exp"> <dt id="django.db.models.functions.Exp">
+<code>class Exp(expression, **extra)</code> </dt> 
+</dl> <p>Returns the value of <code>e</code> (the natural logarithm base) raised to the power of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Exp
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=-2.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_exp=Exp('x'), y_exp=Exp('y')).get()
+&gt;&gt;&gt; vector.x_exp, vector.y_exp
+(221.40641620418717, 0.1353352832366127)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Exp
+&gt;&gt;&gt; FloatField.register_lookup(Exp)
+&gt;&gt;&gt; # Get vectors whose exp() is greater than 10
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__exp__gt=10, y__exp__gt=10)
+</pre>   <h3 id="floor"><code>Floor</code></h3> <dl class="class" id="s-floor"> <dt id="django.db.models.functions.Floor">
+<code>class Floor(expression, **extra)</code> </dt> 
+</dl> <p>Returns the largest integer value not greater than a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Floor
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=-2.3)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_floor=Floor('x'), y_floor=Floor('y')).get()
+&gt;&gt;&gt; vector.x_floor, vector.y_floor
+(5.0, -3.0)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Floor
+&gt;&gt;&gt; FloatField.register_lookup(Floor)
+&gt;&gt;&gt; # Get vectors whose floor() is greater than 10
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__floor__gt=10, y__floor__gt=10)
+</pre>   <h3 id="ln"><code>Ln</code></h3> <dl class="class" id="s-ln"> <dt id="django.db.models.functions.Ln">
+<code>class Ln(expression, **extra)</code> </dt> 
+</dl> <p>Returns the natural logarithm a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Ln
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=233.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_ln=Ln('x'), y_ln=Ln('y')).get()
+&gt;&gt;&gt; vector.x_ln, vector.y_ln
+(1.6863989535702288, 5.4510384535657)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Ln
+&gt;&gt;&gt; FloatField.register_lookup(Ln)
+&gt;&gt;&gt; # Get vectors whose value greater than e
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__ln__gt=1, y__ln__gt=1)
+</pre>   <h3 id="log"><code>Log</code></h3> <dl class="class" id="s-log"> <dt id="django.db.models.functions.Log">
+<code>class Log(expression1, expression2, **extra)</code> </dt> 
+</dl> <p>Accepts two numeric fields or expressions and returns the logarithm of the first to base of the second.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Log
+&gt;&gt;&gt; Vector.objects.create(x=2.0, y=4.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(log=Log('x', 'y')).get()
+&gt;&gt;&gt; vector.log
+2.0
+</pre>   <h3 id="mod"><code>Mod</code></h3> <dl class="class" id="s-mod"> <dt id="django.db.models.functions.Mod">
+<code>class Mod(expression1, expression2, **extra)</code> </dt> 
+</dl> <p>Accepts two numeric fields or expressions and returns the remainder of the first divided by the second (modulo operation).</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Mod
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=2.3)
+&gt;&gt;&gt; vector = Vector.objects.annotate(mod=Mod('x', 'y')).get()
+&gt;&gt;&gt; vector.mod
+0.8
+</pre>   <h3 id="pi"><code>Pi</code></h3> <dl class="class" id="s-pi"> <dt id="django.db.models.functions.Pi">
+<code>class Pi(**extra)</code> </dt> 
+</dl> <p>Returns the value of the mathematical constant <code>π</code>.</p>   <h3 id="power"><code>Power</code></h3> <dl class="class" id="s-power"> <dt id="django.db.models.functions.Power">
+<code>class Power(expression1, expression2, **extra)</code> </dt> 
+</dl> <p>Accepts two numeric fields or expressions and returns the value of the first raised to the power of the second.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Power
+&gt;&gt;&gt; Vector.objects.create(x=2, y=-2)
+&gt;&gt;&gt; vector = Vector.objects.annotate(power=Power('x', 'y')).get()
+&gt;&gt;&gt; vector.power
+0.25
+</pre>   <h3 id="radians"><code>Radians</code></h3> <dl class="class" id="s-radians"> <dt id="django.db.models.functions.Radians">
+<code>class Radians(expression, **extra)</code> </dt> 
+</dl> <p>Converts a numeric field or expression from degrees to radians.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Radians
+&gt;&gt;&gt; Vector.objects.create(x=-90, y=180)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_r=Radians('x'), y_r=Radians('y')).get()
+&gt;&gt;&gt; vector.x_r, vector.y_r
+(-1.5707963267948966, 3.141592653589793)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Radians
+&gt;&gt;&gt; FloatField.register_lookup(Radians)
+&gt;&gt;&gt; # Get vectors whose radians are less than 1
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__radians__lt=1, y__radians__lt=1)
+</pre>   <h3 id="random"><code>Random</code></h3> <dl class="class" id="s-random"> <dt id="django.db.models.functions.Random">
+<code>class Random(**extra)</code> </dt> 
+</dl> <div class="versionadded"> <span class="title">New in Django 3.2.</span> </div> <p>Returns a random value in the range <code>0.0 ≤ x &lt; 1.0</code>.</p>   <h3 id="round"><code>Round</code></h3> <dl class="class" id="s-round"> <dt id="django.db.models.functions.Round">
+<code>class Round(expression, precision=0, **extra)</code> </dt> 
+</dl> <p>Rounds a numeric field or expression to <code>precision</code> (must be an integer) decimal places. By default, it rounds to the nearest integer. Whether half values are rounded up or down depends on the database.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Round
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=-2.37)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_r=Round('x'), y_r=Round('y', precision=1)).get()
+&gt;&gt;&gt; vector.x_r, vector.y_r
+(5.0, -2.4)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Round
+&gt;&gt;&gt; FloatField.register_lookup(Round)
+&gt;&gt;&gt; # Get vectors whose round() is less than 20
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__round__lt=20, y__round__lt=20)
+</pre> <div class="versionchanged"> <span class="title">Changed in Django 4.0:</span> <p>The <code>precision</code> argument was added.</p> </div>   <h3 id="sign"><code>Sign</code></h3> <dl class="class" id="s-sign"> <dt id="django.db.models.functions.Sign">
+<code>class Sign(expression, **extra)</code> </dt> 
+</dl> <p>Returns the sign (-1, 0, 1) of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Sign
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=-2.3)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_sign=Sign('x'), y_sign=Sign('y')).get()
+&gt;&gt;&gt; vector.x_sign, vector.y_sign
+(1, -1)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Sign
+&gt;&gt;&gt; FloatField.register_lookup(Sign)
+&gt;&gt;&gt; # Get vectors whose signs of components are less than 0.
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__sign__lt=0, y__sign__lt=0)
+</pre>   <h3 id="sin"><code>Sin</code></h3> <dl class="class" id="s-sin"> <dt id="django.db.models.functions.Sin">
+<code>class Sin(expression, **extra)</code> </dt> 
+</dl> <p>Returns the sine of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Sin
+&gt;&gt;&gt; Vector.objects.create(x=5.4, y=-2.3)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_sin=Sin('x'), y_sin=Sin('y')).get()
+&gt;&gt;&gt; vector.x_sin, vector.y_sin
+(-0.7727644875559871, -0.7457052121767203)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Sin
+&gt;&gt;&gt; FloatField.register_lookup(Sin)
+&gt;&gt;&gt; # Get vectors whose sin() is less than 0
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__sin__lt=0, y__sin__lt=0)
+</pre>   <h3 id="sqrt"><code>Sqrt</code></h3> <dl class="class" id="s-sqrt"> <dt id="django.db.models.functions.Sqrt">
+<code>class Sqrt(expression, **extra)</code> </dt> 
+</dl> <p>Returns the square root of a nonnegative numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Sqrt
+&gt;&gt;&gt; Vector.objects.create(x=4.0, y=12.0)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_sqrt=Sqrt('x'), y_sqrt=Sqrt('y')).get()
+&gt;&gt;&gt; vector.x_sqrt, vector.y_sqrt
+(2.0, 3.46410)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Sqrt
+&gt;&gt;&gt; FloatField.register_lookup(Sqrt)
+&gt;&gt;&gt; # Get vectors whose sqrt() is less than 5
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__sqrt__lt=5, y__sqrt__lt=5)
+</pre>   <h3 id="tan"><code>Tan</code></h3> <dl class="class" id="s-tan"> <dt id="django.db.models.functions.Tan">
+<code>class Tan(expression, **extra)</code> </dt> 
+</dl> <p>Returns the tangent of a numeric field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Tan
+&gt;&gt;&gt; Vector.objects.create(x=0, y=12)
+&gt;&gt;&gt; vector = Vector.objects.annotate(x_tan=Tan('x'), y_tan=Tan('y')).get()
+&gt;&gt;&gt; vector.x_tan, vector.y_tan
+(0.0, -0.6358599286615808)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import FloatField
+&gt;&gt;&gt; from django.db.models.functions import Tan
+&gt;&gt;&gt; FloatField.register_lookup(Tan)
+&gt;&gt;&gt; # Get vectors whose tangent is less than 0
+&gt;&gt;&gt; vectors = Vector.objects.filter(x__tan__lt=0, y__tan__lt=0)
+</pre>    <h2 id="id3">Text functions</h2>  <h3 id="chr"><code>Chr</code></h3> <dl class="class" id="s-text-functions"> <dt id="django.db.models.functions.Chr">
+<code>class Chr(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a numeric field or expression and returns the text representation of the expression as a single character. It works the same as Python’s <a class="reference external" href="https://docs.python.org/3/library/functions.html#chr" title="(in Python v3.10)"><code>chr()</code></a> function.</p> <p>Like <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>, it can be registered as a transform on <code>IntegerField</code>. The default lookup name is <code>chr</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Chr
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.filter(name__startswith=Chr(ord('M'))).get()
+&gt;&gt;&gt; print(author.name)
+Margaret Smith
+</pre>   <h3 id="concat"><code>Concat</code></h3> <dl class="class" id="s-concat"> <dt id="django.db.models.functions.Concat">
+<code>class Concat(*expressions, **extra)</code> </dt> 
+</dl> <p>Accepts a list of at least two text fields or expressions and returns the concatenated text. Each argument must be of a text or char type. If you want to concatenate a <code>TextField()</code> with a <code>CharField()</code>, then be sure to tell Django that the <code>output_field</code> should be a <code>TextField()</code>. Specifying an <code>output_field</code> is also required when concatenating a <code>Value</code> as in the example below.</p> <p>This function will never have a null result. On backends where a null argument results in the entire expression being null, Django will ensure that each null part is converted to an empty string first.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; # Get the display name as "name (goes_by)"
+&gt;&gt;&gt; from django.db.models import CharField, Value as V
+&gt;&gt;&gt; from django.db.models.functions import Concat
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith', goes_by='Maggie')
+&gt;&gt;&gt; author = Author.objects.annotate(
+...     screen_name=Concat(
+...         'name', V(' ('), 'goes_by', V(')'),
+...         output_field=CharField()
+...     )
+... ).get()
+&gt;&gt;&gt; print(author.screen_name)
+Margaret Smith (Maggie)
+</pre>   <h3 id="left"><code>Left</code></h3> <dl class="class" id="s-left"> <dt id="django.db.models.functions.Left">
+<code>class Left(expression, length, **extra)</code> </dt> 
+</dl> <p>Returns the first <code>length</code> characters of the given text field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Left
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(first_initial=Left('name', 1)).get()
+&gt;&gt;&gt; print(author.first_initial)
+M
+</pre>   <h3 id="length"><code>Length</code></h3> <dl class="class" id="s-length"> <dt id="django.db.models.functions.Length">
+<code>class Length(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the number of characters the value has. If the expression is null, then the length will also be null.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; # Get the length of the name and goes_by fields
+&gt;&gt;&gt; from django.db.models.functions import Length
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(
+...    name_length=Length('name'),
+...    goes_by_length=Length('goes_by')).get()
+&gt;&gt;&gt; print(author.name_length, author.goes_by_length)
+(14, None)
+</pre> <p>It can also be registered as a transform. For example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import CharField
+&gt;&gt;&gt; from django.db.models.functions import Length
+&gt;&gt;&gt; CharField.register_lookup(Length)
+&gt;&gt;&gt; # Get authors whose name is longer than 7 characters
+&gt;&gt;&gt; authors = Author.objects.filter(name__length__gt=7)
+</pre>   <h3 id="lower"><code>Lower</code></h3> <dl class="class" id="s-lower"> <dt id="django.db.models.functions.Lower">
+<code>class Lower(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the lowercase representation.</p> <p>It can also be registered as a transform as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Lower
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(name_lower=Lower('name')).get()
+&gt;&gt;&gt; print(author.name_lower)
+margaret smith
+</pre>   <h3 id="lpad"><code>LPad</code></h3> <dl class="class" id="s-lpad"> <dt id="django.db.models.functions.LPad">
+<code>class LPad(expression, length, fill_text=Value(' '), **extra)</code> </dt> 
+</dl> <p>Returns the value of the given text field or expression padded on the left side with <code>fill_text</code> so that the resulting value is <code>length</code> characters long. The default <code>fill_text</code> is a space.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Value
+&gt;&gt;&gt; from django.db.models.functions import LPad
+&gt;&gt;&gt; Author.objects.create(name='John', alias='j')
+&gt;&gt;&gt; Author.objects.update(name=LPad('name', 8, Value('abc')))
+1
+&gt;&gt;&gt; print(Author.objects.get(alias='j').name)
+abcaJohn
+</pre>   <h3 id="ltrim"><code>LTrim</code></h3> <dl class="class" id="s-ltrim"> <dt id="django.db.models.functions.LTrim">
+<code>class LTrim(expression, **extra)</code> </dt> 
+</dl> <p>Similar to <a class="reference internal" href="#django.db.models.functions.Trim" title="django.db.models.functions.Trim"><code>Trim</code></a>, but removes only leading spaces.</p>   <h3 id="md5"><code>MD5</code></h3> <dl class="class" id="s-md5"> <dt id="django.db.models.functions.MD5">
+<code>class MD5(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the MD5 hash of the string.</p> <p>It can also be registered as a transform as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import MD5
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(name_md5=MD5('name')).get()
+&gt;&gt;&gt; print(author.name_md5)
+749fb689816b2db85f5b169c2055b247
+</pre>   <h3 id="ord"><code>Ord</code></h3> <dl class="class" id="s-ord"> <dt id="django.db.models.functions.Ord">
+<code>class Ord(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the Unicode code point value for the first character of that expression. It works similar to Python’s <a class="reference external" href="https://docs.python.org/3/library/functions.html#ord" title="(in Python v3.10)"><code>ord()</code></a> function, but an exception isn’t raised if the expression is more than one character long.</p> <p>It can also be registered as a transform as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>. The default lookup name is <code>ord</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Ord
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(name_code_point=Ord('name')).get()
+&gt;&gt;&gt; print(author.name_code_point)
+77
+</pre>   <h3 id="repeat"><code>Repeat</code></h3> <dl class="class" id="s-repeat"> <dt id="django.db.models.functions.Repeat">
+<code>class Repeat(expression, number, **extra)</code> </dt> 
+</dl> <p>Returns the value of the given text field or expression repeated <code>number</code> times.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Repeat
+&gt;&gt;&gt; Author.objects.create(name='John', alias='j')
+&gt;&gt;&gt; Author.objects.update(name=Repeat('name', 3))
+1
+&gt;&gt;&gt; print(Author.objects.get(alias='j').name)
+JohnJohnJohn
+</pre>   <h3 id="replace"><code>Replace</code></h3> <dl class="class" id="s-replace"> <dt id="django.db.models.functions.Replace">
+<code>class Replace(expression, text, replacement=Value(''), **extra)</code> </dt> 
+</dl> <p>Replaces all occurrences of <code>text</code> with <code>replacement</code> in <code>expression</code>. The default replacement text is the empty string. The arguments to the function are case-sensitive.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Value
+&gt;&gt;&gt; from django.db.models.functions import Replace
+&gt;&gt;&gt; Author.objects.create(name='Margaret Johnson')
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; Author.objects.update(name=Replace('name', Value('Margaret'), Value('Margareth')))
+2
+&gt;&gt;&gt; Author.objects.values('name')
+&lt;QuerySet [{'name': 'Margareth Johnson'}, {'name': 'Margareth Smith'}]&gt;
+</pre>   <h3 id="reverse"><code>Reverse</code></h3> <dl class="class" id="s-reverse"> <dt id="django.db.models.functions.Reverse">
+<code>class Reverse(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the characters of that expression in reverse order.</p> <p>It can also be registered as a transform as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>. The default lookup name is <code>reverse</code>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Reverse
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(backward=Reverse('name')).get()
+&gt;&gt;&gt; print(author.backward)
+htimS teragraM
+</pre>   <h3 id="right"><code>Right</code></h3> <dl class="class" id="s-right"> <dt id="django.db.models.functions.Right">
+<code>class Right(expression, length, **extra)</code> </dt> 
+</dl> <p>Returns the last <code>length</code> characters of the given text field or expression.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Right
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(last_letter=Right('name', 1)).get()
+&gt;&gt;&gt; print(author.last_letter)
+h
+</pre>   <h3 id="rpad"><code>RPad</code></h3> <dl class="class" id="s-rpad"> <dt id="django.db.models.functions.RPad">
+<code>class RPad(expression, length, fill_text=Value(' '), **extra)</code> </dt> 
+</dl> <p>Similar to <a class="reference internal" href="#django.db.models.functions.LPad" title="django.db.models.functions.LPad"><code>LPad</code></a>, but pads on the right side.</p>   <h3 id="rtrim"><code>RTrim</code></h3> <dl class="class" id="s-rtrim"> <dt id="django.db.models.functions.RTrim">
+<code>class RTrim(expression, **extra)</code> </dt> 
+</dl> <p>Similar to <a class="reference internal" href="#django.db.models.functions.Trim" title="django.db.models.functions.Trim"><code>Trim</code></a>, but removes only trailing spaces.</p>   <h3 id="sha1-sha224-sha256-sha384-and-sha512">
+<code>SHA1</code>, <code>SHA224</code>, <code>SHA256</code>, <code>SHA384</code>, and <code>SHA512</code>
+</h3> <dl class="class" id="s-sha1-sha224-sha256-sha384-and-sha512"> <dt id="django.db.models.functions.SHA1">
+<code>class SHA1(expression, **extra)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.db.models.functions.SHA224">
+<code>class SHA224(expression, **extra)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.db.models.functions.SHA256">
+<code>class SHA256(expression, **extra)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.db.models.functions.SHA384">
+<code>class SHA384(expression, **extra)</code> </dt> 
+</dl> <dl class="class"> <dt id="django.db.models.functions.SHA512">
+<code>class SHA512(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the particular hash of the string.</p> <p>They can also be registered as transforms as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import SHA1
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(name_sha1=SHA1('name')).get()
+&gt;&gt;&gt; print(author.name_sha1)
+b87efd8a6c991c390be5a68e8a7945a7851c7e5c
+</pre> <div class="admonition-postgresql admonition"> <p class="first admonition-title">PostgreSQL</p> <p class="last">The <a class="reference external" href="https://www.postgresql.org/docs/current/pgcrypto.html">pgcrypto extension</a> must be installed. You can use the <a class="reference internal" href="../contrib/postgres/operations#django.contrib.postgres.operations.CryptoExtension" title="django.contrib.postgres.operations.CryptoExtension"><code>CryptoExtension</code></a> migration operation to install it.</p> </div> <div class="admonition-oracle admonition"> <p class="first admonition-title">Oracle</p> <p class="last">Oracle doesn’t support the <code>SHA224</code> function.</p> </div>   <h3 id="strindex"><code>StrIndex</code></h3> <dl class="class" id="s-strindex"> <dt id="django.db.models.functions.StrIndex">
+<code>class StrIndex(string, substring, **extra)</code> </dt> 
+</dl> <p>Returns a positive integer corresponding to the 1-indexed position of the first occurrence of <code>substring</code> inside <code>string</code>, or 0 if <code>substring</code> is not found.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models import Value as V
+&gt;&gt;&gt; from django.db.models.functions import StrIndex
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; Author.objects.create(name='Smith, Margaret')
+&gt;&gt;&gt; Author.objects.create(name='Margaret Jackson')
+&gt;&gt;&gt; Author.objects.filter(name='Margaret Jackson').annotate(
+...     smith_index=StrIndex('name', V('Smith'))
+... ).get().smith_index
+0
+&gt;&gt;&gt; authors = Author.objects.annotate(
+...    smith_index=StrIndex('name', V('Smith'))
+... ).filter(smith_index__gt=0)
+&lt;QuerySet [&lt;Author: Margaret Smith&gt;, &lt;Author: Smith, Margaret&gt;]&gt;
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">In MySQL, a database table’s <a class="reference internal" href="../databases#mysql-collation"><span class="std std-ref">collation</span></a> determines whether string comparisons (such as the <code>expression</code> and <code>substring</code> of this function) are case-sensitive. Comparisons are case-insensitive by default.</p> </div>   <h3 id="substr"><code>Substr</code></h3> <dl class="class" id="s-substr"> <dt id="django.db.models.functions.Substr">
+<code>class Substr(expression, pos, length=None, **extra)</code> </dt> 
+</dl> <p>Returns a substring of length <code>length</code> from the field or expression starting at position <code>pos</code>. The position is 1-indexed, so the position must be greater than 0. If <code>length</code> is <code>None</code>, then the rest of the string will be returned.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; # Set the alias to the first 5 characters of the name as lowercase
+&gt;&gt;&gt; from django.db.models.functions import Lower, Substr
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; Author.objects.update(alias=Lower(Substr('name', 1, 5)))
+1
+&gt;&gt;&gt; print(Author.objects.get(name='Margaret Smith').alias)
+marga
+</pre>   <h3 id="trim"><code>Trim</code></h3> <dl class="class" id="s-trim"> <dt id="django.db.models.functions.Trim">
+<code>class Trim(expression, **extra)</code> </dt> 
+</dl> <p>Returns the value of the given text field or expression with leading and trailing spaces removed.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Trim
+&gt;&gt;&gt; Author.objects.create(name='  John  ', alias='j')
+&gt;&gt;&gt; Author.objects.update(name=Trim('name'))
+1
+&gt;&gt;&gt; print(Author.objects.get(alias='j').name)
+John
+</pre>   <h3 id="upper"><code>Upper</code></h3> <dl class="class" id="s-upper"> <dt id="django.db.models.functions.Upper">
+<code>class Upper(expression, **extra)</code> </dt> 
+</dl> <p>Accepts a single text field or expression and returns the uppercase representation.</p> <p>It can also be registered as a transform as described in <a class="reference internal" href="#django.db.models.functions.Length" title="django.db.models.functions.Length"><code>Length</code></a>.</p> <p>Usage example:</p> <pre data-language="python">&gt;&gt;&gt; from django.db.models.functions import Upper
+&gt;&gt;&gt; Author.objects.create(name='Margaret Smith')
+&gt;&gt;&gt; author = Author.objects.annotate(name_upper=Upper('name')).get()
+&gt;&gt;&gt; print(author.name_upper)
+MARGARET SMITH
+</pre>    <h2 id="id4">Window functions</h2> <p id="s-window-functions">There are a number of functions to use in a <a class="reference internal" href="expressions#django.db.models.expressions.Window" title="django.db.models.expressions.Window"><code>Window</code></a> expression for computing the rank of elements or the <a class="reference internal" href="#django.db.models.functions.Ntile" title="django.db.models.functions.Ntile"><code>Ntile</code></a> of some rows.</p>  <h3 id="cumedist"><code>CumeDist</code></h3> <dl class="class" id="s-cumedist"> <dt id="django.db.models.functions.CumeDist">
+<code>class CumeDist(*expressions, **extra)</code> </dt> 
+</dl> <p>Calculates the cumulative distribution of a value within a window or partition. The cumulative distribution is defined as the number of rows preceding or peered with the current row divided by the total number of rows in the frame.</p>   <h3 id="denserank"><code>DenseRank</code></h3> <dl class="class" id="s-denserank"> <dt id="django.db.models.functions.DenseRank">
+<code>class DenseRank(*expressions, **extra)</code> </dt> 
+</dl> <p>Equivalent to <a class="reference internal" href="#django.db.models.functions.Rank" title="django.db.models.functions.Rank"><code>Rank</code></a> but does not have gaps.</p>   <h3 id="firstvalue"><code>FirstValue</code></h3> <dl class="class" id="s-firstvalue"> <dt id="django.db.models.functions.FirstValue">
+<code>class FirstValue(expression, **extra)</code> </dt> 
+</dl> <p>Returns the value evaluated at the row that’s the first row of the window frame, or <code>None</code> if no such value exists.</p>   <h3 id="lag"><code>Lag</code></h3> <dl class="class" id="s-lag"> <dt id="django.db.models.functions.Lag">
+<code>class Lag(expression, offset=1, default=None, **extra)</code> </dt> 
+</dl> <p>Calculates the value offset by <code>offset</code>, and if no row exists there, returns <code>default</code>.</p> <p><code>default</code> must have the same type as the <code>expression</code>, however, this is only validated by the database and not in Python.</p> <div class="admonition-mariadb-and-default admonition"> <p class="first admonition-title">MariaDB and <code>default</code></p> <p class="last">MariaDB <a class="reference external" href="https://jira.mariadb.org/browse/MDEV-12981">doesn’t support</a> the <code>default</code> parameter.</p> </div>   <h3 id="lastvalue"><code>LastValue</code></h3> <dl class="class" id="s-lastvalue"> <dt id="django.db.models.functions.LastValue">
+<code>class LastValue(expression, **extra)</code> </dt> 
+</dl> <p>Comparable to <a class="reference internal" href="#django.db.models.functions.FirstValue" title="django.db.models.functions.FirstValue"><code>FirstValue</code></a>, it calculates the last value in a given frame clause.</p>   <h3 id="lead"><code>Lead</code></h3> <dl class="class" id="s-lead"> <dt id="django.db.models.functions.Lead">
+<code>class Lead(expression, offset=1, default=None, **extra)</code> </dt> 
+</dl> <p>Calculates the leading value in a given <a class="reference internal" href="expressions#window-frames"><span class="std std-ref">frame</span></a>. Both <code>offset</code> and <code>default</code> are evaluated with respect to the current row.</p> <p><code>default</code> must have the same type as the <code>expression</code>, however, this is only validated by the database and not in Python.</p> <div class="admonition-mariadb-and-default admonition"> <p class="first admonition-title">MariaDB and <code>default</code></p> <p class="last">MariaDB <a class="reference external" href="https://jira.mariadb.org/browse/MDEV-12981">doesn’t support</a> the <code>default</code> parameter.</p> </div>   <h3 id="nthvalue"><code>NthValue</code></h3> <dl class="class" id="s-nthvalue"> <dt id="django.db.models.functions.NthValue">
+<code>class NthValue(expression, nth=1, **extra)</code> </dt> 
+</dl> <p>Computes the row relative to the offset <code>nth</code> (must be a positive value) within the window. Returns <code>None</code> if no row exists.</p> <p>Some databases may handle a nonexistent nth-value differently. For example, Oracle returns an empty string rather than <code>None</code> for character-based expressions. Django doesn’t do any conversions in these cases.</p>   <h3 id="ntile"><code>Ntile</code></h3> <dl class="class" id="s-ntile"> <dt id="django.db.models.functions.Ntile">
+<code>class Ntile(num_buckets=1, **extra)</code> </dt> 
+</dl> <p>Calculates a partition for each of the rows in the frame clause, distributing numbers as evenly as possible between 1 and <code>num_buckets</code>. If the rows don’t divide evenly into a number of buckets, one or more buckets will be represented more frequently.</p>   <h3 id="percentrank"><code>PercentRank</code></h3> <dl class="class" id="s-percentrank"> <dt id="django.db.models.functions.PercentRank">
+<code>class PercentRank(*expressions, **extra)</code> </dt> 
+</dl> <p>Computes the percentile rank of the rows in the frame clause. This computation is equivalent to evaluating:</p> <pre data-language="python">(rank - 1) / (total rows - 1)
+</pre> <p>The following table explains the calculation for the percentile rank of a row:</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Row #</th> <th class="head">Value</th> <th class="head">Rank</th> <th class="head">Calculation</th> <th class="head">Percent Rank</th> </tr> </thead>  <tr>
+<td>1</td> <td>15</td> <td>1</td> <td>(1-1)/(7-1)</td> <td>0.0000</td> </tr> <tr>
+<td>2</td> <td>20</td> <td>2</td> <td>(2-1)/(7-1)</td> <td>0.1666</td> </tr> <tr>
+<td>3</td> <td>20</td> <td>2</td> <td>(2-1)/(7-1)</td> <td>0.1666</td> </tr> <tr>
+<td>4</td> <td>20</td> <td>2</td> <td>(2-1)/(7-1)</td> <td>0.1666</td> </tr> <tr>
+<td>5</td> <td>30</td> <td>5</td> <td>(5-1)/(7-1)</td> <td>0.6666</td> </tr> <tr>
+<td>6</td> <td>30</td> <td>5</td> <td>(5-1)/(7-1)</td> <td>0.6666</td> </tr> <tr>
+<td>7</td> <td>40</td> <td>7</td> <td>(7-1)/(7-1)</td> <td>1.0000</td> </tr>  </table>   <h3 id="rank"><code>Rank</code></h3> <dl class="class" id="s-rank"> <dt id="django.db.models.functions.Rank">
+<code>class Rank(*expressions, **extra)</code> </dt> 
+</dl> <p>Comparable to <code>RowNumber</code>, this function ranks rows in the window. The computed rank contains gaps. Use <a class="reference internal" href="#django.db.models.functions.DenseRank" title="django.db.models.functions.DenseRank"><code>DenseRank</code></a> to compute rank without gaps.</p>   <h3 id="rownumber"><code>RowNumber</code></h3> <dl class="class" id="s-rownumber"> <dt id="django.db.models.functions.RowNumber">
+<code>class RowNumber(*expressions, **extra)</code> </dt> 
+</dl> <p>Computes the row number according to the ordering of either the frame clause or the ordering of the whole query if there is no partitioning of the <a class="reference internal" href="expressions#window-frames"><span class="std std-ref">window frame</span></a>.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/models/database-functions/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/models/database-functions/</a>
+  </p>
+</div>

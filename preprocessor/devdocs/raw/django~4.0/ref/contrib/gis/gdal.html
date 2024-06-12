@@ -1,0 +1,852 @@
+<h1 id="gdal-api">GDAL API</h1> <p id="s-module-django.contrib.gis.gdal"><a class="reference external" href="https://gdal.org/">GDAL</a> stands for <strong>Geospatial Data Abstraction Library</strong>, and is a veritable “Swiss army knife” of GIS data functionality. A subset of GDAL is the <a class="reference external" href="https://gdal.org/user/vector_data_model.html">OGR</a> Simple Features Library, which specializes in reading and writing vector geographic data in a variety of standard formats.</p> <p>GeoDjango provides a high-level Python interface for some of the capabilities of OGR, including the reading and coordinate transformation of vector spatial data and minimal support for GDAL’s features with respect to raster (image) data.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Although the module is named <code>gdal</code>, GeoDjango only supports some of the capabilities of OGR and GDAL’s raster features at this time.</p> </div>  <h2 id="overview">Overview</h2>  <h3 id="gdal-sample-data">Sample Data</h3> <p id="s-overview">The GDAL/OGR tools described here are designed to help you read in your geospatial data, in order for most of them to be useful you have to have some data to work with. If you’re starting out and don’t yet have any data of your own to use, GeoDjango tests contain a number of data sets that you can use for testing. You can download them here:</p> <pre data-language="python">$ wget https://raw.githubusercontent.com/django/django/main/tests/gis_tests/data/cities/cities.{shp,prj,shx,dbf}
+$ wget https://raw.githubusercontent.com/django/django/main/tests/gis_tests/data/rasters/raster.tif
+</pre>    <h2 id="vector-data-source-objects">Vector Data Source Objects</h2>  <h3 id="datasource"><code>DataSource</code></h3> <p id="s-vector-data-source-objects"><a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a> is a wrapper for the OGR data source object that supports reading data from a variety of OGR-supported geospatial file formats and data sources using a consistent interface. Each data source is represented by a <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a> object which contains one or more layers of data. Each layer, represented by a <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> object, contains some number of geographic features (<a class="reference internal" href="#django.contrib.gis.gdal.Feature" title="django.contrib.gis.gdal.Feature"><code>Feature</code></a>), information about the type of features contained in that layer (e.g. points, polygons, etc.), as well as the names and types of any additional fields (<a class="reference internal" href="#django.contrib.gis.gdal.Field" title="django.contrib.gis.gdal.Field"><code>Field</code></a>) of data that may be associated with each feature in that layer.</p> <dl class="class"> <dt id="django.contrib.gis.gdal.DataSource">
+<code>class DataSource(ds_input, encoding='utf-8')</code> </dt> <dd>
+<p>The constructor for <code>DataSource</code> only requires one parameter: the path of the file you want to read. However, OGR also supports a variety of more complex data sources, including databases, that may be accessed by passing a special name string instead of a path. For more information, see the <a class="reference external" href="https://gdal.org/drivers/vector/">OGR Vector Formats</a> documentation. The <a class="reference internal" href="#django.contrib.gis.gdal.DataSource.name" title="django.contrib.gis.gdal.DataSource.name"><code>name</code></a> property of a <code>DataSource</code> instance gives the OGR name of the underlying data source that it is using.</p> <p>The optional <code>encoding</code> parameter allows you to specify a non-standard encoding of the strings in the source. This is typically useful when you obtain <code>DjangoUnicodeDecodeError</code> exceptions while reading field values.</p> <p>Once you’ve created your <code>DataSource</code>, you can find out how many layers of data it contains by accessing the <a class="reference internal" href="#django.contrib.gis.gdal.DataSource.layer_count" title="django.contrib.gis.gdal.DataSource.layer_count"><code>layer_count</code></a> property, or (equivalently) by using the <code>len()</code> function. For information on accessing the layers of data themselves, see the next section:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import DataSource
+&gt;&gt;&gt; ds = DataSource('/path/to/your/cities.shp')
+&gt;&gt;&gt; ds.name
+'/path/to/your/cities.shp'
+&gt;&gt;&gt; ds.layer_count                  # This file only contains one layer
+1
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.DataSource.layer_count">
+<code>layer_count</code> </dt> 
+</dl> <p>Returns the number of layers in the data source.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.DataSource.name">
+<code>name</code> </dt> 
+</dl> <p>Returns the name of the data source.</p> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>Support for <a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.10)"><code>pathlib.Path</code></a> <code>ds_input</code> was added.</p> </div> </dd>
+</dl>   <h3 id="layer"><code>Layer</code></h3> <dl class="class" id="s-layer"> <dt id="django.contrib.gis.gdal.Layer">
+<code>class Layer</code> </dt> <dd>
+<p><code>Layer</code> is a wrapper for a layer of data in a <code>DataSource</code> object. You never create a <code>Layer</code> object directly. Instead, you retrieve them from a <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a> object, which is essentially a standard Python container of <code>Layer</code> objects. For example, you can access a specific layer by its index (e.g. <code>ds[0]</code> to access the first layer), or you can iterate over all the layers in the container in a <code>for</code> loop. The <code>Layer</code> itself acts as a container for geometric features.</p> <p>Typically, all the features in a given layer have the same geometry type. The <a class="reference internal" href="#django.contrib.gis.gdal.Layer.geom_type" title="django.contrib.gis.gdal.Layer.geom_type"><code>geom_type</code></a> property of a layer is an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeomType" title="django.contrib.gis.gdal.OGRGeomType"><code>OGRGeomType</code></a> that identifies the feature type. We can use it to print out some basic information about each layer in a <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; for layer in ds:
+...     print('Layer "%s": %i %ss' % (layer.name, len(layer), layer.geom_type.name))
+...
+Layer "cities": 3 Points
+</pre> <p>The example output is from the cities data source, loaded above, which evidently contains one layer, called <code>"cities"</code>, which contains three point features. For simplicity, the examples below assume that you’ve stored that layer in the variable <code>layer</code>:</p> <pre data-language="python">&gt;&gt;&gt; layer = ds[0]
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.name">
+<code>name</code> </dt> 
+</dl> <p>Returns the name of this layer in the data source.</p> <pre data-language="python">&gt;&gt;&gt; layer.name
+'cities'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.num_feat">
+<code>num_feat</code> </dt> 
+</dl> <p>Returns the number of features in the layer. Same as <code>len(layer)</code>:</p> <pre data-language="python">&gt;&gt;&gt; layer.num_feat
+3
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.geom_type">
+<code>geom_type</code> </dt> 
+</dl> <p>Returns the geometry type of the layer, as an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeomType" title="django.contrib.gis.gdal.OGRGeomType"><code>OGRGeomType</code></a> object:</p> <pre data-language="python">&gt;&gt;&gt; layer.geom_type.name
+'Point'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.num_fields">
+<code>num_fields</code> </dt> 
+</dl> <p>Returns the number of fields in the layer, i.e the number of fields of data associated with each feature in the layer:</p> <pre data-language="python">&gt;&gt;&gt; layer.num_fields
+4
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.fields">
+<code>fields</code> </dt> 
+</dl> <p>Returns a list of the names of each of the fields in this layer:</p> <pre data-language="python">&gt;&gt;&gt; layer.fields
+['Name', 'Population', 'Density', 'Created']
+</pre> <p>Returns a list of the data types of each of the fields in this layer. These are subclasses of <code>Field</code>, discussed below:</p> <pre data-language="python">&gt;&gt;&gt; [ft.__name__ for ft in layer.field_types]
+['OFTString', 'OFTReal', 'OFTReal', 'OFTDate']
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.field_widths">
+<code>field_widths</code> </dt> 
+</dl> <p>Returns a list of the maximum field widths for each of the fields in this layer:</p> <pre data-language="python">&gt;&gt;&gt; layer.field_widths
+[80, 11, 24, 10]
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.field_precisions">
+<code>field_precisions</code> </dt> 
+</dl> <p>Returns a list of the numeric precisions for each of the fields in this layer. This is meaningless (and set to zero) for non-numeric fields:</p> <pre data-language="python">&gt;&gt;&gt; layer.field_precisions
+[0, 0, 15, 0]
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.extent">
+<code>extent</code> </dt> 
+</dl> <p>Returns the spatial extent of this layer, as an <a class="reference internal" href="#django.contrib.gis.gdal.Envelope" title="django.contrib.gis.gdal.Envelope"><code>Envelope</code></a> object:</p> <pre data-language="python">&gt;&gt;&gt; layer.extent.tuple
+(-104.609252, 29.763374, -95.23506, 38.971823)
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.srs">
+<code>srs</code> </dt> 
+</dl> <p>Property that returns the <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> associated with this layer:</p> <pre data-language="python">&gt;&gt;&gt; print(layer.srs)
+GEOGCS["GCS_WGS_1984",
+    DATUM["WGS_1984",
+        SPHEROID["WGS_1984",6378137,298.257223563]],
+    PRIMEM["Greenwich",0],
+    UNIT["Degree",0.017453292519943295]]
+</pre> <p>If the <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> has no spatial reference information associated with it, <code>None</code> is returned.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Layer.spatial_filter">
+<code>spatial_filter</code> </dt> 
+</dl> <p>Property that may be used to retrieve or set a spatial filter for this layer. A spatial filter can only be set with an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> instance, a 4-tuple extent, or <code>None</code>. When set with something other than <code>None</code>, only features that intersect the filter will be returned when iterating over the layer:</p> <pre data-language="python">&gt;&gt;&gt; print(layer.spatial_filter)
+None
+&gt;&gt;&gt; print(len(layer))
+3
+&gt;&gt;&gt; [feat.get('Name') for feat in layer]
+['Pueblo', 'Lawrence', 'Houston']
+&gt;&gt;&gt; ks_extent = (-102.051, 36.99, -94.59, 40.00) # Extent for state of Kansas
+&gt;&gt;&gt; layer.spatial_filter = ks_extent
+&gt;&gt;&gt; len(layer)
+1
+&gt;&gt;&gt; [feat.get('Name') for feat in layer]
+['Lawrence']
+&gt;&gt;&gt; layer.spatial_filter = None
+&gt;&gt;&gt; len(layer)
+3
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Layer.get_fields">
+<code>get_fields()</code> </dt> 
+</dl> <p>A method that returns a list of the values of a given field for each feature in the layer:</p> <pre data-language="python">&gt;&gt;&gt; layer.get_fields('Name')
+['Pueblo', 'Lawrence', 'Houston']
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Layer.get_geoms">
+<code>get_geoms(geos=False)</code> </dt> 
+</dl> <p>A method that returns a list containing the geometry of each feature in the layer. If the optional argument <code>geos</code> is set to <code>True</code> then the geometries are converted to <a class="reference internal" href="geos#django.contrib.gis.geos.GEOSGeometry" title="django.contrib.gis.geos.GEOSGeometry"><code>GEOSGeometry</code></a> objects. Otherwise, they are returned as <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> objects:</p> <pre data-language="python">&gt;&gt;&gt; [pt.tuple for pt in layer.get_geoms()]
+[(-104.609252, 38.255001), (-95.23506, 38.971823), (-95.363151, 29.763374)]
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Layer.test_capability">
+<code>test_capability(capability)</code> </dt> 
+</dl> <p>Returns a boolean indicating whether this layer supports the given capability (a string). Examples of valid capability strings include: <code>'RandomRead'</code>, <code>'SequentialWrite'</code>, <code>'RandomWrite'</code>, <code>'FastSpatialFilter'</code>, <code>'FastFeatureCount'</code>, <code>'FastGetExtent'</code>, <code>'CreateField'</code>, <code>'Transactions'</code>, <code>'DeleteFeature'</code>, and <code>'FastSetNextByIndex'</code>.</p> </dd>
+</dl>   <h3 id="feature"><code>Feature</code></h3> <dl class="class" id="s-feature"> <dt id="django.contrib.gis.gdal.Feature">
+<code>class Feature</code> </dt> <dd>
+<p><code>Feature</code> wraps an OGR feature. You never create a <code>Feature</code> object directly. Instead, you retrieve them from a <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> object. Each feature consists of a geometry and a set of fields containing additional properties. The geometry of a field is accessible via its <code>geom</code> property, which returns an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object. A <code>Feature</code> behaves like a standard Python container for its fields, which it returns as <a class="reference internal" href="#django.contrib.gis.gdal.Field" title="django.contrib.gis.gdal.Field"><code>Field</code></a> objects: you can access a field directly by its index or name, or you can iterate over a feature’s fields, e.g. in a <code>for</code> loop.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.geom">
+<code>geom</code> </dt> 
+</dl> <p>Returns the geometry for this feature, as an <code>OGRGeometry</code> object:</p> <pre data-language="python">&gt;&gt;&gt; city.geom.tuple
+(-104.609252, 38.255001)
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.get">
+<code>get</code> </dt> 
+</dl> <p>A method that returns the value of the given field (specified by name) for this feature, <strong>not</strong> a <code>Field</code> wrapper object:</p> <pre data-language="python">&gt;&gt;&gt; city.get('Population')
+102121
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.geom_type">
+<code>geom_type</code> </dt> 
+</dl> <p>Returns the type of geometry for this feature, as an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeomType" title="django.contrib.gis.gdal.OGRGeomType"><code>OGRGeomType</code></a> object. This will be the same for all features in a given layer and is equivalent to the <a class="reference internal" href="#django.contrib.gis.gdal.Layer.geom_type" title="django.contrib.gis.gdal.Layer.geom_type"><code>Layer.geom_type</code></a> property of the <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> object the feature came from.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.num_fields">
+<code>num_fields</code> </dt> 
+</dl> <p>Returns the number of fields of data associated with the feature. This will be the same for all features in a given layer and is equivalent to the <a class="reference internal" href="#django.contrib.gis.gdal.Layer.num_fields" title="django.contrib.gis.gdal.Layer.num_fields"><code>Layer.num_fields</code></a> property of the <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> object the feature came from.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.fields">
+<code>fields</code> </dt> 
+</dl> <p>Returns a list of the names of the fields of data associated with the feature. This will be the same for all features in a given layer and is equivalent to the <a class="reference internal" href="#django.contrib.gis.gdal.Layer.fields" title="django.contrib.gis.gdal.Layer.fields"><code>Layer.fields</code></a> property of the <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> object the feature came from.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.fid">
+<code>fid</code> </dt> 
+</dl> <p>Returns the feature identifier within the layer:</p> <pre data-language="python">&gt;&gt;&gt; city.fid
+0
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.layer_name">
+<code>layer_name</code> </dt> 
+</dl> <p>Returns the name of the <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> that the feature came from. This will be the same for all features in a given layer:</p> <pre data-language="python">&gt;&gt;&gt; city.layer_name
+'cities'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Feature.index">
+<code>index</code> </dt> 
+</dl> <p>A method that returns the index of the given field name. This will be the same for all features in a given layer:</p> <pre data-language="python">&gt;&gt;&gt; city.index('Population')
+1
+</pre> </dd>
+</dl>   <h3 id="field"><code>Field</code></h3> <dl class="class" id="s-field"> <dt id="django.contrib.gis.gdal.Field">
+<code>class Field</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.name">
+<code>name</code> </dt> 
+</dl> <p>Returns the name of this field:</p> <pre data-language="python">&gt;&gt;&gt; city['Name'].name
+'Name'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.type">
+<code>type</code> </dt> 
+</dl> <p>Returns the OGR type of this field, as an integer. The <code>FIELD_CLASSES</code> dictionary maps these values onto subclasses of <code>Field</code>:</p> <pre data-language="python">&gt;&gt;&gt; city['Density'].type
+2
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.type_name">
+<code>type_name</code> </dt> 
+</dl> <p>Returns a string with the name of the data type of this field:</p> <pre data-language="python">&gt;&gt;&gt; city['Name'].type_name
+'String'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.value">
+<code>value</code> </dt> 
+</dl> <p>Returns the value of this field. The <code>Field</code> class itself returns the value as a string, but each subclass returns the value in the most appropriate form:</p> <pre data-language="python">&gt;&gt;&gt; city['Population'].value
+102121
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.width">
+<code>width</code> </dt> 
+</dl> <p>Returns the width of this field:</p> <pre data-language="python">&gt;&gt;&gt; city['Name'].width
+80
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Field.precision">
+<code>precision</code> </dt> 
+</dl> <p>Returns the numeric precision of this field. This is meaningless (and set to zero) for non-numeric fields:</p> <pre data-language="python">&gt;&gt;&gt; city['Density'].precision
+15
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Field.as_double">
+<code>as_double()</code> </dt> 
+</dl> <p>Returns the value of the field as a double (float):</p> <pre data-language="python">&gt;&gt;&gt; city['Density'].as_double()
+874.7
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Field.as_int">
+<code>as_int()</code> </dt> 
+</dl> <p>Returns the value of the field as an integer:</p> <pre data-language="python">&gt;&gt;&gt; city['Population'].as_int()
+102121
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Field.as_string">
+<code>as_string()</code> </dt> 
+</dl> <p>Returns the value of the field as a string:</p> <pre data-language="python">&gt;&gt;&gt; city['Name'].as_string()
+'Pueblo'
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.Field.as_datetime">
+<code>as_datetime()</code> </dt> 
+</dl> <p>Returns the value of the field as a tuple of date and time components:</p> <pre data-language="python">&gt;&gt;&gt; city['Created'].as_datetime()
+(c_long(1999), c_long(5), c_long(23), c_long(0), c_long(0), c_long(0), c_long(0))
+</pre> </dd>
+</dl>   <h3 id="driver"><code>Driver</code></h3> <dl class="class" id="s-driver"> <dt id="django.contrib.gis.gdal.Driver">
+<code>class Driver(dr_input)</code> </dt> <dd>
+<p>The <code>Driver</code> class is used internally to wrap an OGR <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a> driver.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Driver.driver_count">
+<code>driver_count</code> </dt> 
+</dl> <p>Returns the number of OGR vector drivers currently registered.</p> </dd>
+</dl>    <h2 id="ogr-geometries">OGR Geometries</h2>  <h3 id="ogrgeometry"><code>OGRGeometry</code></h3> <p id="s-ogr-geometries"><a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> objects share similar functionality with <a class="reference internal" href="geos#django.contrib.gis.geos.GEOSGeometry" title="django.contrib.gis.geos.GEOSGeometry"><code>GEOSGeometry</code></a> objects and are thin wrappers around OGR’s internal geometry representation. Thus, they allow for more efficient access to data when using <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a>. Unlike its GEOS counterpart, <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> supports spatial reference systems and coordinate transformation:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import OGRGeometry
+&gt;&gt;&gt; polygon = OGRGeometry('POLYGON((0 0, 5 0, 5 5, 0 5))')
+</pre> <dl class="class"> <dt id="django.contrib.gis.gdal.OGRGeometry">
+<code>class OGRGeometry(geom_input, srs=None)</code> </dt> <dd>
+<p>This object is a wrapper for the <a class="reference external" href="https://gdal.org/api/ogrgeometry_cpp.html#ogrgeometry-class">OGR Geometry</a> class. These objects are instantiated directly from the given <code>geom_input</code> parameter, which may be a string containing WKT, HEX, GeoJSON, a <code>buffer</code> containing WKB data, or an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeomType" title="django.contrib.gis.gdal.OGRGeomType"><code>OGRGeomType</code></a> object. These objects are also returned from the <a class="reference internal" href="#django.contrib.gis.gdal.Feature.geom" title="django.contrib.gis.gdal.Feature.geom"><code>Feature.geom</code></a> attribute, when reading vector data from <a class="reference internal" href="#django.contrib.gis.gdal.Layer" title="django.contrib.gis.gdal.Layer"><code>Layer</code></a> (which is in turn a part of a <a class="reference internal" href="#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>DataSource</code></a>).</p> <dl class="classmethod"> <dt id="django.contrib.gis.gdal.OGRGeometry.from_gml">
+<code>classmethod from_gml(gml_string)</code> </dt> 
+</dl> <p>Constructs an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> from the given GML string.</p> <dl class="classmethod"> <dt id="django.contrib.gis.gdal.OGRGeometry.from_bbox">
+<code>classmethod from_bbox(bbox)</code> </dt> 
+</dl> <p>Constructs a <a class="reference internal" href="#django.contrib.gis.gdal.Polygon" title="django.contrib.gis.gdal.Polygon"><code>Polygon</code></a> from the given bounding-box (a 4-tuple).</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.__len__">
+<code>__len__()</code> </dt> 
+</dl> <p>Returns the number of points in a <a class="reference internal" href="#django.contrib.gis.gdal.LineString" title="django.contrib.gis.gdal.LineString"><code>LineString</code></a>, the number of rings in a <a class="reference internal" href="#django.contrib.gis.gdal.Polygon" title="django.contrib.gis.gdal.Polygon"><code>Polygon</code></a>, or the number of geometries in a <a class="reference internal" href="#django.contrib.gis.gdal.GeometryCollection" title="django.contrib.gis.gdal.GeometryCollection"><code>GeometryCollection</code></a>. Not applicable to other geometry types.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.__iter__">
+<code>__iter__()</code> </dt> 
+</dl> <p>Iterates over the points in a <a class="reference internal" href="#django.contrib.gis.gdal.LineString" title="django.contrib.gis.gdal.LineString"><code>LineString</code></a>, the rings in a <a class="reference internal" href="#django.contrib.gis.gdal.Polygon" title="django.contrib.gis.gdal.Polygon"><code>Polygon</code></a>, or the geometries in a <a class="reference internal" href="#django.contrib.gis.gdal.GeometryCollection" title="django.contrib.gis.gdal.GeometryCollection"><code>GeometryCollection</code></a>. Not applicable to other geometry types.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.__getitem__">
+<code>__getitem__()</code> </dt> 
+</dl> <p>Returns the point at the specified index for a <a class="reference internal" href="#django.contrib.gis.gdal.LineString" title="django.contrib.gis.gdal.LineString"><code>LineString</code></a>, the interior ring at the specified index for a <a class="reference internal" href="#django.contrib.gis.gdal.Polygon" title="django.contrib.gis.gdal.Polygon"><code>Polygon</code></a>, or the geometry at the specified index in a <a class="reference internal" href="#django.contrib.gis.gdal.GeometryCollection" title="django.contrib.gis.gdal.GeometryCollection"><code>GeometryCollection</code></a>. Not applicable to other geometry types.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.dimension">
+<code>dimension</code> </dt> 
+</dl> <p>Returns the number of coordinated dimensions of the geometry, i.e. 0 for points, 1 for lines, and so forth:</p> <pre data-language="python">&gt;&gt; polygon.dimension
+2
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.coord_dim">
+<code>coord_dim</code> </dt> 
+</dl> <p>Returns or sets the coordinate dimension of this geometry. For example, the value would be 2 for two-dimensional geometries.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.geom_count">
+<code>geom_count</code> </dt> 
+</dl> <p>Returns the number of elements in this geometry:</p> <pre data-language="python">&gt;&gt;&gt; polygon.geom_count
+1
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.point_count">
+<code>point_count</code> </dt> 
+</dl> <p>Returns the number of points used to describe this geometry:</p> <pre data-language="python">&gt;&gt;&gt; polygon.point_count
+4
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.num_points">
+<code>num_points</code> </dt> 
+</dl> <p>Alias for <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry.point_count" title="django.contrib.gis.gdal.OGRGeometry.point_count"><code>point_count</code></a>.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.num_coords">
+<code>num_coords</code> </dt> 
+</dl> <p>Alias for <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry.point_count" title="django.contrib.gis.gdal.OGRGeometry.point_count"><code>point_count</code></a>.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.geom_type">
+<code>geom_type</code> </dt> 
+</dl> <p>Returns the type of this geometry, as an <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeomType" title="django.contrib.gis.gdal.OGRGeomType"><code>OGRGeomType</code></a> object.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.geom_name">
+<code>geom_name</code> </dt> 
+</dl> <p>Returns the name of the type of this geometry:</p> <pre data-language="python">&gt;&gt;&gt; polygon.geom_name
+'POLYGON'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.area">
+<code>area</code> </dt> 
+</dl> <p>Returns the area of this geometry, or 0 for geometries that do not contain an area:</p> <pre data-language="python">&gt;&gt;&gt; polygon.area
+25.0
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.envelope">
+<code>envelope</code> </dt> 
+</dl> <p>Returns the envelope of this geometry, as an <a class="reference internal" href="#django.contrib.gis.gdal.Envelope" title="django.contrib.gis.gdal.Envelope"><code>Envelope</code></a> object.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.extent">
+<code>extent</code> </dt> 
+</dl> <p>Returns the envelope of this geometry as a 4-tuple, instead of as an <a class="reference internal" href="#django.contrib.gis.gdal.Envelope" title="django.contrib.gis.gdal.Envelope"><code>Envelope</code></a> object:</p> <pre data-language="python">&gt;&gt;&gt; point.extent
+(0.0, 0.0, 5.0, 5.0)
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.srs">
+<code>srs</code> </dt> 
+</dl> <p>This property controls the spatial reference for this geometry, or <code>None</code> if no spatial reference system has been assigned to it. If assigned, accessing this property returns a <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> object. It may be set with another <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> object, or any input that <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> accepts. Example:</p> <pre data-language="python">&gt;&gt;&gt; city.geom.srs.name
+'GCS_WGS_1984'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.srid">
+<code>srid</code> </dt> 
+</dl> <p>Returns or sets the spatial reference identifier corresponding to <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> of this geometry. Returns <code>None</code> if there is no spatial reference information associated with this geometry, or if an SRID cannot be determined.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.geos">
+<code>geos</code> </dt> 
+</dl> <p>Returns a <a class="reference internal" href="geos#django.contrib.gis.geos.GEOSGeometry" title="django.contrib.gis.geos.GEOSGeometry"><code>GEOSGeometry</code></a> object corresponding to this geometry.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.gml">
+<code>gml</code> </dt> 
+</dl> <p>Returns a string representation of this geometry in GML format:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT(1 2)').gml
+'&lt;gml:Point&gt;&lt;gml:coordinates&gt;1,2&lt;/gml:coordinates&gt;&lt;/gml:Point&gt;'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.hex">
+<code>hex</code> </dt> 
+</dl> <p>Returns a string representation of this geometry in HEX WKB format:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT(1 2)').hex
+'0101000000000000000000F03F0000000000000040'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.json">
+<code>json</code> </dt> 
+</dl> <p>Returns a string representation of this geometry in JSON format:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT(1 2)').json
+'{ "type": "Point", "coordinates": [ 1.000000, 2.000000 ] }'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.kml">
+<code>kml</code> </dt> 
+</dl> <p>Returns a string representation of this geometry in KML format.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.wkb_size">
+<code>wkb_size</code> </dt> 
+</dl> <p>Returns the size of the WKB buffer needed to hold a WKB representation of this geometry:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT(1 2)').wkb_size
+21
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.wkb">
+<code>wkb</code> </dt> 
+</dl> <p>Returns a <code>buffer</code> containing a WKB representation of this geometry.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.wkt">
+<code>wkt</code> </dt> 
+</dl> <p>Returns a string representation of this geometry in WKT format.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.ewkt">
+<code>ewkt</code> </dt> 
+</dl> <p>Returns the EWKT representation of this geometry.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.clone">
+<code>clone()</code> </dt> 
+</dl> <p>Returns a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> clone of this geometry object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.close_rings">
+<code>close_rings()</code> </dt> 
+</dl> <p>If there are any rings within this geometry that have not been closed, this routine will do so by adding the starting point to the end:</p> <pre data-language="python">&gt;&gt;&gt; triangle = OGRGeometry('LINEARRING (0 0,0 1,1 0)')
+&gt;&gt;&gt; triangle.close_rings()
+&gt;&gt;&gt; triangle.wkt
+'LINEARRING (0 0,0 1,1 0,0 0)'
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.transform">
+<code>transform(coord_trans, clone=False)</code> </dt> 
+</dl> <p>Transforms this geometry to a different spatial reference system. May take a <a class="reference internal" href="#django.contrib.gis.gdal.CoordTransform" title="django.contrib.gis.gdal.CoordTransform"><code>CoordTransform</code></a> object, a <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> object, or any other input accepted by <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> (including spatial reference WKT and PROJ strings, or an integer SRID).</p> <p>By default nothing is returned and the geometry is transformed in-place. However, if the <code>clone</code> keyword is set to <code>True</code> then a transformed clone of this geometry is returned instead.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.intersects">
+<code>intersects(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry intersects the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.equals">
+<code>equals(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry is equivalent to the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.disjoint">
+<code>disjoint(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry is spatially disjoint to (i.e. does not intersect) the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.touches">
+<code>touches(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry touches the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.crosses">
+<code>crosses(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry crosses the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.within">
+<code>within(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry is contained within the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.contains">
+<code>contains(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry contains the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.overlaps">
+<code>overlaps(other)</code> </dt> 
+</dl> <p>Returns <code>True</code> if this geometry overlaps the other, otherwise returns <code>False</code>.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.boundary">
+<code>boundary()</code> </dt> 
+</dl> <p>The boundary of this geometry, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.convex_hull">
+<code>convex_hull</code> </dt> 
+</dl> <p>The smallest convex polygon that contains this geometry, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.difference">
+<code>difference()</code> </dt> 
+</dl> <p>Returns the region consisting of the difference of this geometry and the other, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.intersection">
+<code>intersection()</code> </dt> 
+</dl> <p>Returns the region consisting of the intersection of this geometry and the other, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.sym_difference">
+<code>sym_difference()</code> </dt> 
+</dl> <p>Returns the region consisting of the symmetric difference of this geometry and the other, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.OGRGeometry.union">
+<code>union()</code> </dt> 
+</dl> <p>Returns the region consisting of the union of this geometry and the other, as a new <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry" title="django.contrib.gis.gdal.OGRGeometry"><code>OGRGeometry</code></a> object.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.tuple">
+<code>tuple</code> </dt> 
+</dl> <p>Returns the coordinates of a point geometry as a tuple, the coordinates of a line geometry as a tuple of tuples, and so forth:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT (1 2)').tuple
+(1.0, 2.0)
+&gt;&gt;&gt; OGRGeometry('LINESTRING (1 2,3 4)').tuple
+((1.0, 2.0), (3.0, 4.0))
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeometry.coords">
+<code>coords</code> </dt> 
+</dl> <p>An alias for <a class="reference internal" href="#django.contrib.gis.gdal.OGRGeometry.tuple" title="django.contrib.gis.gdal.OGRGeometry.tuple"><code>tuple</code></a>.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.gis.gdal.Point">
+<code>class Point</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.gis.gdal.Point.x">
+<code>x</code> </dt> 
+</dl> <p>Returns the X coordinate of this point:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT (1 2)').x
+1.0
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Point.y">
+<code>y</code> </dt> 
+</dl> <p>Returns the Y coordinate of this point:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT (1 2)').y
+2.0
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Point.z">
+<code>z</code> </dt> 
+</dl> <p>Returns the Z coordinate of this point, or <code>None</code> if the point does not have a Z coordinate:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('POINT (1 2 3)').z
+3.0
+</pre> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.gis.gdal.LineString">
+<code>class LineString</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.gis.gdal.LineString.x">
+<code>x</code> </dt> 
+</dl> <p>Returns a list of X coordinates in this line:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('LINESTRING (1 2,3 4)').x
+[1.0, 3.0]
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.LineString.y">
+<code>y</code> </dt> 
+</dl> <p>Returns a list of Y coordinates in this line:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('LINESTRING (1 2,3 4)').y
+[2.0, 4.0]
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.LineString.z">
+<code>z</code> </dt> 
+</dl> <p>Returns a list of Z coordinates in this line, or <code>None</code> if the line does not have Z coordinates:</p> <pre data-language="python">&gt;&gt;&gt; OGRGeometry('LINESTRING (1 2 3,4 5 6)').z
+[3.0, 6.0]
+</pre> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.gis.gdal.Polygon">
+<code>class Polygon</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.gis.gdal.Polygon.shell">
+<code>shell</code> </dt> 
+</dl> <p>Returns the shell or exterior ring of this polygon, as a <code>LinearRing</code> geometry.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Polygon.exterior_ring">
+<code>exterior_ring</code> </dt> 
+</dl> <p>An alias for <a class="reference internal" href="#django.contrib.gis.gdal.Polygon.shell" title="django.contrib.gis.gdal.Polygon.shell"><code>shell</code></a>.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Polygon.centroid">
+<code>centroid</code> </dt> 
+</dl> <p>Returns a <a class="reference internal" href="#django.contrib.gis.gdal.Point" title="django.contrib.gis.gdal.Point"><code>Point</code></a> representing the centroid of this polygon.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.gis.gdal.GeometryCollection">
+<code>class GeometryCollection</code> </dt> <dd>
+<dl class="method"> <dt id="django.contrib.gis.gdal.GeometryCollection.add">
+<code>add(geom)</code> </dt> 
+</dl> <p>Adds a geometry to this geometry collection. Not applicable to other geometry types.</p> </dd>
+</dl>   <h3 id="ogrgeomtype"><code>OGRGeomType</code></h3> <dl class="class" id="s-ogrgeomtype"> <dt id="django.contrib.gis.gdal.OGRGeomType">
+<code>class OGRGeomType(type_input)</code> </dt> <dd>
+<p>This class allows for the representation of an OGR geometry type in any of several ways:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import OGRGeomType
+&gt;&gt;&gt; gt1 = OGRGeomType(3)             # Using an integer for the type
+&gt;&gt;&gt; gt2 = OGRGeomType('Polygon')     # Using a string
+&gt;&gt;&gt; gt3 = OGRGeomType('POLYGON')     # It's case-insensitive
+&gt;&gt;&gt; print(gt1 == 3, gt1 == 'Polygon') # Equivalence works w/non-OGRGeomType objects
+True True
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeomType.name">
+<code>name</code> </dt> 
+</dl> <p>Returns a short-hand string form of the OGR Geometry type:</p> <pre data-language="python">&gt;&gt;&gt; gt1.name
+'Polygon'
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeomType.num">
+<code>num</code> </dt> 
+</dl> <p>Returns the number corresponding to the OGR geometry type:</p> <pre data-language="python">&gt;&gt;&gt; gt1.num
+3
+</pre> <dl class="attribute"> <dt id="django.contrib.gis.gdal.OGRGeomType.django">
+<code>django</code> </dt> 
+</dl> <p>Returns the Django field type (a subclass of GeometryField) to use for storing this OGR type, or <code>None</code> if there is no appropriate Django type:</p> <pre data-language="python">&gt;&gt;&gt; gt1.django
+'PolygonField'
+</pre> </dd>
+</dl>   <h3 id="envelope"><code>Envelope</code></h3> <dl class="class" id="s-envelope"> <dt id="django.contrib.gis.gdal.Envelope">
+<code>class Envelope(*args)</code> </dt> <dd>
+<p>Represents an OGR Envelope structure that contains the minimum and maximum X, Y coordinates for a rectangle bounding box. The naming of the variables is compatible with the OGR Envelope C structure.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.min_x">
+<code>min_x</code> </dt> 
+</dl> <p>The value of the minimum X coordinate.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.min_y">
+<code>min_y</code> </dt> 
+</dl> <p>The value of the maximum X coordinate.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.max_x">
+<code>max_x</code> </dt> 
+</dl> <p>The value of the minimum Y coordinate.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.max_y">
+<code>max_y</code> </dt> 
+</dl> <p>The value of the maximum Y coordinate.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.ur">
+<code>ur</code> </dt> 
+</dl> <p>The upper-right coordinate, as a tuple.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.ll">
+<code>ll</code> </dt> 
+</dl> <p>The lower-left coordinate, as a tuple.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.tuple">
+<code>tuple</code> </dt> 
+</dl> <p>A tuple representing the envelope.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.Envelope.wkt">
+<code>wkt</code> </dt> 
+</dl> <p>A string representing this envelope as a polygon in WKT format.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.Envelope.expand_to_include">
+<code>expand_to_include(*args)</code> </dt> 
+</dl> </dd>
+</dl>    <h2 id="coordinate-system-objects">Coordinate System Objects</h2>  <h3 id="spatialreference"><code>SpatialReference</code></h3> <dl class="class" id="s-coordinate-system-objects"> <dt id="django.contrib.gis.gdal.SpatialReference">
+<code>class SpatialReference(srs_input)</code> </dt> <dd>
+<p>Spatial reference objects are initialized on the given <code>srs_input</code>, which may be one of the following:</p> <ul class="simple"> <li>OGC Well Known Text (WKT) (a string)</li> <li>EPSG code (integer or string)</li> <li>PROJ string</li> <li>A shorthand string for well-known standards (<code>'WGS84'</code>, <code>'WGS72'</code>, <code>'NAD27'</code>, <code>'NAD83'</code>)</li> </ul> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; wgs84 = SpatialReference('WGS84') # shorthand string
+&gt;&gt;&gt; wgs84 = SpatialReference(4326) # EPSG code
+&gt;&gt;&gt; wgs84 = SpatialReference('EPSG:4326') # EPSG string
+&gt;&gt;&gt; proj = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs '
+&gt;&gt;&gt; wgs84 = SpatialReference(proj) # PROJ string
+&gt;&gt;&gt; wgs84 = SpatialReference("""GEOGCS["WGS 84",
+DATUM["WGS_1984",
+     SPHEROID["WGS 84",6378137,298.257223563,
+         AUTHORITY["EPSG","7030"]],
+     AUTHORITY["EPSG","6326"]],
+ PRIMEM["Greenwich",0,
+     AUTHORITY["EPSG","8901"]],
+ UNIT["degree",0.01745329251994328,
+     AUTHORITY["EPSG","9122"]],
+ AUTHORITY["EPSG","4326"]]""") # OGC WKT
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.__getitem__">
+<code>__getitem__(target)</code> </dt> 
+</dl> <p>Returns the value of the given string attribute node, <code>None</code> if the node doesn’t exist. Can also take a tuple as a parameter, (target, child), where child is the index of the attribute in the WKT. For example:</p> <pre data-language="python">&gt;&gt;&gt; wkt = 'GEOGCS["WGS 84", DATUM["WGS_1984, ... AUTHORITY["EPSG","4326"]]')
+&gt;&gt;&gt; srs = SpatialReference(wkt) # could also use 'WGS84', or 4326
+&gt;&gt;&gt; print(srs['GEOGCS'])
+WGS 84
+&gt;&gt;&gt; print(srs['DATUM'])
+WGS_1984
+&gt;&gt;&gt; print(srs['AUTHORITY'])
+EPSG
+&gt;&gt;&gt; print(srs['AUTHORITY', 1]) # The authority value
+4326
+&gt;&gt;&gt; print(srs['TOWGS84', 4]) # the fourth value in this wkt
+0
+&gt;&gt;&gt; print(srs['UNIT|AUTHORITY']) # For the units authority, have to use the pipe symbol.
+EPSG
+&gt;&gt;&gt; print(srs['UNIT|AUTHORITY', 1]) # The authority value for the units
+9122
+</pre> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.attr_value">
+<code>attr_value(target, index=0)</code> </dt> 
+</dl> <p>The attribute value for the given target node (e.g. <code>'PROJCS'</code>). The index keyword specifies an index of the child node to return.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.auth_name">
+<code>auth_name(target)</code> </dt> 
+</dl> <p>Returns the authority name for the given string target node.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.auth_code">
+<code>auth_code(target)</code> </dt> 
+</dl> <p>Returns the authority code for the given string target node.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.clone">
+<code>clone()</code> </dt> 
+</dl> <p>Returns a clone of this spatial reference object.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.identify_epsg">
+<code>identify_epsg()</code> </dt> 
+</dl> <p>This method inspects the WKT of this <code>SpatialReference</code> and will add EPSG authority nodes where an EPSG identifier is applicable.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.from_esri">
+<code>from_esri()</code> </dt> 
+</dl> <p>Morphs this SpatialReference from ESRI’s format to EPSG</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.to_esri">
+<code>to_esri()</code> </dt> 
+</dl> <p>Morphs this SpatialReference to ESRI’s format.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.validate">
+<code>validate()</code> </dt> 
+</dl> <p>Checks to see if the given spatial reference is valid, if not an exception will be raised.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.import_epsg">
+<code>import_epsg(epsg)</code> </dt> 
+</dl> <p>Import spatial reference from EPSG code.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.import_proj">
+<code>import_proj(proj)</code> </dt> 
+</dl> <p>Import spatial reference from PROJ string.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.import_user_input">
+<code>import_user_input(user_input)</code> </dt> 
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.import_wkt">
+<code>import_wkt(wkt)</code> </dt> 
+</dl> <p>Import spatial reference from WKT.</p> <dl class="method"> <dt id="django.contrib.gis.gdal.SpatialReference.import_xml">
+<code>import_xml(xml)</code> </dt> 
+</dl> <p>Import spatial reference from XML.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.name">
+<code>name</code> </dt> 
+</dl> <p>Returns the name of this Spatial Reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.srid">
+<code>srid</code> </dt> 
+</dl> <p>Returns the SRID of top-level authority, or <code>None</code> if undefined.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.linear_name">
+<code>linear_name</code> </dt> 
+</dl> <p>Returns the name of the linear units.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.linear_units">
+<code>linear_units</code> </dt> 
+</dl> <p>Returns the value of the linear units.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.angular_name">
+<code>angular_name</code> </dt> 
+</dl> <p>Returns the name of the angular units.”</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.angular_units">
+<code>angular_units</code> </dt> 
+</dl> <p>Returns the value of the angular units.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.units">
+<code>units</code> </dt> 
+</dl> <p>Returns a 2-tuple of the units value and the units name and will automatically determines whether to return the linear or angular units.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.ellipsoid">
+<code>ellipsoid</code> </dt> 
+</dl> <p>Returns a tuple of the ellipsoid parameters for this spatial reference: (semimajor axis, semiminor axis, and inverse flattening).</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.semi_major">
+<code>semi_major</code> </dt> 
+</dl> <p>Returns the semi major axis of the ellipsoid for this spatial reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.semi_minor">
+<code>semi_minor</code> </dt> 
+</dl> <p>Returns the semi minor axis of the ellipsoid for this spatial reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.inverse_flattening">
+<code>inverse_flattening</code> </dt> 
+</dl> <p>Returns the inverse flattening of the ellipsoid for this spatial reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.geographic">
+<code>geographic</code> </dt> 
+</dl> <p>Returns <code>True</code> if this spatial reference is geographic (root node is <code>GEOGCS</code>).</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.local">
+<code>local</code> </dt> 
+</dl> <p>Returns <code>True</code> if this spatial reference is local (root node is <code>LOCAL_CS</code>).</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.projected">
+<code>projected</code> </dt> 
+</dl> <p>Returns <code>True</code> if this spatial reference is a projected coordinate system (root node is <code>PROJCS</code>).</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.wkt">
+<code>wkt</code> </dt> 
+</dl> <p>Returns the WKT representation of this spatial reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.pretty_wkt">
+<code>pretty_wkt</code> </dt> 
+</dl> <p>Returns the ‘pretty’ representation of the WKT.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.proj">
+<code>proj</code> </dt> 
+</dl> <p>Returns the PROJ representation for this spatial reference.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.proj4">
+<code>proj4</code> </dt> 
+</dl> <p>Alias for <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference.proj" title="django.contrib.gis.gdal.SpatialReference.proj"><code>SpatialReference.proj</code></a>.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.SpatialReference.xml">
+<code>xml</code> </dt> 
+</dl> <p>Returns the XML representation of this spatial reference.</p> </dd>
+</dl>   <h3 id="coordtransform"><code>CoordTransform</code></h3> <dl class="class" id="s-coordtransform"> <dt id="django.contrib.gis.gdal.CoordTransform">
+<code>class CoordTransform(source, target)</code> </dt> 
+</dl> <p>Represents a coordinate system transform. It is initialized with two <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a>, representing the source and target coordinate systems, respectively. These objects should be used when performing the same coordinate transformation repeatedly on different geometries:</p> <pre data-language="python">&gt;&gt;&gt; ct = CoordTransform(SpatialReference('WGS84'), SpatialReference('NAD83'))
+&gt;&gt;&gt; for feat in layer:
+...     geom = feat.geom # getting clone of feature geometry
+...     geom.transform(ct) # transforming
+</pre>    <h2 id="raster-data-source-objects">Raster Data Objects</h2>  <h3 id="gdalraster"><code>GDALRaster</code></h3> <p id="s-raster-data-objects"><a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> is a wrapper for the GDAL raster source object that supports reading data from a variety of GDAL-supported geospatial file formats and data sources using a consistent interface. Each data source is represented by a <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> object which contains one or more layers of data named bands. Each band, represented by a <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand" title="django.contrib.gis.gdal.GDALBand"><code>GDALBand</code></a> object, contains georeferenced image data. For example, an RGB image is represented as three bands: one for red, one for green, and one for blue.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">For raster data there is no difference between a raster instance and its data source. Unlike for the Geometry objects, <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> objects are always a data source. Temporary rasters can be instantiated in memory using the corresponding driver, but they will be of the same class as file-based raster sources.</p> </div> <dl class="class"> <dt id="django.contrib.gis.gdal.GDALRaster">
+<code>class GDALRaster(ds_input, write=False)</code> </dt> <dd>
+<p>The constructor for <code>GDALRaster</code> accepts two parameters. The first parameter defines the raster source, and the second parameter defines if a raster should be opened in write mode. For newly-created rasters, the second parameter is ignored and the new raster is always created in write mode.</p> <p>The first parameter can take three forms: a string representing a file path (filesystem or GDAL virtual filesystem), a dictionary with values defining a new raster, or a bytes object representing a raster file.</p> <p>If the input is a file path, the raster is opened from there. If the input is raw data in a dictionary, the parameters <code>width</code>, <code>height</code>, and <code>srid</code> are required. If the input is a bytes object, it will be opened using a GDAL virtual filesystem.</p> <p>For a detailed description of how to create rasters using dictionary input, see <a class="reference internal" href="#gdal-raster-ds-input"><span class="std std-ref">Creating rasters from data</span></a>. For a detailed description of how to create rasters in the virtual filesystem, see <a class="reference internal" href="#gdal-raster-vsimem"><span class="std std-ref">Using GDAL’s Virtual Filesystem</span></a>.</p> <p>The following example shows how rasters can be created from different input sources (using the sample data from the GeoDjango tests; see also the <a class="reference internal" href="#gdal-sample-data"><span class="std std-ref">Sample Data</span></a> section).</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import GDALRaster
+&gt;&gt;&gt; rst = GDALRaster('/path/to/your/raster.tif', write=False)
+&gt;&gt;&gt; rst.name
+'/path/to/your/raster.tif'
+&gt;&gt;&gt; rst.width, rst.height  # This file has 163 x 174 pixels
+(163, 174)
+&gt;&gt;&gt; rst = GDALRaster({  # Creates an in-memory raster
+...     'srid': 4326,
+...     'width': 4,
+...     'height': 4,
+...     'datatype': 1,
+...     'bands': [{
+...         'data': (2, 3),
+...         'offset': (1, 1),
+...         'size': (2, 2),
+...         'shape': (2, 1),
+...         'nodata_value': 5,
+...     }]
+... })
+&gt;&gt;&gt; rst.srs.srid
+4326
+&gt;&gt;&gt; rst.width, rst.height
+(4, 4)
+&gt;&gt;&gt; rst.bands[0].data()
+array([[5, 5, 5, 5],
+       [5, 2, 3, 5],
+       [5, 2, 3, 5],
+       [5, 5, 5, 5]], dtype=uint8)
+&gt;&gt;&gt; rst_file = open('/path/to/your/raster.tif', 'rb')
+&gt;&gt;&gt; rst_bytes = rst_file.read()
+&gt;&gt;&gt; rst = GDALRaster(rst_bytes)
+&gt;&gt;&gt; rst.is_vsi_based
+True
+&gt;&gt;&gt; rst.name  # Stored in a random path in the vsimem filesystem.
+'/vsimem/da300bdb-129d-49a8-b336-e410a9428dad'
+</pre> <div class="versionchanged"> <span class="title">Changed in Django 4.0:</span> <p>Creating rasters in any GDAL virtual filesystem was allowed.</p> </div> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.name">
+<code>name</code> </dt> <dd>
+<p>The name of the source which is equivalent to the input file path or the name provided upon instantiation.</p> <pre data-language="python">&gt;&gt;&gt; GDALRaster({'width': 10, 'height': 10, 'name': 'myraster', 'srid': 4326}).name
+'myraster'
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.driver">
+<code>driver</code> </dt> <dd>
+<p>The name of the GDAL driver used to handle the input file. For <code>GDALRaster</code>s created from a file, the driver type is detected automatically. The creation of rasters from scratch is an in-memory raster by default (<code>'MEM'</code>), but can be altered as needed. For instance, use <code>GTiff</code> for a <code>GeoTiff</code> file. For a list of file types, see also the <a class="reference external" href="https://gdal.org/drivers/raster/">GDAL Raster Formats</a> list.</p> <p>An in-memory raster is created through the following example:</p> <pre data-language="python">&gt;&gt;&gt; GDALRaster({'width': 10, 'height': 10, 'srid': 4326}).driver.name
+'MEM'
+</pre> <p>A file based GeoTiff raster is created through the following example:</p> <pre data-language="python">&gt;&gt;&gt; import tempfile
+&gt;&gt;&gt; rstfile = tempfile.NamedTemporaryFile(suffix='.tif')
+&gt;&gt;&gt; rst = GDALRaster({'driver': 'GTiff', 'name': rstfile.name, 'srid': 4326,
+...                   'width': 255, 'height': 255, 'nr_of_bands': 1})
+&gt;&gt;&gt; rst.name
+'/tmp/tmp7x9H4J.tif'           # The exact filename will be different on your computer
+&gt;&gt;&gt; rst.driver.name
+'GTiff'
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.width">
+<code>width</code> </dt> <dd>
+<p>The width of the source in pixels (X-axis).</p> <pre data-language="python">&gt;&gt;&gt; GDALRaster({'width': 10, 'height': 20, 'srid': 4326}).width
+10
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.height">
+<code>height</code> </dt> <dd>
+<p>The height of the source in pixels (Y-axis).</p> <pre data-language="python">&gt;&gt;&gt; GDALRaster({'width': 10, 'height': 20, 'srid': 4326}).height
+20
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.srs">
+<code>srs</code> </dt> <dd>
+<p>The spatial reference system of the raster, as a <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> instance. The SRS can be changed by setting it to an other <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> or providing any input that is accepted by the <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> constructor.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.srs.srid
+4326
+&gt;&gt;&gt; rst.srs = 3086
+&gt;&gt;&gt; rst.srs.srid
+3086
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.srid">
+<code>srid</code> </dt> <dd>
+<p>The Spatial Reference System Identifier (SRID) of the raster. This property is a shortcut to getting or setting the SRID through the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.srs" title="django.contrib.gis.gdal.GDALRaster.srs"><code>srs</code></a> attribute.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.srid
+4326
+&gt;&gt;&gt; rst.srid = 3086
+&gt;&gt;&gt; rst.srid
+3086
+&gt;&gt;&gt; rst.srs.srid  # This is equivalent
+3086
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.geotransform">
+<code>geotransform</code> </dt> <dd>
+<p>The affine transformation matrix used to georeference the source, as a tuple of six coefficients which map pixel/line coordinates into georeferenced space using the following relationship:</p> <pre data-language="python">Xgeo = GT(0) + Xpixel*GT(1) + Yline*GT(2)
+Ygeo = GT(3) + Xpixel*GT(4) + Yline*GT(5)
+</pre> <p>The same values can be retrieved by accessing the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.origin" title="django.contrib.gis.gdal.GDALRaster.origin"><code>origin</code></a> (indices 0 and 3), <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.scale" title="django.contrib.gis.gdal.GDALRaster.scale"><code>scale</code></a> (indices 1 and 5) and <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.skew" title="django.contrib.gis.gdal.GDALRaster.skew"><code>skew</code></a> (indices 2 and 4) properties.</p> <p>The default is <code>[0.0, 1.0, 0.0, 0.0, 0.0, -1.0]</code>.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.geotransform
+[0.0, 1.0, 0.0, 0.0, 0.0, -1.0]
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.origin">
+<code>origin</code> </dt> <dd>
+<p>Coordinates of the top left origin of the raster in the spatial reference system of the source, as a point object with <code>x</code> and <code>y</code> members.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.origin
+[0.0, 0.0]
+&gt;&gt;&gt; rst.origin.x = 1
+&gt;&gt;&gt; rst.origin
+[1.0, 0.0]
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.scale">
+<code>scale</code> </dt> <dd>
+<p>Pixel width and height used for georeferencing the raster, as a point object with <code>x</code> and <code>y</code> members. See <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.geotransform" title="django.contrib.gis.gdal.GDALRaster.geotransform"><code>geotransform</code></a> for more information.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.scale
+[1.0, -1.0]
+&gt;&gt;&gt; rst.scale.x = 2
+&gt;&gt;&gt; rst.scale
+[2.0, -1.0]
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.skew">
+<code>skew</code> </dt> <dd>
+<p>Skew coefficients used to georeference the raster, as a point object with <code>x</code> and <code>y</code> members. In case of north up images, these coefficients are both <code>0</code>.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.skew
+[0.0, 0.0]
+&gt;&gt;&gt; rst.skew.x = 3
+&gt;&gt;&gt; rst.skew
+[3.0, 0.0]
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.extent">
+<code>extent</code> </dt> <dd>
+<p>Extent (boundary values) of the raster source, as a 4-tuple <code>(xmin, ymin, xmax, ymax)</code> in the spatial reference system of the source.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.extent
+(0.0, -20.0, 10.0, 0.0)
+&gt;&gt;&gt; rst.origin.x = 100
+&gt;&gt;&gt; rst.extent
+(100.0, -20.0, 110.0, 0.0)
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.bands">
+<code>bands</code> </dt> <dd>
+<p>List of all bands of the source, as <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand" title="django.contrib.gis.gdal.GDALBand"><code>GDALBand</code></a> instances.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({"width": 1, "height": 2, 'srid': 4326,
+...                   "bands": [{"data": [0, 1]}, {"data": [2, 3]}]})
+&gt;&gt;&gt; len(rst.bands)
+2
+&gt;&gt;&gt; rst.bands[1].data()
+array([[ 2.,  3.]], dtype=float32)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALRaster.warp">
+<code>warp(ds_input, resampling='NearestNeighbour', max_error=0.0)</code> </dt> <dd>
+<p>Returns a warped version of this raster.</p> <p>The warping parameters can be specified through the <code>ds_input</code> argument. The use of <code>ds_input</code> is analogous to the corresponding argument of the class constructor. It is a dictionary with the characteristics of the target raster. Allowed dictionary key values are width, height, SRID, origin, scale, skew, datatype, driver, and name (filename).</p> <p>By default, the warp functions keeps most parameters equal to the values of the original source raster, so only parameters that should be changed need to be specified. Note that this includes the driver, so for file-based rasters the warp function will create a new raster on disk.</p> <p>The only parameter that is set differently from the source raster is the name. The default value of the raster name is the name of the source raster appended with <code>'_copy' + source_driver_name</code>. For file-based rasters it is recommended to provide the file path of the target raster.</p> <p>The resampling algorithm used for warping can be specified with the <code>resampling</code> argument. The default is <code>NearestNeighbor</code>, and the other allowed values are <code>Bilinear</code>, <code>Cubic</code>, <code>CubicSpline</code>, <code>Lanczos</code>, <code>Average</code>, and <code>Mode</code>.</p> <p>The <code>max_error</code> argument can be used to specify the maximum error measured in input pixels that is allowed in approximating the transformation. The default is 0.0 for exact calculations.</p> <p>For users familiar with <code>GDAL</code>, this function has a similar functionality to the <code>gdalwarp</code> command-line utility.</p> <p>For example, the warp function can be used for aggregating a raster to the double of its original pixel scale:</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({
+...     "width": 6, "height": 6, "srid": 3086,
+...     "origin": [500000, 400000],
+...     "scale": [100, -100],
+...     "bands": [{"data": range(36), "nodata_value": 99}]
+... })
+&gt;&gt;&gt; target = rst.warp({"scale": [200, -200], "width": 3, "height": 3})
+&gt;&gt;&gt; target.bands[0].data()
+array([[  7.,   9.,  11.],
+       [ 19.,  21.,  23.],
+       [ 31.,  33.,  35.]], dtype=float32)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALRaster.transform">
+<code>transform(srs, driver=None, name=None, resampling='NearestNeighbour', max_error=0.0)</code> </dt> <dd>
+<p>Transforms this raster to a different spatial reference system (<code>srs</code>), which may be a <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> object, or any other input accepted by <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> (including spatial reference WKT and PROJ strings, or an integer SRID).</p> <p>It calculates the bounds and scale of the current raster in the new spatial reference system and warps the raster using the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.warp" title="django.contrib.gis.gdal.GDALRaster.warp"><code>warp</code></a> function.</p> <p>By default, the driver of the source raster is used and the name of the raster is the original name appended with <code>'_copy' + source_driver_name</code>. A different driver or name can be specified with the <code>driver</code> and <code>name</code> arguments.</p> <p>The default resampling algorithm is <code>NearestNeighbour</code> but can be changed using the <code>resampling</code> argument. The default maximum allowed error for resampling is 0.0 and can be changed using the <code>max_error</code> argument. Consult the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.warp" title="django.contrib.gis.gdal.GDALRaster.warp"><code>warp</code></a> documentation for detail on those arguments.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({
+...     "width": 6, "height": 6, "srid": 3086,
+...     "origin": [500000, 400000],
+...     "scale": [100, -100],
+...     "bands": [{"data": range(36), "nodata_value": 99}]
+... })
+&gt;&gt;&gt; target_srs = SpatialReference(4326)
+&gt;&gt;&gt; target = rst.transform(target_srs)
+&gt;&gt;&gt; target.origin
+[-82.98492744885776, 27.601924753080144]
+</pre> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>Support for <a class="reference internal" href="#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> <code>srs</code> was added</p> </div> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.info">
+<code>info</code> </dt> <dd>
+<p>Returns a string with a summary of the raster. This is equivalent to the <a class="reference external" href="https://gdal.org/programs/gdalinfo.html">gdalinfo</a> command line utility.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.metadata">
+<code>metadata</code> </dt> <dd>
+<p>The metadata of this raster, represented as a nested dictionary. The first-level key is the metadata domain. The second-level contains the metadata item names and values from each domain.</p> <p>To set or update a metadata item, pass the corresponding metadata item to the method using the nested structure described above. Only keys that are in the specified dictionary are updated; the rest of the metadata remains unchanged.</p> <p>To remove a metadata item, use <code>None</code> as the metadata value.</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 10, 'height': 20, 'srid': 4326})
+&gt;&gt;&gt; rst.metadata
+{}
+&gt;&gt;&gt; rst.metadata = {'DEFAULT': {'OWNER': 'Django', 'VERSION': '1.0'}}
+&gt;&gt;&gt; rst.metadata
+{'DEFAULT': {'OWNER': 'Django', 'VERSION': '1.0'}}
+&gt;&gt;&gt; rst.metadata = {'DEFAULT': {'OWNER': None, 'VERSION': '2.0'}}
+&gt;&gt;&gt; rst.metadata
+{'DEFAULT': {'VERSION': '2.0'}}
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.vsi_buffer">
+<code>vsi_buffer</code> </dt> <dd>
+<p>A <code>bytes</code> representation of this raster. Returns <code>None</code> for rasters that are not stored in GDAL’s virtual filesystem.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALRaster.is_vsi_based">
+<code>is_vsi_based</code> </dt> <dd>
+<p>A boolean indicating if this raster is stored in GDAL’s virtual filesystem.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="gdalband"><code>GDALBand</code></h3> <dl class="class" id="s-gdalband"> <dt id="django.contrib.gis.gdal.GDALBand">
+<code>class GDALBand</code> </dt> <dd>
+<p><code>GDALBand</code> instances are not created explicitly, but rather obtained from a <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> object, through its <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.bands" title="django.contrib.gis.gdal.GDALRaster.bands"><code>bands</code></a> attribute. The GDALBands contain the actual pixel values of the raster.</p> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.description">
+<code>description</code> </dt> <dd>
+<p>The name or description of the band, if any.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.width">
+<code>width</code> </dt> <dd>
+<p>The width of the band in pixels (X-axis).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.height">
+<code>height</code> </dt> <dd>
+<p>The height of the band in pixels (Y-axis).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.pixel_count">
+<code>pixel_count</code> </dt> <dd>
+<p>The total number of pixels in this band. Is equal to <code>width * height</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALBand.statistics">
+<code>statistics(refresh=False, approximate=False)</code> </dt> <dd>
+<p>Compute statistics on the pixel values of this band. The return value is a tuple with the following structure: <code>(minimum, maximum, mean, standard deviation)</code>.</p> <p>If the <code>approximate</code> argument is set to <code>True</code>, the statistics may be computed based on overviews or a subset of image tiles.</p> <p>If the <code>refresh</code> argument is set to <code>True</code>, the statistics will be computed from the data directly, and the cache will be updated with the result.</p> <p>If a persistent cache value is found, that value is returned. For raster formats using Persistent Auxiliary Metadata (PAM) services, the statistics might be cached in an auxiliary file. In some cases this metadata might be out of sync with the pixel values or cause values from a previous call to be returned which don’t reflect the value of the <code>approximate</code> argument. In such cases, use the <code>refresh</code> argument to get updated values and store them in the cache.</p> <p>For empty bands (where all pixel values are “no data”), all statistics are returned as <code>None</code>.</p> <p>The statistics can also be retrieved directly by accessing the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.min" title="django.contrib.gis.gdal.GDALBand.min"><code>min</code></a>, <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.max" title="django.contrib.gis.gdal.GDALBand.max"><code>max</code></a>, <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.mean" title="django.contrib.gis.gdal.GDALBand.mean"><code>mean</code></a>, and <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.std" title="django.contrib.gis.gdal.GDALBand.std"><code>std</code></a> properties.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.min">
+<code>min</code> </dt> <dd>
+<p>The minimum pixel value of the band (excluding the “no data” value).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.max">
+<code>max</code> </dt> <dd>
+<p>The maximum pixel value of the band (excluding the “no data” value).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.mean">
+<code>mean</code> </dt> <dd>
+<p>The mean of all pixel values of the band (excluding the “no data” value).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.std">
+<code>std</code> </dt> <dd>
+<p>The standard deviation of all pixel values of the band (excluding the “no data” value).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.nodata_value">
+<code>nodata_value</code> </dt> <dd>
+<p>The “no data” value for a band is generally a special marker value used to mark pixels that are not valid data. Such pixels should generally not be displayed, nor contribute to analysis operations.</p> <p>To delete an existing “no data” value, set this property to <code>None</code> (requires GDAL ≥ 2.1).</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALBand.datatype">
+<code>datatype(as_string=False)</code> </dt> <dd>
+<p>The data type contained in the band, as an integer constant between 0 (Unknown) and 11. If <code>as_string</code> is <code>True</code>, the data type is returned as a string with the following possible values: <code>GDT_Unknown</code>, <code>GDT_Byte</code>, <code>GDT_UInt16</code>, <code>GDT_Int16</code>, <code>GDT_UInt32</code>, <code>GDT_Int32</code>, <code>GDT_Float32</code>, <code>GDT_Float64</code>, <code>GDT_CInt16</code>, <code>GDT_CInt32</code>, <code>GDT_CFloat32</code>, and <code>GDT_CFloat64</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALBand.color_interp">
+<code>color_interp(as_string=False)</code> </dt> <dd>
+<p>The color interpretation for the band, as an integer between 0and 16. If <code>as_string</code> is <code>True</code>, the data type is returned as a string with the following possible values: <code>GCI_Undefined</code>, <code>GCI_GrayIndex</code>, <code>GCI_PaletteIndex</code>, <code>GCI_RedBand</code>, <code>GCI_GreenBand</code>, <code>GCI_BlueBand</code>, <code>GCI_AlphaBand</code>, <code>GCI_HueBand</code>, <code>GCI_SaturationBand</code>, <code>GCI_LightnessBand</code>, <code>GCI_CyanBand</code>, <code>GCI_MagentaBand</code>, <code>GCI_YellowBand</code>, <code>GCI_BlackBand</code>, <code>GCI_YCbCr_YBand</code>, <code>GCI_YCbCr_CbBand</code>, and <code>GCI_YCbCr_CrBand</code>. <code>GCI_YCbCr_CrBand</code> also represents <code>GCI_Max</code> because both correspond to the integer 16, but only <code>GCI_YCbCr_CrBand</code> is returned as a string.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.gis.gdal.GDALBand.data">
+<code>data(data=None, offset=None, size=None, shape=None)</code> </dt> <dd>
+<p>The accessor to the pixel values of the <code>GDALBand</code>. Returns the complete data array if no parameters are provided. A subset of the pixel array can be requested by specifying an offset and block size as tuples.</p> <p>If NumPy is available, the data is returned as NumPy array. For performance reasons, it is highly recommended to use NumPy.</p> <p>Data is written to the <code>GDALBand</code> if the <code>data</code> parameter is provided. The input can be of one of the following types - packed string, buffer, list, array, and NumPy array. The number of items in the input should normally correspond to the total number of pixels in the band, or to the number of pixels for a specific block of pixel values if the <code>offset</code> and <code>size</code> parameters are provided.</p> <p>If the number of items in the input is different from the target pixel block, the <code>shape</code> parameter must be specified. The shape is a tuple that specifies the width and height of the input data in pixels. The data is then replicated to update the pixel values of the selected block. This is useful to fill an entire band with a single value, for instance.</p> <p>For example:</p> <pre data-language="python">&gt;&gt;&gt; rst = GDALRaster({'width': 4, 'height': 4, 'srid': 4326, 'datatype': 1, 'nr_of_bands': 1})
+&gt;&gt;&gt; bnd = rst.bands[0]
+&gt;&gt;&gt; bnd.data(range(16))
+&gt;&gt;&gt; bnd.data()
+array([[ 0,  1,  2,  3],
+       [ 4,  5,  6,  7],
+       [ 8,  9, 10, 11],
+       [12, 13, 14, 15]], dtype=int8)
+&gt;&gt;&gt; bnd.data(offset=(1, 1), size=(2, 2))
+array([[ 5,  6],
+       [ 9, 10]], dtype=int8)
+&gt;&gt;&gt; bnd.data(data=[-1, -2, -3, -4], offset=(1, 1), size=(2, 2))
+&gt;&gt;&gt; bnd.data()
+array([[ 0,  1,  2,  3],
+       [ 4, -1, -2,  7],
+       [ 8, -3, -4, 11],
+       [12, 13, 14, 15]], dtype=int8)
+&gt;&gt;&gt; bnd.data(data='\x9d\xa8\xb3\xbe', offset=(1, 1), size=(2, 2))
+&gt;&gt;&gt; bnd.data()
+array([[  0,   1,   2,   3],
+       [  4, -99, -88,   7],
+       [  8, -77, -66,  11],
+       [ 12,  13,  14,  15]], dtype=int8)
+&gt;&gt;&gt; bnd.data([1], shape=(1, 1))
+&gt;&gt;&gt; bnd.data()
+array([[1, 1, 1, 1],
+       [1, 1, 1, 1],
+       [1, 1, 1, 1],
+       [1, 1, 1, 1]], dtype=uint8)
+&gt;&gt;&gt; bnd.data(range(4), shape=(1, 4))
+array([[0, 0, 0, 0],
+       [1, 1, 1, 1],
+       [2, 2, 2, 2],
+       [3, 3, 3, 3]], dtype=uint8)
+</pre> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.gis.gdal.GDALBand.metadata">
+<code>metadata</code> </dt> <dd>
+<p>The metadata of this band. The functionality is identical to <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.metadata" title="django.contrib.gis.gdal.GDALRaster.metadata"><code>GDALRaster.metadata</code></a>.</p> </dd>
+</dl> </dd>
+</dl>   <h3 id="gdal-raster-ds-input">Creating rasters from data</h3> <p id="s-creating-rasters-from-data">This section describes how to create rasters from scratch using the <code>ds_input</code> parameter.</p> <p>A new raster is created when a <code>dict</code> is passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> constructor. The dictionary contains defining parameters of the new raster, such as the origin, size, or spatial reference system. The dictionary can also contain pixel data and information about the format of the new raster. The resulting raster can therefore be file-based or memory-based, depending on the driver specified.</p> <p>There’s no standard for describing raster data in a dictionary or JSON flavor. The definition of the dictionary input to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> class is therefore specific to Django. It’s inspired by the <a class="reference external" href="https://geojson.org/">geojson</a> format, but the <code>geojson</code> standard is currently limited to vector formats.</p> <p>Examples of using the different keys when creating rasters can be found in the documentation of the corresponding attributes and methods of the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> and <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand" title="django.contrib.gis.gdal.GDALBand"><code>GDALBand</code></a> classes.</p>  <h4 id="the-ds-input-dictionary">The <code>ds_input</code> dictionary</h4> <p id="s-the-ds-input-dictionary">Only a few keys are required in the <code>ds_input</code> dictionary to create a raster: <code>width</code>, <code>height</code>, and <code>srid</code>. All other parameters have default values (see the table below). The list of keys that can be passed in the <code>ds_input</code> dictionary is closely related but not identical to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> properties. Many of the parameters are mapped directly to those properties; the others are described below.</p> <p>The following table describes all keys that can be set in the <code>ds_input</code> dictionary.</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Key</th> <th class="head">Default</th> <th class="head">Usage</th> </tr> </thead>  <tr>
+<td><code>srid</code></td> <td>required</td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.srid" title="django.contrib.gis.gdal.GDALRaster.srid"><code>srid</code></a> attribute</td> </tr> <tr>
+<td><code>width</code></td> <td>required</td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.width" title="django.contrib.gis.gdal.GDALRaster.width"><code>width</code></a> attribute</td> </tr> <tr>
+<td><code>height</code></td> <td>required</td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.height" title="django.contrib.gis.gdal.GDALRaster.height"><code>height</code></a> attribute</td> </tr> <tr>
+<td><code>driver</code></td> <td><code>MEM</code></td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.driver" title="django.contrib.gis.gdal.GDALRaster.driver"><code>driver</code></a> attribute</td> </tr> <tr>
+<td><code>name</code></td> <td><code>''</code></td> <td>See below</td> </tr> <tr>
+<td><code>origin</code></td> <td><code>0</code></td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.origin" title="django.contrib.gis.gdal.GDALRaster.origin"><code>origin</code></a> attribute</td> </tr> <tr>
+<td><code>scale</code></td> <td><code>0</code></td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.scale" title="django.contrib.gis.gdal.GDALRaster.scale"><code>scale</code></a> attribute</td> </tr> <tr>
+<td><code>skew</code></td> <td><code>0</code></td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.width" title="django.contrib.gis.gdal.GDALRaster.width"><code>width</code></a> attribute</td> </tr> <tr>
+<td><code>bands</code></td> <td><code>[]</code></td> <td>See below</td> </tr> <tr>
+<td><code>nr_of_bands</code></td> <td><code>0</code></td> <td>See below</td> </tr> <tr>
+<td><code>datatype</code></td> <td><code>6</code></td> <td>See below</td> </tr> <tr>
+<td><code>papsz_options</code></td> <td><code>{}</code></td> <td>See below</td> </tr>  </table> <dl class="object"> <dt>
+<code>name</code> </dt> <dd>
+<p>String representing the name of the raster. When creating a file-based raster, this parameter must be the file path for the new raster. If the name starts with <code>/vsimem/</code>, the raster is created in GDAL’s virtual filesystem.</p> </dd>
+</dl> <dl class="object"> <dt>
+<code>datatype</code> </dt> <dd>
+<p>Integer representing the data type for all the bands. Defaults to <code>6</code> (Float32). All bands of a new raster are required to have the same datatype. The value mapping is:</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Value</th> <th class="head">GDAL Pixel Type</th> <th class="head">Description</th> </tr> </thead>  <tr>
+<td>1</td> <td>GDT_Byte</td> <td>Eight bit unsigned integer</td> </tr> <tr>
+<td>2</td> <td>GDT_UInt16</td> <td>Sixteen bit unsigned integer</td> </tr> <tr>
+<td>3</td> <td>GDT_Int16</td> <td>Sixteen bit signed integer</td> </tr> <tr>
+<td>4</td> <td>GDT_UInt32</td> <td>Thirty-two bit unsigned integer</td> </tr> <tr>
+<td>5</td> <td>GDT_Int32</td> <td>Thirty-two bit signed integer</td> </tr> <tr>
+<td>6</td> <td>GDT_Float32</td> <td>Thirty-two bit floating point</td> </tr> <tr>
+<td>7</td> <td>GDT_Float64</td> <td>Sixty-four bit floating point</td> </tr>  </table> </dd>
+</dl> <dl class="object"> <dt>
+<code>nr_of_bands</code> </dt> <dd>
+<p>Integer representing the number of bands of the raster. A raster can be created without passing band data upon creation. If the number of bands isn’t specified, it’s automatically calculated from the length of the <code>bands</code> input. The number of bands can’t be changed after creation.</p> </dd>
+</dl> <dl class="object"> <dt>
+<code>bands</code> </dt> <dd>
+<p>A list of <code>band_input</code> dictionaries with band input data. The resulting band indices are the same as in the list provided. The definition of the band input dictionary is given below. If band data isn’t provided, the raster bands values are instantiated as an array of zeros and the “no data” value is set to <code>None</code>.</p> </dd>
+</dl> <dl class="object"> <dt>
+<code>papsz_options</code> </dt> <dd>
+<p>A dictionary with raster creation options. The key-value pairs of the input dictionary are passed to the driver on creation of the raster.</p> <p>The available options are driver-specific and are described in the documentation of each driver.</p> <p>The values in the dictionary are not case-sensitive and are automatically converted to the correct string format upon creation.</p> <p>The following example uses some of the options available for the <a class="reference external" href="https://gdal.org/drivers/raster/gtiff.html">GTiff driver</a>. The result is a compressed signed byte raster with an internal tiling scheme. The internal tiles have a block size of 23 by 23:</p> <pre data-language="python">&gt;&gt;&gt; GDALRaster({
+...    'driver': 'GTiff',
+...    'name': '/path/to/new/file.tif',
+...    'srid': 4326,
+...    'width': 255,
+...    'height': 255,
+...    'nr_of_bands': 1,
+...    'papsz_options': {
+...        'compress': 'packbits',
+...        'pixeltype': 'signedbyte',
+...        'tiled': 'yes',
+...        'blockxsize': 23,
+...        'blockysize': 23,
+...    }
+... })
+</pre> </dd>
+</dl>   <h4 id="the-band-input-dictionary">The <code>band_input</code> dictionary</h4> <p id="s-the-band-input-dictionary">The <code>bands</code> key in the <code>ds_input</code> dictionary is a list of <code>band_input</code> dictionaries. Each <code>band_input</code> dictionary can contain pixel values and the “no data” value to be set on the bands of the new raster. The data array can have the full size of the new raster or be smaller. For arrays that are smaller than the full raster, the <code>size</code>, <code>shape</code>, and <code>offset</code> keys control the pixel values. The corresponding keys are passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.data" title="django.contrib.gis.gdal.GDALBand.data"><code>data()</code></a> method. Their functionality is the same as setting the band data with that method. The following table describes the keys that can be used.</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Key</th> <th class="head">Default</th> <th class="head">Usage</th> </tr> </thead>  <tr>
+<td><code>nodata_value</code></td> <td><code>None</code></td> <td>Mapped to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.nodata_value" title="django.contrib.gis.gdal.GDALBand.nodata_value"><code>nodata_value</code></a> attribute</td> </tr> <tr>
+<td><code>data</code></td> <td>Same as <code>nodata_value</code> or <code>0</code>
+</td> <td>Passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.data" title="django.contrib.gis.gdal.GDALBand.data"><code>data()</code></a> method</td> </tr> <tr>
+<td><code>size</code></td> <td>
+<code>(with, height)</code> of raster</td> <td>Passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.data" title="django.contrib.gis.gdal.GDALBand.data"><code>data()</code></a> method</td> </tr> <tr>
+<td><code>shape</code></td> <td>Same as size</td> <td>Passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.data" title="django.contrib.gis.gdal.GDALBand.data"><code>data()</code></a> method</td> </tr> <tr>
+<td><code>offset</code></td> <td><code>(0, 0)</code></td> <td>Passed to the <a class="reference internal" href="#django.contrib.gis.gdal.GDALBand.data" title="django.contrib.gis.gdal.GDALBand.data"><code>data()</code></a> method</td> </tr>  </table>    <h3 id="gdal-raster-vsimem">Using GDAL’s Virtual Filesystem</h3> <p id="s-using-gdal-s-virtual-filesystem">GDAL can access files stored in the filesystem, but also supports virtual filesystems to abstract accessing other kind of files, such as compressed, encrypted, or remote files.</p>  <h4 id="using-memory-based-virtual-filesystem">Using memory-based Virtual Filesystem</h4> <p id="s-using-memory-based-virtual-filesystem">GDAL has an internal memory-based filesystem, which allows treating blocks of memory as files. It can be used to read and write <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> objects to and from binary file buffers.</p> <p>This is useful in web contexts where rasters might be obtained as a buffer from a remote storage or returned from a view without being written to disk.</p> <p><a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster" title="django.contrib.gis.gdal.GDALRaster"><code>GDALRaster</code></a> objects are created in the virtual filesystem when a <code>bytes</code> object is provided as input, or when the file path starts with <code>/vsimem/</code>.</p> <p>Input provided as <code>bytes</code> has to be a full binary representation of a file. For instance:</p> <pre data-language="python"># Read a raster as a file object from a remote source.
+&gt;&gt;&gt; from urllib.request import urlopen
+&gt;&gt;&gt; dat = urlopen('http://example.com/raster.tif').read()
+# Instantiate a raster from the bytes object.
+&gt;&gt;&gt; rst = GDALRaster(dat)
+# The name starts with /vsimem/, indicating that the raster lives in the
+# virtual filesystem.
+&gt;&gt;&gt; rst.name
+'/vsimem/da300bdb-129d-49a8-b336-e410a9428dad'
+</pre> <p>To create a new virtual file-based raster from scratch, use the <code>ds_input</code> dictionary representation and provide a <code>name</code> argument that starts with <code>/vsimem/</code> (for detail of the dictionary representation, see <a class="reference internal" href="#gdal-raster-ds-input"><span class="std std-ref">Creating rasters from data</span></a>). For virtual file-based rasters, the <a class="reference internal" href="#django.contrib.gis.gdal.GDALRaster.vsi_buffer" title="django.contrib.gis.gdal.GDALRaster.vsi_buffer"><code>vsi_buffer</code></a> attribute returns the <code>bytes</code> representation of the raster.</p> <p>Here’s how to create a raster and return it as a file in an <a class="reference internal" href="../../request-response#django.http.HttpResponse" title="django.http.HttpResponse"><code>HttpResponse</code></a>:</p> <pre data-language="python">&gt;&gt;&gt; from django.http import HttpResponse
+&gt;&gt;&gt; rst = GDALRaster({
+...     'name': '/vsimem/temporarymemfile',
+...     'driver': 'tif',
+...     'width': 6, 'height': 6, 'srid': 3086,
+...     'origin': [500000, 400000],
+...     'scale': [100, -100],
+...     'bands': [{'data': range(36), 'nodata_value': 99}]
+... })
+&gt;&gt;&gt; HttpResponse(rast.vsi_buffer, 'image/tiff')
+</pre>   <h4 id="using-other-virtual-filesystems">Using other Virtual Filesystems</h4> <div class="versionadded" id="s-using-other-virtual-filesystems"> <span class="title">New in Django 4.0.</span> </div> <p>Depending on the local build of GDAL other virtual filesystems may be supported. You can use them by prepending the provided path with the appropriate <code>/vsi*/</code> prefix. See the <a class="reference external" href="https://gdal.org/user/virtual_file_systems.html">GDAL Virtual Filesystems documentation</a> for more details.</p>  <h5 id="compressed-rasters">Compressed rasters</h5> <p id="s-compressed-rasters">Instead decompressing the file and instantiating the resulting raster, GDAL can directly access compressed files using the <code>/vsizip/</code>, <code>/vsigzip/</code>, or <code>/vsitar/</code> virtual filesystems:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import GDALRaster
+&gt;&gt;&gt; rst = GDALRaster('/vsizip/path/to/your/file.zip/path/to/raster.tif')
+&gt;&gt;&gt; rst = GDALRaster('/vsigzip/path/to/your/file.gz')
+&gt;&gt;&gt; rst = GDALRaster('/vsitar/path/to/your/file.tar/path/to/raster.tif')
+</pre>   <h5 id="network-rasters">Network rasters</h5> <p id="s-network-rasters">GDAL can support online resources and storage providers transparently. As long as it’s built with such capabilities.</p> <p>To access a public raster file with no authentication, you can use <code>/vsicurl/</code>:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import GDALRaster
+&gt;&gt;&gt; rst = GDALRaster('/vsicurl/https://example.com/raster.tif')
+&gt;&gt;&gt; rst.name
+'/vsicurl/https://example.com/raster.tif'
+</pre> <p>For commercial storage providers (e.g. <code>/vsis3/</code>) the system should be previously configured for authentication and possibly other settings (see the <a class="reference external" href="https://gdal.org/user/virtual_file_systems.html">GDAL Virtual Filesystems documentation</a> for available options).</p>      <h2 id="settings">Settings</h2>  <h3 id="std:setting-GDAL_LIBRARY_PATH"><code>GDAL_LIBRARY_PATH</code></h3> <p id="s-settings">A string specifying the location of the GDAL library. Typically, this setting is only used if the GDAL library is in a non-standard location (e.g., <code>/home/john/lib/libgdal.so</code>).</p>    <h2 id="exceptions">Exceptions</h2> <dl class="exception" id="s-exceptions"> <dt id="django.contrib.gis.gdal.GDALException">
+<code>exception GDALException</code> </dt> <dd>
+<p>The base GDAL exception, indicating a GDAL-related error.</p> </dd>
+</dl> <dl class="exception"> <dt id="django.contrib.gis.gdal.SRSException">
+<code>exception SRSException</code> </dt> <dd>
+<p>An exception raised when an error occurs when constructing or using a spatial reference system object.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/gis/gdal/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/gis/gdal/</a>
+  </p>
+</div>

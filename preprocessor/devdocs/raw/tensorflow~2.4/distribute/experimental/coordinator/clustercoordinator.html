@@ -1,0 +1,132 @@
+<h1 class="devsite-page-title">tf.distribute.experimental.coordinator.ClusterCoordinator</h1>       <p>An object to schedule and coordinate remote function execution.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.distribute.experimental.coordinator.ClusterCoordinator(
+    strategy
+)
+</pre>  <p>This class is used to create fault-tolerant resources and dispatch functions to remote TensorFlow servers.</p> <p>Currently, this class is not supported to be used in a standalone manner. It should be used in conjunction with a <a href="../../../distribute"><code translate="no" dir="ltr">tf.distribute</code></a> strategy that is designed to work with it. The <code translate="no" dir="ltr">ClusterCoordinator</code> class currently only works <a href="../parameterserverstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.ParameterServerStrategy</code></a>.</p> <p><strong>The <code translate="no" dir="ltr">schedule</code>/<code translate="no" dir="ltr">join</code> APIs</strong></p> <p>The most important APIs provided by this class is the <code translate="no" dir="ltr">schedule</code>/<code translate="no" dir="ltr">join</code> pair. The <code translate="no" dir="ltr">schedule</code> API is non-blocking in that it queues a <a href="../../../function"><code translate="no" dir="ltr">tf.function</code></a> and returns a <code translate="no" dir="ltr">RemoteValue</code> immediately. The queued functions will be dispatched to remote workers in background threads and their <code translate="no" dir="ltr">RemoteValue</code>s will be filled asynchronously. Since <code translate="no" dir="ltr">schedule</code> doesn’t require worker assignment, the <a href="../../../function"><code translate="no" dir="ltr">tf.function</code></a> passed in can be executed on any available worker. If the worker it is executed on becomes unavailable before its completion, it will be migrated to another worker. Because of this fact and function execution is not atomic, a function may be executed more than once.</p> <p><strong>Handling Task Failure</strong></p> <p>This class when used with <a href="../parameterserverstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.ParameterServerStrategy</code></a>, comes with built-in fault tolerance for worker failures. That is, when some workers are not available for any reason to be reached from the coordinator, the training progress continues to be made with the remaining workers. Upon recovery of a failed worker, it will be added for function execution after datasets created by <code translate="no" dir="ltr">create_per_worker_dataset</code> are re-built on it.</p> <p>When a parameter server the coordinator fails, a <a href="../../../errors/unavailableerror"><code translate="no" dir="ltr">tf.errors.UnavailableError</code></a> is raised by <code translate="no" dir="ltr">schedule</code>, <code translate="no" dir="ltr">join</code> or <code translate="no" dir="ltr">done</code>. In this case, in addition to bringing back the failed parameter server, users should restart the coordinator to so that it reconnects to the parameter server, re-creates the variables and loads checkpoints. If the coordinator fails, users need to bring it back as well. The program will automatically connect to the parameter servers and workers, and continue the progress from a checkpoint.</p> <p>It is thus essential that in user's program, a checkpoint file is periodically saved, and restored at the start of the program. If an <a href="../../../keras/optimizers/optimizer"><code translate="no" dir="ltr">tf.keras.optimizers.Optimizer</code></a> is checkpointed, after restoring from a checkpoiont, its <code translate="no" dir="ltr">iterations</code> property roughly indicates the number of steps that have been made. This can be used to decide how many epochs and steps are needed before the training completion.</p> <p>See <a href="../parameterserverstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.ParameterServerStrategy</code></a> docstring for an example usage of this API.</p> <p>This is currently under development, and the API as well as implementation are subject to changes.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">strategy</code> </td> <td> a supported <a href="../../strategy"><code translate="no" dir="ltr">tf.distribute.Strategy</code></a> object. Currently, only <a href="../parameterserverstrategy"><code translate="no" dir="ltr">tf.distribute.experimental.ParameterServerStrategy</code></a> is supported. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> if the strategy being used is not supported. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">strategy</code> </td> <td> Returns the <code translate="no" dir="ltr">Strategy</code> associated with the <code translate="no" dir="ltr">ClusterCoordinator</code>. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="create_per_worker_dataset" data-text="create_per_worker_dataset"><code translate="no" dir="ltr">create_per_worker_dataset</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/coordinator/cluster_coordinator.py#L1100-L1163">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+create_per_worker_dataset(
+    dataset_fn
+)
+</pre> <p>Create dataset on workers by calling <code translate="no" dir="ltr">dataset_fn</code> on worker devices.</p> <p>This creates the given dataset generated by dataset_fn on workers and returns an object that represents the collection of those individual datasets. Calling <code translate="no" dir="ltr">iter</code> on such collection of datasets returns a <a href="perworkervalues"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.PerWorkerValues</code></a>, which is a collection of iterators, where the iterators have been placed on respective workers.</p> <p>Calling <code translate="no" dir="ltr">next</code> on a <code translate="no" dir="ltr">PerWorkerValues</code> of iterator is unsupported. The iterator is meant to be passed as an argument into <a href="clustercoordinator#schedule"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.ClusterCoordinator.schedule</code></a>. When the scheduled function is about to be executed by a worker, the function will receive the individual iterator that corresponds to the worker. The <code translate="no" dir="ltr">next</code> method can be called on an iterator inside a scheduled function when the iterator is an input of the function.</p> <p>Currently the <code translate="no" dir="ltr">schedule</code> method assumes workers are all the same and thus assumes the datasets on different workers are the same, except they may be shuffled differently if they contain a <code translate="no" dir="ltr">dataset.shuffle</code> operation and a random seed is not set. Because of this, we also recommend the datasets to be repeated indefinitely and schedule a finite number of steps instead of relying on the <code translate="no" dir="ltr">OutOfRangeError</code> from a dataset.</p> <h4 id="example" data-text="Example:">Example:</h4> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.experimental.ParameterServerStrategy(
+    cluster_resolver=...)
+coordinator = tf.distribute.experimental.coordinator.ClusterCoordinator(
+    strategy=strategy)
+
+@tf.function
+def worker_fn(iterator):
+  return next(iterator)
+
+def per_worker_dataset_fn():
+  return strategy.distribute_datasets_from_function(
+      lambda x: tf.data.from_tensor_slices([3] * 3)
+
+per_worker_dataset = coordinator.create_per_worker_dataset(
+    per_worker_dataset_fn)
+per_worker_iter = iter(per_worker_dataset)
+remote_value = coordinator.schedule(worker_fn, args=(per_worker_iter,))
+assert remote_value.fetch() == 3
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">dataset_fn</code> </td> <td> The dataset function that returns a dataset. This is to be executed on the workers. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> An object that represents the collection of those individual datasets. <code translate="no" dir="ltr">iter</code> is expected to be called on this object that returns a <a href="perworkervalues"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.PerWorkerValues</code></a> of the iterators (that are on the workers). </td> </tr> 
+</table> <h3 id="done" data-text="done"><code translate="no" dir="ltr">done</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/coordinator/cluster_coordinator.py#L1082-L1098">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+done()
+</pre> <p>Returns whether all the scheduled functions have finished execution.</p> <p>If any previously scheduled function raises an error, <code translate="no" dir="ltr">done</code> will fail by raising any one of those errors.</p> <p>When <code translate="no" dir="ltr">done</code> returns True or raises, it guarantees that there is no function that is still being executed.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> Whether all the scheduled functions have finished execution. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">Exception</code> </td> <td> one of the exceptions caught by the coordinator by any previously scheduled function since the last time an error was thrown or since the beginning of the program. </td> </tr> </table> <h3 id="fetch" data-text="fetch"><code translate="no" dir="ltr">fetch</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/coordinator/cluster_coordinator.py#L1187-L1243">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+fetch(
+    val
+)
+</pre> <p>Blocking call to fetch results from the remote values.</p> <p>This is a wrapper around <a href="remotevalue#fetch"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue.fetch</code></a> for a <code translate="no" dir="ltr">RemoteValue</code> structure; it returns the execution results of <code translate="no" dir="ltr">RemoteValue</code>s. If not ready, wait for them while blocking the caller.</p> <h4 id="example_2" data-text="Example:">Example:</h4> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = ...
+coordinator = tf.distribute.experimental.coordinator.ClusterCoordinator(
+    strategy)
+
+def dataset_fn():
+  return tf.data.Dataset.from_tensor_slices([1, 1, 1])
+
+with strategy.scope():
+  v = tf.Variable(initial_value=0)
+
+@tf.function
+def worker_fn(iterator):
+  def replica_fn(x):
+    v.assign_add(x)
+    return v.read_value()
+  return strategy.run(replica_fn, args=(next(iterator),))
+
+distributed_dataset = coordinator.create_per_worker_dataset(dataset_fn)
+distributed_iterator = iter(distributed_dataset)
+result = coordinator.schedule(worker_fn, args=(distributed_iterator,))
+assert coordinator.fetch(result) == 1
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">val</code> </td> <td> The value to fetch the results from. If this is structure of <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a>, <code translate="no" dir="ltr">fetch()</code> will be called on the individual <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> to get the result. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> If <code translate="no" dir="ltr">val</code> is a <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> or a structure of <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a>s, return the fetched <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> values immediately if they are available, or block the call until they are available, and return the fetched <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> values with the same structure. If <code translate="no" dir="ltr">val</code> is other types, return it as-is. </td> </tr> 
+</table> <h3 id="join" data-text="join"><code translate="no" dir="ltr">join</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/coordinator/cluster_coordinator.py#L1061-L1080">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+join()
+</pre> <p>Blocks until all the scheduled functions have finished execution.</p> <p>If any previously scheduled function raises an error, <code translate="no" dir="ltr">join</code> will fail by raising any one of those errors, and clear the errors collected so far. If this happens, some of the previously scheduled functions may have not been executed. Users can call <code translate="no" dir="ltr">fetch</code> on the returned <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> to inspect if they have executed, failed, or cancelled. If some that have been cancelled need to be rescheduled, users should call <code translate="no" dir="ltr">schedule</code> with the function again.</p> <p>When <code translate="no" dir="ltr">join</code> returns or raises, it guarantees that there is no function that is still being executed.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">Exception</code> </td> <td> one of the exceptions caught by the coordinator by any previously scheduled function since the last time an error was thrown or since the beginning of the program. </td> </tr> </table> <h3 id="schedule" data-text="schedule"><code translate="no" dir="ltr">schedule</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/distribute/coordinator/cluster_coordinator.py#L999-L1059">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+schedule(
+    fn, args=None, kwargs=None
+)
+</pre> <p>Schedules <code translate="no" dir="ltr">fn</code> to be dispatched to a worker for asynchronous execution.</p> <p>This method is non-blocking in that it queues the <code translate="no" dir="ltr">fn</code> which will be executed later and returns a <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> object immediately. <code translate="no" dir="ltr">fetch</code> can be called on the it to wait for the function execution to finish and retrieve its output from a remote worker. On the other hand, call <a href="clustercoordinator#join"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.ClusterCoordinator.join</code></a> to wait for all scheduled functions to finish.</p> <p><code translate="no" dir="ltr">schedule</code> guarantees that <code translate="no" dir="ltr">fn</code> will be executed on a worker at least once; it could be more than once if its corresponding worker fails in the middle of its execution. Note that since worker can fail at any point when executing the function, it is possible that the function is partially executed, but <a href="clustercoordinator"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.ClusterCoordinator</code></a> guarantees that in those events, the function will eventually be executed on any worker that is available.</p> <p>If any previously scheduled function raises an error, <code translate="no" dir="ltr">schedule</code> will raise any one of those errors, and clear the errors collected so far. What happens here, some of the previously scheduled functions may have not been executed. User can call <code translate="no" dir="ltr">fetch</code> on the returned <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> to inspect if they have executed, failed, or cancelled, and reschedule the corresponding function if needed.</p> <p>When <code translate="no" dir="ltr">schedule</code> raises, it guarantees that there is no function that is still being executed.</p> <p>At this time, there is no support of worker assignment for function execution, or priority of the workers.</p> <p><code translate="no" dir="ltr">args</code> and <code translate="no" dir="ltr">kwargs</code> are the arguments passed into <code translate="no" dir="ltr">fn</code>, when <code translate="no" dir="ltr">fn</code> is executed on a worker. They can be <a href="perworkervalues"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.PerWorkerValues</code></a> and in this case, the argument will be substituted with the corresponding component on the target worker. Arguments that are not <a href="perworkervalues"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.PerWorkerValues</code></a> will be passed into <code translate="no" dir="ltr">fn</code> as-is. Currently, <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> is not supported to be input <code translate="no" dir="ltr">args</code> or <code translate="no" dir="ltr">kwargs</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">fn</code> </td> <td> A <a href="../../../function"><code translate="no" dir="ltr">tf.function</code></a>; the function to be dispatched to a worker for execution asynchronously. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">args</code> </td> <td> Positional arguments for <code translate="no" dir="ltr">fn</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">kwargs</code> </td> <td> Keyword arguments for <code translate="no" dir="ltr">fn</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <a href="remotevalue"><code translate="no" dir="ltr">tf.distribute.experimental.coordinator.RemoteValue</code></a> object that represents the output of the function scheduled. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">Exception</code> </td> <td> one of the exceptions caught by the coordinator from any previously scheduled function, since the last time an error was thrown or since the beginning of the program. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/experimental/coordinator/ClusterCoordinator" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/distribute/experimental/coordinator/ClusterCoordinator</a>
+  </p>
+</div>

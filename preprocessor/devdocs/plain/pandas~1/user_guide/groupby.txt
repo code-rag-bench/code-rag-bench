@@ -1,0 +1,2417 @@
+# Group by: split-apply-combine
+
+By “group by” we are referring to a process involving one or more of the
+following steps:
+
+  * Splitting the data into groups based on some criteria.
+  * Applying a function to each group independently.
+  * Combining the results into a data structure.
+
+Out of these, the split step is the most straightforward. In fact, in many
+situations we may wish to split the data set into groups and do something with
+those groups. In the apply step, we might wish to do one of the following:
+
+  * Aggregation: compute a summary statistic (or statistics) for each group. Some examples:
+>     * Compute group sums or means.
+>     * Compute group sizes / counts.
+  * Transformation: perform some group-specific computations and return a like-indexed object. Some examples:
+>     * Standardize data (zscore) within a group.
+>     * Filling NAs within groups with a value derived from each group.
+  * Filtration: discard some groups, according to a group-wise computation that evaluates True or False. Some examples:
+>     * Discard data that belongs to groups with only a few members.
+>     * Filter out data based on the group sum or mean.
+  * Some combination of the above: GroupBy will examine the results of the apply step and try to return a sensibly combined result if it doesn’t fit into either of the above two categories.
+
+Since the set of object instance methods on pandas data structures are
+generally rich and expressive, we often simply want to invoke, say, a
+DataFrame function on each group. The name GroupBy should be quite familiar to
+those who have used a SQL-based tool (or `itertools`), in which you can write
+code like:
+
+    
+    SELECT Column1, Column2, mean(Column3), sum(Column4)
+    FROM SomeTable
+    GROUP BY Column1, Column2
+    
+We aim to make operations like this natural and easy to express using pandas.
+We’ll address each area of GroupBy functionality then provide some non-trivial
+examples / use cases.
+
+See the cookbook for some advanced strategies.
+
+## Splitting an object into groups
+
+pandas objects can be split on any of their axes. The abstract definition of
+grouping is to provide a mapping of labels to group names. To create a GroupBy
+object (more on what the GroupBy object is later), you may do the following:
+
+    
+    In [1]: df = pd.DataFrame(
+       ...:     [
+       ...:         ("bird", "Falconiformes", 389.0),
+       ...:         ("bird", "Psittaciformes", 24.0),
+       ...:         ("mammal", "Carnivora", 80.2),
+       ...:         ("mammal", "Primates", np.nan),
+       ...:         ("mammal", "Carnivora", 58),
+       ...:     ],
+       ...:     index=["falcon", "parrot", "lion", "monkey", "leopard"],
+       ...:     columns=("class", "order", "max_speed"),
+       ...: )
+       ...: 
+    
+    In [2]: df
+    Out[2]: 
+              class           order  max_speed
+    falcon     bird   Falconiformes      389.0
+    parrot     bird  Psittaciformes       24.0
+    lion     mammal       Carnivora       80.2
+    monkey   mammal        Primates        NaN
+    leopard  mammal       Carnivora       58.0
+    
+    # default is axis=0
+    In [3]: grouped = df.groupby("class")
+    
+    In [4]: grouped = df.groupby("order", axis="columns")
+    
+    In [5]: grouped = df.groupby(["class", "order"])
+    
+The mapping can be specified many different ways:
+
+  * A Python function, to be called on each of the axis labels.
+  * A list or NumPy array of the same length as the selected axis.
+  * A dict or `Series`, providing a `label -> group name` mapping.
+  * For `DataFrame` objects, a string indicating either a column name or an index level name to be used to group.
+  * `df.groupby('A')` is just syntactic sugar for `df.groupby(df['A'])`.
+  * A list of any of the above things.
+
+Collectively we refer to the grouping objects as the keys. For example,
+consider the following `DataFrame`:
+
+Note
+
+A string passed to `groupby` may refer to either a column or an index level.
+If a string matches both a column name and an index level name, a `ValueError`
+will be raised.
+
+    
+    In [6]: df = pd.DataFrame(
+       ...:     {
+       ...:         "A": ["foo", "bar", "foo", "bar", "foo", "bar", "foo", "foo"],
+       ...:         "B": ["one", "one", "two", "three", "two", "two", "one", "three"],
+       ...:         "C": np.random.randn(8),
+       ...:         "D": np.random.randn(8),
+       ...:     }
+       ...: )
+       ...: 
+    
+    In [7]: df
+    Out[7]: 
+         A      B         C         D
+    0  foo    one  0.469112 -0.861849
+    1  bar    one -0.282863 -2.104569
+    2  foo    two -1.509059 -0.494929
+    3  bar  three -1.135632  1.071804
+    4  foo    two  1.212112  0.721555
+    5  bar    two -0.173215 -0.706771
+    6  foo    one  0.119209 -1.039575
+    7  foo  three -1.044236  0.271860
+    
+On a DataFrame, we obtain a GroupBy object by calling `groupby()`. We could
+naturally group by either the `A` or `B` columns, or both:
+
+    
+    In [8]: grouped = df.groupby("A")
+    
+    In [9]: grouped = df.groupby(["A", "B"])
+    
+If we also have a MultiIndex on columns `A` and `B`, we can group by all but
+the specified columns
+
+    
+    In [10]: df2 = df.set_index(["A", "B"])
+    
+    In [11]: grouped = df2.groupby(level=df2.index.names.difference(["B"]))
+    
+    In [12]: grouped.sum()
+    Out[12]: 
+                C         D
+    A                      
+    bar -1.591710 -1.739537
+    foo -0.752861 -1.402938
+    
+These will split the DataFrame on its index (rows). We could also split by the
+columns:
+
+    
+    In [13]: def get_letter_type(letter):
+       ....:     if letter.lower() in 'aeiou':
+       ....:         return 'vowel'
+       ....:     else:
+       ....:         return 'consonant'
+       ....: 
+    
+    In [14]: grouped = df.groupby(get_letter_type, axis=1)
+    
+pandas `Index` objects support duplicate values. If a non-unique index is used
+as the group key in a groupby operation, all values for the same index value
+will be considered to be in one group and thus the output of aggregation
+functions will only contain unique index values:
+
+    
+    In [15]: lst = [1, 2, 3, 1, 2, 3]
+    
+    In [16]: s = pd.Series([1, 2, 3, 10, 20, 30], lst)
+    
+    In [17]: grouped = s.groupby(level=0)
+    
+    In [18]: grouped.first()
+    Out[18]: 
+    1    1
+    2    2
+    3    3
+    dtype: int64
+    
+    In [19]: grouped.last()
+    Out[19]: 
+    1    10
+    2    20
+    3    30
+    dtype: int64
+    
+    In [20]: grouped.sum()
+    Out[20]: 
+    1    11
+    2    22
+    3    33
+    dtype: int64
+    
+Note that no splitting occurs until it’s needed. Creating the GroupBy object
+only verifies that you’ve passed a valid mapping.
+
+Note
+
+Many kinds of complicated data manipulations can be expressed in terms of
+GroupBy operations (though can’t be guaranteed to be the most efficient). You
+can get quite creative with the label mapping functions.
+
+### GroupBy sorting
+
+By default the group keys are sorted during the `groupby` operation. You may
+however pass `sort=False` for potential speedups:
+
+    
+    In [21]: df2 = pd.DataFrame({"X": ["B", "B", "A", "A"], "Y": [1, 2, 3, 4]})
+    
+    In [22]: df2.groupby(["X"]).sum()
+    Out[22]: 
+       Y
+    X   
+    A  7
+    B  3
+    
+    In [23]: df2.groupby(["X"], sort=False).sum()
+    Out[23]: 
+       Y
+    X   
+    B  3
+    A  7
+    
+Note that `groupby` will preserve the order in which observations are sorted
+within each group. For example, the groups created by `groupby()` below are in
+the order they appeared in the original `DataFrame`:
+
+    
+    In [24]: df3 = pd.DataFrame({"X": ["A", "B", "A", "B"], "Y": [1, 4, 3, 2]})
+    
+    In [25]: df3.groupby(["X"]).get_group("A")
+    Out[25]: 
+       X  Y
+    0  A  1
+    2  A  3
+    
+    In [26]: df3.groupby(["X"]).get_group("B")
+    Out[26]: 
+       X  Y
+    1  B  4
+    3  B  2
+    
+New in version 1.1.0.
+
+#### GroupBy dropna
+
+By default `NA` values are excluded from group keys during the `groupby`
+operation. However, in case you want to include `NA` values in group keys, you
+could pass `dropna=False` to achieve it.
+
+    
+    In [27]: df_list = [[1, 2, 3], [1, None, 4], [2, 1, 3], [1, 2, 2]]
+    
+    In [28]: df_dropna = pd.DataFrame(df_list, columns=["a", "b", "c"])
+    
+    In [29]: df_dropna
+    Out[29]: 
+       a    b  c
+    0  1  2.0  3
+    1  1  NaN  4
+    2  2  1.0  3
+    3  1  2.0  2
+    
+    
+    # Default ``dropna`` is set to True, which will exclude NaNs in keys
+    In [30]: df_dropna.groupby(by=["b"], dropna=True).sum()
+    Out[30]: 
+         a  c
+    b        
+    1.0  2  3
+    2.0  2  5
+    
+    # In order to allow NaN in keys, set ``dropna`` to False
+    In [31]: df_dropna.groupby(by=["b"], dropna=False).sum()
+    Out[31]: 
+         a  c
+    b        
+    1.0  2  3
+    2.0  2  5
+    NaN  1  4
+    
+The default setting of `dropna` argument is `True` which means `NA` are not
+included in group keys.
+
+### GroupBy object attributes
+
+The `groups` attribute is a dict whose keys are the computed unique groups and
+corresponding values being the axis labels belonging to each group. In the
+above example we have:
+
+    
+    In [32]: df.groupby("A").groups
+    Out[32]: {'bar': [1, 3, 5], 'foo': [0, 2, 4, 6, 7]}
+    
+    In [33]: df.groupby(get_letter_type, axis=1).groups
+    Out[33]: {'consonant': ['B', 'C', 'D'], 'vowel': ['A']}
+    
+Calling the standard Python `len` function on the GroupBy object just returns
+the length of the `groups` dict, so it is largely just a convenience:
+
+    
+    In [34]: grouped = df.groupby(["A", "B"])
+    
+    In [35]: grouped.groups
+    Out[35]: {('bar', 'one'): [1], ('bar', 'three'): [3], ('bar', 'two'): [5], ('foo', 'one'): [0, 6], ('foo', 'three'): [7], ('foo', 'two'): [2, 4]}
+    
+    In [36]: len(grouped)
+    Out[36]: 6
+    
+`GroupBy` will tab complete column names (and other attributes):
+
+    
+    In [37]: df
+    Out[37]: 
+                   height      weight  gender
+    2000-01-01  42.849980  157.500553    male
+    2000-01-02  49.607315  177.340407    male
+    2000-01-03  56.293531  171.524640    male
+    2000-01-04  48.421077  144.251986  female
+    2000-01-05  46.556882  152.526206    male
+    2000-01-06  68.448851  168.272968  female
+    2000-01-07  70.757698  136.431469    male
+    2000-01-08  58.909500  176.499753  female
+    2000-01-09  76.435631  174.094104  female
+    2000-01-10  45.306120  177.540920    male
+    
+    In [38]: gb = df.groupby("gender")
+    
+    
+    In [39]: gb.<TAB>  # noqa: E225, E999
+    gb.agg        gb.boxplot    gb.cummin     gb.describe   gb.filter     gb.get_group  gb.height     gb.last       gb.median     gb.ngroups    gb.plot       gb.rank       gb.std        gb.transform
+    gb.aggregate  gb.count      gb.cumprod    gb.dtype      gb.first      gb.groups     gb.hist       gb.max        gb.min        gb.nth        gb.prod       gb.resample   gb.sum        gb.var
+    gb.apply      gb.cummax     gb.cumsum     gb.fillna     gb.gender     gb.head       gb.indices    gb.mean       gb.name       gb.ohlc       gb.quantile   gb.size       gb.tail       gb.weight
+    
+### GroupBy with MultiIndex
+
+With hierarchically-indexed data, it’s quite natural to group by one of the
+levels of the hierarchy.
+
+Let’s create a Series with a two-level `MultiIndex`.
+
+    
+    In [40]: arrays = [
+       ....:     ["bar", "bar", "baz", "baz", "foo", "foo", "qux", "qux"],
+       ....:     ["one", "two", "one", "two", "one", "two", "one", "two"],
+       ....: ]
+       ....: 
+    
+    In [41]: index = pd.MultiIndex.from_arrays(arrays, names=["first", "second"])
+    
+    In [42]: s = pd.Series(np.random.randn(8), index=index)
+    
+    In [43]: s
+    Out[43]: 
+    first  second
+    bar    one      -0.919854
+           two      -0.042379
+    baz    one       1.247642
+           two      -0.009920
+    foo    one       0.290213
+           two       0.495767
+    qux    one       0.362949
+           two       1.548106
+    dtype: float64
+    
+We can then group by one of the levels in `s`.
+
+    
+    In [44]: grouped = s.groupby(level=0)
+    
+    In [45]: grouped.sum()
+    Out[45]: 
+    first
+    bar   -0.962232
+    baz    1.237723
+    foo    0.785980
+    qux    1.911055
+    dtype: float64
+    
+If the MultiIndex has names specified, these can be passed instead of the
+level number:
+
+    
+    In [46]: s.groupby(level="second").sum()
+    Out[46]: 
+    second
+    one    0.980950
+    two    1.991575
+    dtype: float64
+    
+Grouping with multiple levels is supported.
+
+    
+    In [47]: s
+    Out[47]: 
+    first  second  third
+    bar    doo     one     -1.131345
+                   two     -0.089329
+    baz    bee     one      0.337863
+                   two     -0.945867
+    foo    bop     one     -0.932132
+                   two      1.956030
+    qux    bop     one      0.017587
+                   two     -0.016692
+    dtype: float64
+    
+    In [48]: s.groupby(level=["first", "second"]).sum()
+    Out[48]: 
+    first  second
+    bar    doo      -1.220674
+    baz    bee      -0.608004
+    foo    bop       1.023898
+    qux    bop       0.000895
+    dtype: float64
+    
+Index level names may be supplied as keys.
+
+    
+    In [49]: s.groupby(["first", "second"]).sum()
+    Out[49]: 
+    first  second
+    bar    doo      -1.220674
+    baz    bee      -0.608004
+    foo    bop       1.023898
+    qux    bop       0.000895
+    dtype: float64
+    
+More on the `sum` function and aggregation later.
+
+### Grouping DataFrame with Index levels and columns
+
+A DataFrame may be grouped by a combination of columns and index levels by
+specifying the column names as strings and the index levels as `pd.Grouper`
+objects.
+
+    
+    In [50]: arrays = [
+       ....:     ["bar", "bar", "baz", "baz", "foo", "foo", "qux", "qux"],
+       ....:     ["one", "two", "one", "two", "one", "two", "one", "two"],
+       ....: ]
+       ....: 
+    
+    In [51]: index = pd.MultiIndex.from_arrays(arrays, names=["first", "second"])
+    
+    In [52]: df = pd.DataFrame({"A": [1, 1, 1, 1, 2, 2, 3, 3], "B": np.arange(8)}, index=index)
+    
+    In [53]: df
+    Out[53]: 
+                  A  B
+    first second      
+    bar   one     1  0
+          two     1  1
+    baz   one     1  2
+          two     1  3
+    foo   one     2  4
+          two     2  5
+    qux   one     3  6
+          two     3  7
+    
+The following example groups `df` by the `second` index level and the `A`
+column.
+
+    
+    In [54]: df.groupby([pd.Grouper(level=1), "A"]).sum()
+    Out[54]: 
+              B
+    second A   
+    one    1  2
+           2  4
+           3  6
+    two    1  4
+           2  5
+           3  7
+    
+Index levels may also be specified by name.
+
+    
+    In [55]: df.groupby([pd.Grouper(level="second"), "A"]).sum()
+    Out[55]: 
+              B
+    second A   
+    one    1  2
+           2  4
+           3  6
+    two    1  4
+           2  5
+           3  7
+    
+Index level names may be specified as keys directly to `groupby`.
+
+    
+    In [56]: df.groupby(["second", "A"]).sum()
+    Out[56]: 
+              B
+    second A   
+    one    1  2
+           2  4
+           3  6
+    two    1  4
+           2  5
+           3  7
+    
+### DataFrame column selection in GroupBy
+
+Once you have created the GroupBy object from a DataFrame, you might want to
+do something different for each of the columns. Thus, using `[]` similar to
+getting a column from a DataFrame, you can do:
+
+    
+    In [57]: df = pd.DataFrame(
+       ....:     {
+       ....:         "A": ["foo", "bar", "foo", "bar", "foo", "bar", "foo", "foo"],
+       ....:         "B": ["one", "one", "two", "three", "two", "two", "one", "three"],
+       ....:         "C": np.random.randn(8),
+       ....:         "D": np.random.randn(8),
+       ....:     }
+       ....: )
+       ....: 
+    
+    In [58]: df
+    Out[58]: 
+         A      B         C         D
+    0  foo    one -0.575247  1.346061
+    1  bar    one  0.254161  1.511763
+    2  foo    two -1.143704  1.627081
+    3  bar  three  0.215897 -0.990582
+    4  foo    two  1.193555 -0.441652
+    5  bar    two -0.077118  1.211526
+    6  foo    one -0.408530  0.268520
+    7  foo  three -0.862495  0.024580
+    
+    In [59]: grouped = df.groupby(["A"])
+    
+    In [60]: grouped_C = grouped["C"]
+    
+    In [61]: grouped_D = grouped["D"]
+    
+This is mainly syntactic sugar for the alternative and much more verbose:
+
+    
+    In [62]: df["C"].groupby(df["A"])
+    Out[62]: <pandas.core.groupby.generic.SeriesGroupBy object at 0x7fe2b9449c10>
+    
+Additionally this method avoids recomputing the internal grouping information
+derived from the passed key.
+
+## Iterating through groups
+
+With the GroupBy object in hand, iterating through the grouped data is very
+natural and functions similarly to `itertools.groupby()`:
+
+    
+    In [63]: grouped = df.groupby('A')
+    
+    In [64]: for name, group in grouped:
+       ....:     print(name)
+       ....:     print(group)
+       ....: 
+    bar
+         A      B         C         D
+    1  bar    one  0.254161  1.511763
+    3  bar  three  0.215897 -0.990582
+    5  bar    two -0.077118  1.211526
+    foo
+         A      B         C         D
+    0  foo    one -0.575247  1.346061
+    2  foo    two -1.143704  1.627081
+    4  foo    two  1.193555 -0.441652
+    6  foo    one -0.408530  0.268520
+    7  foo  three -0.862495  0.024580
+    
+In the case of grouping by multiple keys, the group name will be a tuple:
+
+    
+    In [65]: for name, group in df.groupby(['A', 'B']):
+       ....:     print(name)
+       ....:     print(group)
+       ....: 
+    ('bar', 'one')
+         A    B         C         D
+    1  bar  one  0.254161  1.511763
+    ('bar', 'three')
+         A      B         C         D
+    3  bar  three  0.215897 -0.990582
+    ('bar', 'two')
+         A    B         C         D
+    5  bar  two -0.077118  1.211526
+    ('foo', 'one')
+         A    B         C         D
+    0  foo  one -0.575247  1.346061
+    6  foo  one -0.408530  0.268520
+    ('foo', 'three')
+         A      B         C        D
+    7  foo  three -0.862495  0.02458
+    ('foo', 'two')
+         A    B         C         D
+    2  foo  two -1.143704  1.627081
+    4  foo  two  1.193555 -0.441652
+    
+See Iterating through groups.
+
+## Selecting a group
+
+A single group can be selected using `get_group()`:
+
+    
+    In [66]: grouped.get_group("bar")
+    Out[66]: 
+         A      B         C         D
+    1  bar    one  0.254161  1.511763
+    3  bar  three  0.215897 -0.990582
+    5  bar    two -0.077118  1.211526
+    
+Or for an object grouped on multiple columns:
+
+    
+    In [67]: df.groupby(["A", "B"]).get_group(("bar", "one"))
+    Out[67]: 
+         A    B         C         D
+    1  bar  one  0.254161  1.511763
+    
+## Aggregation
+
+Once the GroupBy object has been created, several methods are available to
+perform a computation on the grouped data. These operations are similar to the
+aggregating API, window API, and resample API.
+
+An obvious one is aggregation via the `aggregate()` or equivalently `agg()`
+method:
+
+    
+    In [68]: grouped = df.groupby("A")
+    
+    In [69]: grouped.aggregate(np.sum)
+    Out[69]: 
+                C         D
+    A                      
+    bar  0.392940  1.732707
+    foo -1.796421  2.824590
+    
+    In [70]: grouped = df.groupby(["A", "B"])
+    
+    In [71]: grouped.aggregate(np.sum)
+    Out[71]: 
+                      C         D
+    A   B                        
+    bar one    0.254161  1.511763
+        three  0.215897 -0.990582
+        two   -0.077118  1.211526
+    foo one   -0.983776  1.614581
+        three -0.862495  0.024580
+        two    0.049851  1.185429
+    
+As you can see, the result of the aggregation will have the group names as the
+new index along the grouped axis. In the case of multiple keys, the result is
+a MultiIndex by default, though this can be changed by using the `as_index`
+option:
+
+    
+    In [72]: grouped = df.groupby(["A", "B"], as_index=False)
+    
+    In [73]: grouped.aggregate(np.sum)
+    Out[73]: 
+         A      B         C         D
+    0  bar    one  0.254161  1.511763
+    1  bar  three  0.215897 -0.990582
+    2  bar    two -0.077118  1.211526
+    3  foo    one -0.983776  1.614581
+    4  foo  three -0.862495  0.024580
+    5  foo    two  0.049851  1.185429
+    
+    In [74]: df.groupby("A", as_index=False).sum()
+    Out[74]: 
+         A         C         D
+    0  bar  0.392940  1.732707
+    1  foo -1.796421  2.824590
+    
+Note that you could use the `reset_index` DataFrame function to achieve the
+same result as the column names are stored in the resulting `MultiIndex`:
+
+    
+    In [75]: df.groupby(["A", "B"]).sum().reset_index()
+    Out[75]: 
+         A      B         C         D
+    0  bar    one  0.254161  1.511763
+    1  bar  three  0.215897 -0.990582
+    2  bar    two -0.077118  1.211526
+    3  foo    one -0.983776  1.614581
+    4  foo  three -0.862495  0.024580
+    5  foo    two  0.049851  1.185429
+    
+Another simple aggregation example is to compute the size of each group. This
+is included in GroupBy as the `size` method. It returns a Series whose index
+are the group names and whose values are the sizes of each group.
+
+    
+    In [76]: grouped.size()
+    Out[76]: 
+         A      B  size
+    0  bar    one     1
+    1  bar  three     1
+    2  bar    two     1
+    3  foo    one     2
+    4  foo  three     1
+    5  foo    two     2
+    
+    
+    In [77]: grouped.describe()
+    Out[77]: 
+          C                                                              ...         D                                                            
+      count      mean       std       min       25%       50%       75%  ...      mean       std       min       25%       50%       75%       max
+    0   1.0  0.254161       NaN  0.254161  0.254161  0.254161  0.254161  ...  1.511763       NaN  1.511763  1.511763  1.511763  1.511763  1.511763
+    1   1.0  0.215897       NaN  0.215897  0.215897  0.215897  0.215897  ... -0.990582       NaN -0.990582 -0.990582 -0.990582 -0.990582 -0.990582
+    2   1.0 -0.077118       NaN -0.077118 -0.077118 -0.077118 -0.077118  ...  1.211526       NaN  1.211526  1.211526  1.211526  1.211526  1.211526
+    3   2.0 -0.491888  0.117887 -0.575247 -0.533567 -0.491888 -0.450209  ...  0.807291  0.761937  0.268520  0.537905  0.807291  1.076676  1.346061
+    4   1.0 -0.862495       NaN -0.862495 -0.862495 -0.862495 -0.862495  ...  0.024580       NaN  0.024580  0.024580  0.024580  0.024580  0.024580
+    5   2.0  0.024925  1.652692 -1.143704 -0.559389  0.024925  0.609240  ...  0.592714  1.462816 -0.441652  0.075531  0.592714  1.109898  1.627081
+    
+    [6 rows x 16 columns]
+    
+Another aggregation example is to compute the number of unique values of each
+group. This is similar to the `value_counts` function, except that it only
+counts unique values.
+
+    
+    In [78]: ll = [['foo', 1], ['foo', 2], ['foo', 2], ['bar', 1], ['bar', 1]]
+    
+    In [79]: df4 = pd.DataFrame(ll, columns=["A", "B"])
+    
+    In [80]: df4
+    Out[80]: 
+         A  B
+    0  foo  1
+    1  foo  2
+    2  foo  2
+    3  bar  1
+    4  bar  1
+    
+    In [81]: df4.groupby("A")["B"].nunique()
+    Out[81]: 
+    A
+    bar    1
+    foo    2
+    Name: B, dtype: int64
+    
+Note
+
+Aggregation functions will not return the groups that you are aggregating over
+if they are named columns, when `as_index=True`, the default. The grouped
+columns will be the indices of the returned object.
+
+Passing `as_index=False` will return the groups that you are aggregating over,
+if they are named columns.
+
+Aggregating functions are the ones that reduce the dimension of the returned
+objects. Some common aggregating functions are tabulated below:
+
+Function | Description  
+---|---  
+`mean()` | Compute mean of groups  
+`sum()` | Compute sum of group values  
+`size()` | Compute group sizes  
+`count()` | Compute count of group  
+`std()` | Standard deviation of groups  
+`var()` | Compute variance of groups  
+`sem()` | Standard error of the mean of groups  
+`describe()` | Generates descriptive statistics  
+`first()` | Compute first of group values  
+`last()` | Compute last of group values  
+`nth()` | Take nth value, or a subset if n is a list  
+`min()` | Compute min of group values  
+`max()` | Compute max of group values  
+The aggregating functions above will exclude NA values. Any function which
+reduces a `Series` to a scalar value is an aggregation function and will work,
+a trivial example is `df.groupby('A').agg(lambda ser: 1)`. Note that `nth()`
+can act as a reducer or a filter, see here.
+
+### Applying multiple functions at once
+
+With grouped `Series` you can also pass a list or dict of functions to do
+aggregation with, outputting a DataFrame:
+
+    
+    In [82]: grouped = df.groupby("A")
+    
+    In [83]: grouped["C"].agg([np.sum, np.mean, np.std])
+    Out[83]: 
+              sum      mean       std
+    A                                
+    bar  0.392940  0.130980  0.181231
+    foo -1.796421 -0.359284  0.912265
+    
+On a grouped `DataFrame`, you can pass a list of functions to apply to each
+column, which produces an aggregated result with a hierarchical index:
+
+    
+    In [84]: grouped[["C", "D"]].agg([np.sum, np.mean, np.std])
+    Out[84]: 
+                C                             D                    
+              sum      mean       std       sum      mean       std
+    A                                                              
+    bar  0.392940  0.130980  0.181231  1.732707  0.577569  1.366330
+    foo -1.796421 -0.359284  0.912265  2.824590  0.564918  0.884785
+    
+The resulting aggregations are named for the functions themselves. If you need
+to rename, then you can add in a chained operation for a `Series` like this:
+
+    
+    In [85]: (
+       ....:     grouped["C"]
+       ....:     .agg([np.sum, np.mean, np.std])
+       ....:     .rename(columns={"sum": "foo", "mean": "bar", "std": "baz"})
+       ....: )
+       ....: 
+    Out[85]: 
+              foo       bar       baz
+    A                                
+    bar  0.392940  0.130980  0.181231
+    foo -1.796421 -0.359284  0.912265
+    
+For a grouped `DataFrame`, you can rename in a similar manner:
+
+    
+    In [86]: (
+       ....:     grouped[["C", "D"]].agg([np.sum, np.mean, np.std]).rename(
+       ....:         columns={"sum": "foo", "mean": "bar", "std": "baz"}
+       ....:     )
+       ....: )
+       ....: 
+    Out[86]: 
+                C                             D                    
+              foo       bar       baz       foo       bar       baz
+    A                                                              
+    bar  0.392940  0.130980  0.181231  1.732707  0.577569  1.366330
+    foo -1.796421 -0.359284  0.912265  2.824590  0.564918  0.884785
+    
+Note
+
+In general, the output column names should be unique. You can’t apply the same
+function (or two functions with the same name) to the same column.
+
+    
+    In [87]: grouped["C"].agg(["sum", "sum"])
+    Out[87]: 
+              sum       sum
+    A                      
+    bar  0.392940  0.392940
+    foo -1.796421 -1.796421
+    
+pandas does allow you to provide multiple lambdas. In this case, pandas will
+mangle the name of the (nameless) lambda functions, appending `_<i>` to each
+subsequent lambda.
+
+    
+    In [88]: grouped["C"].agg([lambda x: x.max() - x.min(), lambda x: x.median() - x.mean()])
+    Out[88]: 
+         <lambda_0>  <lambda_1>
+    A                          
+    bar    0.331279    0.084917
+    foo    2.337259   -0.215962
+    
+### Named aggregation
+
+New in version 0.25.0.
+
+To support column-specific aggregation with control over the output column
+names, pandas accepts the special syntax in `GroupBy.agg()`, known as “named
+aggregation”, where
+
+  * The keywords are the output column names
+  * The values are tuples whose first element is the column to select and the second element is the aggregation to apply to that column. pandas provides the `pandas.NamedAgg` namedtuple with the fields `['column', 'aggfunc']` to make it clearer what the arguments are. As usual, the aggregation can be a callable or a string alias.
+
+    
+    In [89]: animals = pd.DataFrame(
+       ....:     {
+       ....:         "kind": ["cat", "dog", "cat", "dog"],
+       ....:         "height": [9.1, 6.0, 9.5, 34.0],
+       ....:         "weight": [7.9, 7.5, 9.9, 198.0],
+       ....:     }
+       ....: )
+       ....: 
+    
+    In [90]: animals
+    Out[90]: 
+      kind  height  weight
+    0  cat     9.1     7.9
+    1  dog     6.0     7.5
+    2  cat     9.5     9.9
+    3  dog    34.0   198.0
+    
+    In [91]: animals.groupby("kind").agg(
+       ....:     min_height=pd.NamedAgg(column="height", aggfunc="min"),
+       ....:     max_height=pd.NamedAgg(column="height", aggfunc="max"),
+       ....:     average_weight=pd.NamedAgg(column="weight", aggfunc=np.mean),
+       ....: )
+       ....: 
+    Out[91]: 
+          min_height  max_height  average_weight
+    kind                                        
+    cat          9.1         9.5            8.90
+    dog          6.0        34.0          102.75
+    
+`pandas.NamedAgg` is just a `namedtuple`. Plain tuples are allowed as well.
+
+    
+    In [92]: animals.groupby("kind").agg(
+       ....:     min_height=("height", "min"),
+       ....:     max_height=("height", "max"),
+       ....:     average_weight=("weight", np.mean),
+       ....: )
+       ....: 
+    Out[92]: 
+          min_height  max_height  average_weight
+    kind                                        
+    cat          9.1         9.5            8.90
+    dog          6.0        34.0          102.75
+    
+If your desired output column names are not valid Python keywords, construct a
+dictionary and unpack the keyword arguments
+
+    
+    In [93]: animals.groupby("kind").agg(
+       ....:     **{
+       ....:         "total weight": pd.NamedAgg(column="weight", aggfunc=sum)
+       ....:     }
+       ....: )
+       ....: 
+    Out[93]: 
+          total weight
+    kind              
+    cat           17.8
+    dog          205.5
+    
+Additional keyword arguments are not passed through to the aggregation
+functions. Only pairs of `(column, aggfunc)` should be passed as `**kwargs`.
+If your aggregation functions requires additional arguments, partially apply
+them with `functools.partial()`.
+
+Note
+
+For Python 3.5 and earlier, the order of `**kwargs` in a functions was not
+preserved. This means that the output column ordering would not be consistent.
+To ensure consistent ordering, the keys (and so output columns) will always be
+sorted for Python 3.5.
+
+Named aggregation is also valid for Series groupby aggregations. In this case
+there’s no column selection, so the values are just the functions.
+
+    
+    In [94]: animals.groupby("kind").height.agg(
+       ....:     min_height="min",
+       ....:     max_height="max",
+       ....: )
+       ....: 
+    Out[94]: 
+          min_height  max_height
+    kind                        
+    cat          9.1         9.5
+    dog          6.0        34.0
+    
+### Applying different functions to DataFrame columns
+
+By passing a dict to `aggregate` you can apply a different aggregation to the
+columns of a DataFrame:
+
+    
+    In [95]: grouped.agg({"C": np.sum, "D": lambda x: np.std(x, ddof=1)})
+    Out[95]: 
+                C         D
+    A                      
+    bar  0.392940  1.366330
+    foo -1.796421  0.884785
+    
+The function names can also be strings. In order for a string to be valid it
+must be either implemented on GroupBy or available via dispatching:
+
+    
+    In [96]: grouped.agg({"C": "sum", "D": "std"})
+    Out[96]: 
+                C         D
+    A                      
+    bar  0.392940  1.366330
+    foo -1.796421  0.884785
+    
+### Cython-optimized aggregation functions
+
+Some common aggregations, currently only `sum`, `mean`, `std`, and `sem`, have
+optimized Cython implementations:
+
+    
+    In [97]: df.groupby("A").sum()
+    Out[97]: 
+                C         D
+    A                      
+    bar  0.392940  1.732707
+    foo -1.796421  2.824590
+    
+    In [98]: df.groupby(["A", "B"]).mean()
+    Out[98]: 
+                      C         D
+    A   B                        
+    bar one    0.254161  1.511763
+        three  0.215897 -0.990582
+        two   -0.077118  1.211526
+    foo one   -0.491888  0.807291
+        three -0.862495  0.024580
+        two    0.024925  0.592714
+    
+Of course `sum` and `mean` are implemented on pandas objects, so the above
+code would work even without the special versions via dispatching (see below).
+
+### Aggregations with User-Defined Functions
+
+Users can also provide their own functions for custom aggregations. When
+aggregating with a User-Defined Function (UDF), the UDF should not mutate the
+provided `Series`, see Mutating with User Defined Function (UDF) methods for
+more information.
+
+    
+    In [99]: animals.groupby("kind")[["height"]].agg(lambda x: set(x))
+    Out[99]: 
+               height
+    kind             
+    cat    {9.1, 9.5}
+    dog   {34.0, 6.0}
+    
+The resulting dtype will reflect that of the aggregating function. If the
+results from different groups have different dtypes, then a common dtype will
+be determined in the same way as `DataFrame` construction.
+
+    
+    In [100]: animals.groupby("kind")[["height"]].agg(lambda x: x.astype(int).sum())
+    Out[100]: 
+          height
+    kind        
+    cat       18
+    dog       40
+    
+## Transformation
+
+The `transform` method returns an object that is indexed the same (same size)
+as the one being grouped. The transform function must:
+
+  * Return a result that is either the same size as the group chunk or broadcastable to the size of the group chunk (e.g., a scalar, `grouped.transform(lambda x: x.iloc[-1])`).
+  * Operate column-by-column on the group chunk. The transform is applied to the first group chunk using chunk.apply.
+  * Not perform in-place operations on the group chunk. Group chunks should be treated as immutable, and changes to a group chunk may produce unexpected results. For example, when using `fillna`, `inplace` must be `False` (`grouped.transform(lambda x: x.fillna(inplace=False))`).
+  * (Optionally) operates on the entire group chunk. If this is supported, a fast path is used starting from the second chunk.
+
+Similar to Aggregations with User-Defined Functions, the resulting dtype will
+reflect that of the transformation function. If the results from different
+groups have different dtypes, then a common dtype will be determined in the
+same way as `DataFrame` construction.
+
+Suppose we wished to standardize the data within each group:
+
+    
+    In [101]: index = pd.date_range("10/1/1999", periods=1100)
+    
+    In [102]: ts = pd.Series(np.random.normal(0.5, 2, 1100), index)
+    
+    In [103]: ts = ts.rolling(window=100, min_periods=100).mean().dropna()
+    
+    In [104]: ts.head()
+    Out[104]: 
+    2000-01-08    0.779333
+    2000-01-09    0.778852
+    2000-01-10    0.786476
+    2000-01-11    0.782797
+    2000-01-12    0.798110
+    Freq: D, dtype: float64
+    
+    In [105]: ts.tail()
+    Out[105]: 
+    2002-09-30    0.660294
+    2002-10-01    0.631095
+    2002-10-02    0.673601
+    2002-10-03    0.709213
+    2002-10-04    0.719369
+    Freq: D, dtype: float64
+    
+    In [106]: transformed = ts.groupby(lambda x: x.year).transform(
+       .....:     lambda x: (x - x.mean()) / x.std()
+       .....: )
+       .....: 
+    
+We would expect the result to now have mean 0 and standard deviation 1 within
+each group, which we can easily check:
+
+    
+    # Original Data
+    In [107]: grouped = ts.groupby(lambda x: x.year)
+    
+    In [108]: grouped.mean()
+    Out[108]: 
+    2000    0.442441
+    2001    0.526246
+    2002    0.459365
+    dtype: float64
+    
+    In [109]: grouped.std()
+    Out[109]: 
+    2000    0.131752
+    2001    0.210945
+    2002    0.128753
+    dtype: float64
+    
+    # Transformed Data
+    In [110]: grouped_trans = transformed.groupby(lambda x: x.year)
+    
+    In [111]: grouped_trans.mean()
+    Out[111]: 
+    2000    1.193722e-15
+    2001    1.945476e-15
+    2002    1.272949e-15
+    dtype: float64
+    
+    In [112]: grouped_trans.std()
+    Out[112]: 
+    2000    1.0
+    2001    1.0
+    2002    1.0
+    dtype: float64
+    
+We can also visually compare the original and transformed data sets.
+
+    
+    In [113]: compare = pd.DataFrame({"Original": ts, "Transformed": transformed})
+    
+    In [114]: compare.plot()
+    Out[114]: <AxesSubplot:>
+    
+![../_images/groupby_transform_plot.png](data:image/png;base64,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)
+
+Transformation functions that have lower dimension outputs are broadcast to
+match the shape of the input array.
+
+    
+    In [115]: ts.groupby(lambda x: x.year).transform(lambda x: x.max() - x.min())
+    Out[115]: 
+    2000-01-08    0.623893
+    2000-01-09    0.623893
+    2000-01-10    0.623893
+    2000-01-11    0.623893
+    2000-01-12    0.623893
+                    ...   
+    2002-09-30    0.558275
+    2002-10-01    0.558275
+    2002-10-02    0.558275
+    2002-10-03    0.558275
+    2002-10-04    0.558275
+    Freq: D, Length: 1001, dtype: float64
+    
+Alternatively, the built-in methods could be used to produce the same outputs.
+
+    
+    In [116]: max = ts.groupby(lambda x: x.year).transform("max")
+    
+    In [117]: min = ts.groupby(lambda x: x.year).transform("min")
+    
+    In [118]: max - min
+    Out[118]: 
+    2000-01-08    0.623893
+    2000-01-09    0.623893
+    2000-01-10    0.623893
+    2000-01-11    0.623893
+    2000-01-12    0.623893
+                    ...   
+    2002-09-30    0.558275
+    2002-10-01    0.558275
+    2002-10-02    0.558275
+    2002-10-03    0.558275
+    2002-10-04    0.558275
+    Freq: D, Length: 1001, dtype: float64
+    
+Another common data transform is to replace missing data with the group mean.
+
+    
+    In [119]: data_df
+    Out[119]: 
+                A         B         C
+    0    1.539708 -1.166480  0.533026
+    1    1.302092 -0.505754       NaN
+    2   -0.371983  1.104803 -0.651520
+    3   -1.309622  1.118697 -1.161657
+    4   -1.924296  0.396437  0.812436
+    ..        ...       ...       ...
+    995 -0.093110  0.683847 -0.774753
+    996 -0.185043  1.438572       NaN
+    997 -0.394469 -0.642343  0.011374
+    998 -1.174126  1.857148       NaN
+    999  0.234564  0.517098  0.393534
+    
+    [1000 rows x 3 columns]
+    
+    In [120]: countries = np.array(["US", "UK", "GR", "JP"])
+    
+    In [121]: key = countries[np.random.randint(0, 4, 1000)]
+    
+    In [122]: grouped = data_df.groupby(key)
+    
+    # Non-NA count in each group
+    In [123]: grouped.count()
+    Out[123]: 
+          A    B    C
+    GR  209  217  189
+    JP  240  255  217
+    UK  216  231  193
+    US  239  250  217
+    
+    In [124]: transformed = grouped.transform(lambda x: x.fillna(x.mean()))
+    
+We can verify that the group means have not changed in the transformed data
+and that the transformed data contains no NAs.
+
+    
+    In [125]: grouped_trans = transformed.groupby(key)
+    
+    In [126]: grouped.mean()  # original group means
+    Out[126]: 
+               A         B         C
+    GR -0.098371 -0.015420  0.068053
+    JP  0.069025  0.023100 -0.077324
+    UK  0.034069 -0.052580 -0.116525
+    US  0.058664 -0.020399  0.028603
+    
+    In [127]: grouped_trans.mean()  # transformation did not change group means
+    Out[127]: 
+               A         B         C
+    GR -0.098371 -0.015420  0.068053
+    JP  0.069025  0.023100 -0.077324
+    UK  0.034069 -0.052580 -0.116525
+    US  0.058664 -0.020399  0.028603
+    
+    In [128]: grouped.count()  # original has some missing data points
+    Out[128]: 
+          A    B    C
+    GR  209  217  189
+    JP  240  255  217
+    UK  216  231  193
+    US  239  250  217
+    
+    In [129]: grouped_trans.count()  # counts after transformation
+    Out[129]: 
+          A    B    C
+    GR  228  228  228
+    JP  267  267  267
+    UK  247  247  247
+    US  258  258  258
+    
+    In [130]: grouped_trans.size()  # Verify non-NA count equals group size
+    Out[130]: 
+    GR    228
+    JP    267
+    UK    247
+    US    258
+    dtype: int64
+    
+Note
+
+Some functions will automatically transform the input when applied to a
+GroupBy object, but returning an object of the same shape as the original.
+Passing `as_index=False` will not affect these transformation methods.
+
+For example: `fillna, ffill, bfill, shift.`.
+
+    
+    In [131]: grouped.ffill()
+    Out[131]: 
+                A         B         C
+    0    1.539708 -1.166480  0.533026
+    1    1.302092 -0.505754  0.533026
+    2   -0.371983  1.104803 -0.651520
+    3   -1.309622  1.118697 -1.161657
+    4   -1.924296  0.396437  0.812436
+    ..        ...       ...       ...
+    995 -0.093110  0.683847 -0.774753
+    996 -0.185043  1.438572 -0.774753
+    997 -0.394469 -0.642343  0.011374
+    998 -1.174126  1.857148 -0.774753
+    999  0.234564  0.517098  0.393534
+    
+    [1000 rows x 3 columns]
+    
+### Window and resample operations
+
+It is possible to use `resample()`, `expanding()` and `rolling()` as methods
+on groupbys.
+
+The example below will apply the `rolling()` method on the samples of the
+column B based on the groups of column A.
+
+    
+    In [132]: df_re = pd.DataFrame({"A": [1] * 10 + [5] * 10, "B": np.arange(20)})
+    
+    In [133]: df_re
+    Out[133]: 
+        A   B
+    0   1   0
+    1   1   1
+    2   1   2
+    3   1   3
+    4   1   4
+    .. ..  ..
+    15  5  15
+    16  5  16
+    17  5  17
+    18  5  18
+    19  5  19
+    
+    [20 rows x 2 columns]
+    
+    In [134]: df_re.groupby("A").rolling(4).B.mean()
+    Out[134]: 
+    A    
+    1  0      NaN
+       1      NaN
+       2      NaN
+       3      1.5
+       4      2.5
+             ... 
+    5  15    13.5
+       16    14.5
+       17    15.5
+       18    16.5
+       19    17.5
+    Name: B, Length: 20, dtype: float64
+    
+The `expanding()` method will accumulate a given operation (`sum()` in the
+example) for all the members of each particular group.
+
+    
+    In [135]: df_re.groupby("A").expanding().sum()
+    Out[135]: 
+              B
+    A          
+    1 0     0.0
+      1     1.0
+      2     3.0
+      3     6.0
+      4    10.0
+    ...     ...
+    5 15   75.0
+      16   91.0
+      17  108.0
+      18  126.0
+      19  145.0
+    
+    [20 rows x 1 columns]
+    
+Suppose you want to use the `resample()` method to get a daily frequency in
+each group of your dataframe and wish to complete the missing values with the
+`ffill()` method.
+
+    
+    In [136]: df_re = pd.DataFrame(
+       .....:     {
+       .....:         "date": pd.date_range(start="2016-01-01", periods=4, freq="W"),
+       .....:         "group": [1, 1, 2, 2],
+       .....:         "val": [5, 6, 7, 8],
+       .....:     }
+       .....: ).set_index("date")
+       .....: 
+    
+    In [137]: df_re
+    Out[137]: 
+                group  val
+    date                  
+    2016-01-03      1    5
+    2016-01-10      1    6
+    2016-01-17      2    7
+    2016-01-24      2    8
+    
+    In [138]: df_re.groupby("group").resample("1D").ffill()
+    Out[138]: 
+                      group  val
+    group date                  
+    1     2016-01-03      1    5
+          2016-01-04      1    5
+          2016-01-05      1    5
+          2016-01-06      1    5
+          2016-01-07      1    5
+    ...                 ...  ...
+    2     2016-01-20      2    7
+          2016-01-21      2    7
+          2016-01-22      2    7
+          2016-01-23      2    7
+          2016-01-24      2    8
+    
+    [16 rows x 2 columns]
+    
+## Filtration
+
+The `filter` method returns a subset of the original object. Suppose we want
+to take only elements that belong to groups with a group sum greater than 2.
+
+    
+    In [139]: sf = pd.Series([1, 1, 2, 3, 3, 3])
+    
+    In [140]: sf.groupby(sf).filter(lambda x: x.sum() > 2)
+    Out[140]: 
+    3    3
+    4    3
+    5    3
+    dtype: int64
+    
+The argument of `filter` must be a function that, applied to the group as a
+whole, returns `True` or `False`.
+
+Another useful operation is filtering out elements that belong to groups with
+only a couple members.
+
+    
+    In [141]: dff = pd.DataFrame({"A": np.arange(8), "B": list("aabbbbcc")})
+    
+    In [142]: dff.groupby("B").filter(lambda x: len(x) > 2)
+    Out[142]: 
+       A  B
+    2  2  b
+    3  3  b
+    4  4  b
+    5  5  b
+    
+Alternatively, instead of dropping the offending groups, we can return a like-
+indexed objects where the groups that do not pass the filter are filled with
+NaNs.
+
+    
+    In [143]: dff.groupby("B").filter(lambda x: len(x) > 2, dropna=False)
+    Out[143]: 
+         A    B
+    0  NaN  NaN
+    1  NaN  NaN
+    2  2.0    b
+    3  3.0    b
+    4  4.0    b
+    5  5.0    b
+    6  NaN  NaN
+    7  NaN  NaN
+    
+For DataFrames with multiple columns, filters should explicitly specify a
+column as the filter criterion.
+
+    
+    In [144]: dff["C"] = np.arange(8)
+    
+    In [145]: dff.groupby("B").filter(lambda x: len(x["C"]) > 2)
+    Out[145]: 
+       A  B  C
+    2  2  b  2
+    3  3  b  3
+    4  4  b  4
+    5  5  b  5
+    
+Note
+
+Some functions when applied to a groupby object will act as a filter on the
+input, returning a reduced shape of the original (and potentially eliminating
+groups), but with the index unchanged. Passing `as_index=False` will not
+affect these transformation methods.
+
+For example: `head, tail`.
+
+    
+    In [146]: dff.groupby("B").head(2)
+    Out[146]: 
+       A  B  C
+    0  0  a  0
+    1  1  a  1
+    2  2  b  2
+    3  3  b  3
+    6  6  c  6
+    7  7  c  7
+    
+## Dispatching to instance methods
+
+When doing an aggregation or transformation, you might just want to call an
+instance method on each data group. This is pretty easy to do by passing
+lambda functions:
+
+    
+    In [147]: grouped = df.groupby("A")
+    
+    In [148]: grouped.agg(lambda x: x.std())
+    Out[148]: 
+                C         D
+    A                      
+    bar  0.181231  1.366330
+    foo  0.912265  0.884785
+    
+But, it’s rather verbose and can be untidy if you need to pass additional
+arguments. Using a bit of metaprogramming cleverness, GroupBy now has the
+ability to “dispatch” method calls to the groups:
+
+    
+    In [149]: grouped.std()
+    Out[149]: 
+                C         D
+    A                      
+    bar  0.181231  1.366330
+    foo  0.912265  0.884785
+    
+What is actually happening here is that a function wrapper is being generated.
+When invoked, it takes any passed arguments and invokes the function with any
+arguments on each group (in the above example, the `std` function). The
+results are then combined together much in the style of `agg` and `transform`
+(it actually uses `apply` to infer the gluing, documented next). This enables
+some operations to be carried out rather succinctly:
+
+    
+    In [150]: tsdf = pd.DataFrame(
+       .....:     np.random.randn(1000, 3),
+       .....:     index=pd.date_range("1/1/2000", periods=1000),
+       .....:     columns=["A", "B", "C"],
+       .....: )
+       .....: 
+    
+    In [151]: tsdf.iloc[::2] = np.nan
+    
+    In [152]: grouped = tsdf.groupby(lambda x: x.year)
+    
+    In [153]: grouped.fillna(method="pad")
+    Out[153]: 
+                       A         B         C
+    2000-01-01       NaN       NaN       NaN
+    2000-01-02 -0.353501 -0.080957 -0.876864
+    2000-01-03 -0.353501 -0.080957 -0.876864
+    2000-01-04  0.050976  0.044273 -0.559849
+    2000-01-05  0.050976  0.044273 -0.559849
+    ...              ...       ...       ...
+    2002-09-22  0.005011  0.053897 -1.026922
+    2002-09-23  0.005011  0.053897 -1.026922
+    2002-09-24 -0.456542 -1.849051  1.559856
+    2002-09-25 -0.456542 -1.849051  1.559856
+    2002-09-26  1.123162  0.354660  1.128135
+    
+    [1000 rows x 3 columns]
+    
+In this example, we chopped the collection of time series into yearly chunks
+then independently called fillna on the groups.
+
+The `nlargest` and `nsmallest` methods work on `Series` style groupbys:
+
+    
+    In [154]: s = pd.Series([9, 8, 7, 5, 19, 1, 4.2, 3.3])
+    
+    In [155]: g = pd.Series(list("abababab"))
+    
+    In [156]: gb = s.groupby(g)
+    
+    In [157]: gb.nlargest(3)
+    Out[157]: 
+    a  4    19.0
+       0     9.0
+       2     7.0
+    b  1     8.0
+       3     5.0
+       7     3.3
+    dtype: float64
+    
+    In [158]: gb.nsmallest(3)
+    Out[158]: 
+    a  6    4.2
+       2    7.0
+       0    9.0
+    b  5    1.0
+       7    3.3
+       3    5.0
+    dtype: float64
+    
+## Flexible `apply`
+
+Some operations on the grouped data might not fit into either the aggregate or
+transform categories. Or, you may simply want GroupBy to infer how to combine
+the results. For these, use the `apply` function, which can be substituted for
+both `aggregate` and `transform` in many standard use cases. However, `apply`
+can handle some exceptional use cases, for example:
+
+    
+    In [159]: df
+    Out[159]: 
+         A      B         C         D
+    0  foo    one -0.575247  1.346061
+    1  bar    one  0.254161  1.511763
+    2  foo    two -1.143704  1.627081
+    3  bar  three  0.215897 -0.990582
+    4  foo    two  1.193555 -0.441652
+    5  bar    two -0.077118  1.211526
+    6  foo    one -0.408530  0.268520
+    7  foo  three -0.862495  0.024580
+    
+    In [160]: grouped = df.groupby("A")
+    
+    # could also just call .describe()
+    In [161]: grouped["C"].apply(lambda x: x.describe())
+    Out[161]: 
+    A         
+    bar  count    3.000000
+         mean     0.130980
+         std      0.181231
+         min     -0.077118
+         25%      0.069390
+                    ...   
+    foo  min     -1.143704
+         25%     -0.862495
+         50%     -0.575247
+         75%     -0.408530
+         max      1.193555
+    Name: C, Length: 16, dtype: float64
+    
+The dimension of the returned result can also change:
+
+    
+    In [162]: grouped = df.groupby('A')['C']
+    
+    In [163]: def f(group):
+       .....:     return pd.DataFrame({'original': group,
+       .....:                          'demeaned': group - group.mean()})
+       .....: 
+    
+    In [164]: grouped.apply(f)
+    Out[164]: 
+       original  demeaned
+    0 -0.575247 -0.215962
+    1  0.254161  0.123181
+    2 -1.143704 -0.784420
+    3  0.215897  0.084917
+    4  1.193555  1.552839
+    5 -0.077118 -0.208098
+    6 -0.408530 -0.049245
+    7 -0.862495 -0.503211
+    
+`apply` on a Series can operate on a returned value from the applied function,
+that is itself a series, and possibly upcast the result to a DataFrame:
+
+    
+    In [165]: def f(x):
+       .....:     return pd.Series([x, x ** 2], index=["x", "x^2"])
+       .....: 
+    
+    In [166]: s = pd.Series(np.random.rand(5))
+    
+    In [167]: s
+    Out[167]: 
+    0    0.321438
+    1    0.493496
+    2    0.139505
+    3    0.910103
+    4    0.194158
+    dtype: float64
+    
+    In [168]: s.apply(f)
+    Out[168]: 
+              x       x^2
+    0  0.321438  0.103323
+    1  0.493496  0.243538
+    2  0.139505  0.019462
+    3  0.910103  0.828287
+    4  0.194158  0.037697
+    
+Note
+
+`apply` can act as a reducer, transformer, or filter function, depending on
+exactly what is passed to it. So depending on the path taken, and exactly what
+you are grouping. Thus the grouped columns(s) may be included in the output as
+well as set the indices.
+
+Similar to Aggregations with User-Defined Functions, the resulting dtype will
+reflect that of the apply function. If the results from different groups have
+different dtypes, then a common dtype will be determined in the same way as
+`DataFrame` construction.
+
+## Numba Accelerated Routines
+
+New in version 1.1.
+
+If Numba is installed as an optional dependency, the `transform` and
+`aggregate` methods support `engine='numba'` and `engine_kwargs` arguments.
+See enhancing performance with Numba for general usage of the arguments and
+performance considerations.
+
+The function signature must start with `values, index` exactly as the data
+belonging to each group will be passed into `values`, and the group index will
+be passed into `index`.
+
+Warning
+
+When using `engine='numba'`, there will be no “fall back” behavior internally.
+The group data and group index will be passed as NumPy arrays to the JITed
+user defined function, and no alternative execution attempts will be tried.
+
+## Other useful features
+
+### Automatic exclusion of “nuisance” columns
+
+Again consider the example DataFrame we’ve been looking at:
+
+    
+    In [169]: df
+    Out[169]: 
+         A      B         C         D
+    0  foo    one -0.575247  1.346061
+    1  bar    one  0.254161  1.511763
+    2  foo    two -1.143704  1.627081
+    3  bar  three  0.215897 -0.990582
+    4  foo    two  1.193555 -0.441652
+    5  bar    two -0.077118  1.211526
+    6  foo    one -0.408530  0.268520
+    7  foo  three -0.862495  0.024580
+    
+Suppose we wish to compute the standard deviation grouped by the `A` column.
+There is a slight problem, namely that we don’t care about the data in column
+`B`. We refer to this as a “nuisance” column. If the passed aggregation
+function can’t be applied to some columns, the troublesome columns will be
+(silently) dropped. Thus, this does not pose any problems:
+
+    
+    In [170]: df.groupby("A").std()
+    Out[170]: 
+                C         D
+    A                      
+    bar  0.181231  1.366330
+    foo  0.912265  0.884785
+    
+Note that `df.groupby('A').colname.std().` is more efficient than
+`df.groupby('A').std().colname`, so if the result of an aggregation function
+is only interesting over one column (here `colname`), it may be filtered
+before applying the aggregation function.
+
+Note
+
+Any object column, also if it contains numerical values such as `Decimal`
+objects, is considered as a “nuisance” columns. They are excluded from
+aggregate functions automatically in groupby.
+
+If you do wish to include decimal or object columns in an aggregation with
+other non-nuisance data types, you must do so explicitly.
+
+    
+    In [171]: from decimal import Decimal
+    
+    In [172]: df_dec = pd.DataFrame(
+       .....:     {
+       .....:         "id": [1, 2, 1, 2],
+       .....:         "int_column": [1, 2, 3, 4],
+       .....:         "dec_column": [
+       .....:             Decimal("0.50"),
+       .....:             Decimal("0.15"),
+       .....:             Decimal("0.25"),
+       .....:             Decimal("0.40"),
+       .....:         ],
+       .....:     }
+       .....: )
+       .....: 
+    
+    # Decimal columns can be sum'd explicitly by themselves...
+    In [173]: df_dec.groupby(["id"])[["dec_column"]].sum()
+    Out[173]: 
+       dec_column
+    id           
+    1        0.75
+    2        0.55
+    
+    # ...but cannot be combined with standard data types or they will be excluded
+    In [174]: df_dec.groupby(["id"])[["int_column", "dec_column"]].sum()
+    Out[174]: 
+        int_column
+    id            
+    1            4
+    2            6
+    
+    # Use .agg function to aggregate over standard and "nuisance" data types
+    # at the same time
+    In [175]: df_dec.groupby(["id"]).agg({"int_column": "sum", "dec_column": "sum"})
+    Out[175]: 
+        int_column dec_column
+    id                       
+    1            4       0.75
+    2            6       0.55
+    
+### Handling of (un)observed Categorical values
+
+When using a `Categorical` grouper (as a single grouper, or as part of
+multiple groupers), the `observed` keyword controls whether to return a
+cartesian product of all possible groupers values (`observed=False`) or only
+those that are observed groupers (`observed=True`).
+
+Show all values:
+
+    
+    In [176]: pd.Series([1, 1, 1]).groupby(
+       .....:     pd.Categorical(["a", "a", "a"], categories=["a", "b"]), observed=False
+       .....: ).count()
+       .....: 
+    Out[176]: 
+    a    3
+    b    0
+    dtype: int64
+    
+Show only the observed values:
+
+    
+    In [177]: pd.Series([1, 1, 1]).groupby(
+       .....:     pd.Categorical(["a", "a", "a"], categories=["a", "b"]), observed=True
+       .....: ).count()
+       .....: 
+    Out[177]: 
+    a    3
+    dtype: int64
+    
+The returned dtype of the grouped will always include all of the categories
+that were grouped.
+
+    
+    In [178]: s = (
+       .....:     pd.Series([1, 1, 1])
+       .....:     .groupby(pd.Categorical(["a", "a", "a"], categories=["a", "b"]), observed=False)
+       .....:     .count()
+       .....: )
+       .....: 
+    
+    In [179]: s.index.dtype
+    Out[179]: CategoricalDtype(categories=['a', 'b'], ordered=False)
+    
+### NA and NaT group handling
+
+If there are any NaN or NaT values in the grouping key, these will be
+automatically excluded. In other words, there will never be an “NA group” or
+“NaT group”. This was not the case in older versions of pandas, but users were
+generally discarding the NA group anyway (and supporting it was an
+implementation headache).
+
+### Grouping with ordered factors
+
+Categorical variables represented as instance of pandas’s `Categorical` class
+can be used as group keys. If so, the order of the levels will be preserved:
+
+    
+    In [180]: data = pd.Series(np.random.randn(100))
+    
+    In [181]: factor = pd.qcut(data, [0, 0.25, 0.5, 0.75, 1.0])
+    
+    In [182]: data.groupby(factor).mean()
+    Out[182]: 
+    (-2.645, -0.523]   -1.362896
+    (-0.523, 0.0296]   -0.260266
+    (0.0296, 0.654]     0.361802
+    (0.654, 2.21]       1.073801
+    dtype: float64
+    
+### Grouping with a grouper specification
+
+You may need to specify a bit more data to properly group. You can use the
+`pd.Grouper` to provide this local control.
+
+    
+    In [183]: import datetime
+    
+    In [184]: df = pd.DataFrame(
+       .....:     {
+       .....:         "Branch": "A A A A A A A B".split(),
+       .....:         "Buyer": "Carl Mark Carl Carl Joe Joe Joe Carl".split(),
+       .....:         "Quantity": [1, 3, 5, 1, 8, 1, 9, 3],
+       .....:         "Date": [
+       .....:             datetime.datetime(2013, 1, 1, 13, 0),
+       .....:             datetime.datetime(2013, 1, 1, 13, 5),
+       .....:             datetime.datetime(2013, 10, 1, 20, 0),
+       .....:             datetime.datetime(2013, 10, 2, 10, 0),
+       .....:             datetime.datetime(2013, 10, 1, 20, 0),
+       .....:             datetime.datetime(2013, 10, 2, 10, 0),
+       .....:             datetime.datetime(2013, 12, 2, 12, 0),
+       .....:             datetime.datetime(2013, 12, 2, 14, 0),
+       .....:         ],
+       .....:     }
+       .....: )
+       .....: 
+    
+    In [185]: df
+    Out[185]: 
+      Branch Buyer  Quantity                Date
+    0      A  Carl         1 2013-01-01 13:00:00
+    1      A  Mark         3 2013-01-01 13:05:00
+    2      A  Carl         5 2013-10-01 20:00:00
+    3      A  Carl         1 2013-10-02 10:00:00
+    4      A   Joe         8 2013-10-01 20:00:00
+    5      A   Joe         1 2013-10-02 10:00:00
+    6      A   Joe         9 2013-12-02 12:00:00
+    7      B  Carl         3 2013-12-02 14:00:00
+    
+Groupby a specific column with the desired frequency. This is like resampling.
+
+    
+    In [186]: df.groupby([pd.Grouper(freq="1M", key="Date"), "Buyer"]).sum()
+    Out[186]: 
+                      Quantity
+    Date       Buyer          
+    2013-01-31 Carl          1
+               Mark          3
+    2013-10-31 Carl          6
+               Joe           9
+    2013-12-31 Carl          3
+               Joe           9
+    
+You have an ambiguous specification in that you have a named index and a
+column that could be potential groupers.
+
+    
+    In [187]: df = df.set_index("Date")
+    
+    In [188]: df["Date"] = df.index + pd.offsets.MonthEnd(2)
+    
+    In [189]: df.groupby([pd.Grouper(freq="6M", key="Date"), "Buyer"]).sum()
+    Out[189]: 
+                      Quantity
+    Date       Buyer          
+    2013-02-28 Carl          1
+               Mark          3
+    2014-02-28 Carl          9
+               Joe          18
+    
+    In [190]: df.groupby([pd.Grouper(freq="6M", level="Date"), "Buyer"]).sum()
+    Out[190]: 
+                      Quantity
+    Date       Buyer          
+    2013-01-31 Carl          1
+               Mark          3
+    2014-01-31 Carl          9
+               Joe          18
+    
+### Taking the first rows of each group
+
+Just like for a DataFrame or Series you can call head and tail on a groupby:
+
+    
+    In [191]: df = pd.DataFrame([[1, 2], [1, 4], [5, 6]], columns=["A", "B"])
+    
+    In [192]: df
+    Out[192]: 
+       A  B
+    0  1  2
+    1  1  4
+    2  5  6
+    
+    In [193]: g = df.groupby("A")
+    
+    In [194]: g.head(1)
+    Out[194]: 
+       A  B
+    0  1  2
+    2  5  6
+    
+    In [195]: g.tail(1)
+    Out[195]: 
+       A  B
+    1  1  4
+    2  5  6
+    
+This shows the first or last n rows from each group.
+
+### Taking the nth row of each group
+
+To select from a DataFrame or Series the nth item, use `nth()`. This is a
+reduction method, and will return a single row (or no row) per group if you
+pass an int for n:
+
+    
+    In [196]: df = pd.DataFrame([[1, np.nan], [1, 4], [5, 6]], columns=["A", "B"])
+    
+    In [197]: g = df.groupby("A")
+    
+    In [198]: g.nth(0)
+    Out[198]: 
+         B
+    A     
+    1  NaN
+    5  6.0
+    
+    In [199]: g.nth(-1)
+    Out[199]: 
+         B
+    A     
+    1  4.0
+    5  6.0
+    
+    In [200]: g.nth(1)
+    Out[200]: 
+         B
+    A     
+    1  4.0
+    
+If you want to select the nth not-null item, use the `dropna` kwarg. For a
+DataFrame this should be either `'any'` or `'all'` just like you would pass to
+dropna:
+
+    
+    # nth(0) is the same as g.first()
+    In [201]: g.nth(0, dropna="any")
+    Out[201]: 
+         B
+    A     
+    1  4.0
+    5  6.0
+    
+    In [202]: g.first()
+    Out[202]: 
+         B
+    A     
+    1  4.0
+    5  6.0
+    
+    # nth(-1) is the same as g.last()
+    In [203]: g.nth(-1, dropna="any")  # NaNs denote group exhausted when using dropna
+    Out[203]: 
+         B
+    A     
+    1  4.0
+    5  6.0
+    
+    In [204]: g.last()
+    Out[204]: 
+         B
+    A     
+    1  4.0
+    5  6.0
+    
+    In [205]: g.B.nth(0, dropna="all")
+    Out[205]: 
+    A
+    1    4.0
+    5    6.0
+    Name: B, dtype: float64
+    
+As with other methods, passing `as_index=False`, will achieve a filtration,
+which returns the grouped row.
+
+    
+    In [206]: df = pd.DataFrame([[1, np.nan], [1, 4], [5, 6]], columns=["A", "B"])
+    
+    In [207]: g = df.groupby("A", as_index=False)
+    
+    In [208]: g.nth(0)
+    Out[208]: 
+       A    B
+    0  1  NaN
+    2  5  6.0
+    
+    In [209]: g.nth(-1)
+    Out[209]: 
+       A    B
+    1  1  4.0
+    2  5  6.0
+    
+You can also select multiple rows from each group by specifying multiple nth
+values as a list of ints.
+
+    
+    In [210]: business_dates = pd.date_range(start="4/1/2014", end="6/30/2014", freq="B")
+    
+    In [211]: df = pd.DataFrame(1, index=business_dates, columns=["a", "b"])
+    
+    # get the first, 4th, and last date index for each month
+    In [212]: df.groupby([df.index.year, df.index.month]).nth([0, 3, -1])
+    Out[212]: 
+            a  b
+    2014 4  1  1
+         4  1  1
+         4  1  1
+         5  1  1
+         5  1  1
+         5  1  1
+         6  1  1
+         6  1  1
+         6  1  1
+    
+### Enumerate group items
+
+To see the order in which each row appears within its group, use the
+`cumcount` method:
+
+    
+    In [213]: dfg = pd.DataFrame(list("aaabba"), columns=["A"])
+    
+    In [214]: dfg
+    Out[214]: 
+       A
+    0  a
+    1  a
+    2  a
+    3  b
+    4  b
+    5  a
+    
+    In [215]: dfg.groupby("A").cumcount()
+    Out[215]: 
+    0    0
+    1    1
+    2    2
+    3    0
+    4    1
+    5    3
+    dtype: int64
+    
+    In [216]: dfg.groupby("A").cumcount(ascending=False)
+    Out[216]: 
+    0    3
+    1    2
+    2    1
+    3    1
+    4    0
+    5    0
+    dtype: int64
+    
+### Enumerate groups
+
+To see the ordering of the groups (as opposed to the order of rows within a
+group given by `cumcount`) you can use `ngroup()`.
+
+Note that the numbers given to the groups match the order in which the groups
+would be seen when iterating over the groupby object, not the order they are
+first observed.
+
+    
+    In [217]: dfg = pd.DataFrame(list("aaabba"), columns=["A"])
+    
+    In [218]: dfg
+    Out[218]: 
+       A
+    0  a
+    1  a
+    2  a
+    3  b
+    4  b
+    5  a
+    
+    In [219]: dfg.groupby("A").ngroup()
+    Out[219]: 
+    0    0
+    1    0
+    2    0
+    3    1
+    4    1
+    5    0
+    dtype: int64
+    
+    In [220]: dfg.groupby("A").ngroup(ascending=False)
+    Out[220]: 
+    0    1
+    1    1
+    2    1
+    3    0
+    4    0
+    5    1
+    dtype: int64
+    
+### Plotting
+
+Groupby also works with some plotting methods. For example, suppose we suspect
+that some features in a DataFrame may differ by group, in this case, the
+values in column 1 where the group is “B” are 3 higher on average.
+
+    
+    In [221]: np.random.seed(1234)
+    
+    In [222]: df = pd.DataFrame(np.random.randn(50, 2))
+    
+    In [223]: df["g"] = np.random.choice(["A", "B"], size=50)
+    
+    In [224]: df.loc[df["g"] == "B", 1] += 3
+    
+We can easily visualize this with a boxplot:
+
+    
+    In [225]: df.groupby("g").boxplot()
+    Out[225]: 
+    A         AxesSubplot(0.1,0.15;0.363636x0.75)
+    B    AxesSubplot(0.536364,0.15;0.363636x0.75)
+    dtype: object
+    
+![../_images/groupby_boxplot.png](data:image/png;base64,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)
+
+The result of calling `boxplot` is a dictionary whose keys are the values of
+our grouping column `g` (“A” and “B”). The values of the resulting dictionary
+can be controlled by the `return_type` keyword of `boxplot`. See the
+visualization documentation for more.
+
+Warning
+
+For historical reasons, `df.groupby("g").boxplot()` is not equivalent to
+`df.boxplot(by="g")`. See here for an explanation.
+
+### Piping function calls
+
+Similar to the functionality provided by `DataFrame` and `Series`, functions
+that take `GroupBy` objects can be chained together using a `pipe` method to
+allow for a cleaner, more readable syntax. To read about `.pipe` in general
+terms, see here.
+
+Combining `.groupby` and `.pipe` is often useful when you need to reuse
+GroupBy objects.
+
+As an example, imagine having a DataFrame with columns for stores, products,
+revenue and quantity sold. We’d like to do a groupwise calculation of prices
+(i.e. revenue/quantity) per store and per product. We could do this in a
+multi-step operation, but expressing it in terms of piping can make the code
+more readable. First we set the data:
+
+    
+    In [226]: n = 1000
+    
+    In [227]: df = pd.DataFrame(
+       .....:     {
+       .....:         "Store": np.random.choice(["Store_1", "Store_2"], n),
+       .....:         "Product": np.random.choice(["Product_1", "Product_2"], n),
+       .....:         "Revenue": (np.random.random(n) * 50 + 10).round(2),
+       .....:         "Quantity": np.random.randint(1, 10, size=n),
+       .....:     }
+       .....: )
+       .....: 
+    
+    In [228]: df.head(2)
+    Out[228]: 
+         Store    Product  Revenue  Quantity
+    0  Store_2  Product_1    26.12         1
+    1  Store_2  Product_1    28.86         1
+    
+Now, to find prices per store/product, we can simply do:
+
+    
+    In [229]: (
+       .....:     df.groupby(["Store", "Product"])
+       .....:     .pipe(lambda grp: grp.Revenue.sum() / grp.Quantity.sum())
+       .....:     .unstack()
+       .....:     .round(2)
+       .....: )
+       .....: 
+    Out[229]: 
+    Product  Product_1  Product_2
+    Store                        
+    Store_1       6.82       7.05
+    Store_2       6.30       6.64
+    
+Piping can also be expressive when you want to deliver a grouped object to
+some arbitrary function, for example:
+
+    
+    In [230]: def mean(groupby):
+       .....:     return groupby.mean()
+       .....: 
+    
+    In [231]: df.groupby(["Store", "Product"]).pipe(mean)
+    Out[231]: 
+                         Revenue  Quantity
+    Store   Product                       
+    Store_1 Product_1  34.622727  5.075758
+            Product_2  35.482815  5.029630
+    Store_2 Product_1  32.972837  5.237589
+            Product_2  34.684360  5.224000
+    
+where `mean` takes a GroupBy object and finds the mean of the Revenue and
+Quantity columns respectively for each Store-Product combination. The `mean`
+function can be any function that takes in a GroupBy object; the `.pipe` will
+pass the GroupBy object as a parameter into the function you specify.
+
+## Examples
+
+### Regrouping by factor
+
+Regroup columns of a DataFrame according to their sum, and sum the aggregated
+ones.
+
+    
+    In [232]: df = pd.DataFrame({"a": [1, 0, 0], "b": [0, 1, 0], "c": [1, 0, 0], "d": [2, 3, 4]})
+    
+    In [233]: df
+    Out[233]: 
+       a  b  c  d
+    0  1  0  1  2
+    1  0  1  0  3
+    2  0  0  0  4
+    
+    In [234]: df.groupby(df.sum(), axis=1).sum()
+    Out[234]: 
+       1  9
+    0  2  2
+    1  1  3
+    2  0  4
+    
+### Multi-column factorization
+
+By using `ngroup()`, we can extract information about the groups in a way
+similar to `factorize()` (as described further in the reshaping API) but which
+applies naturally to multiple columns of mixed type and different sources.
+This can be useful as an intermediate categorical-like step in processing,
+when the relationships between the group rows are more important than their
+content, or as input to an algorithm which only accepts the integer encoding.
+(For more information about support in pandas for full categorical data, see
+the Categorical introduction and the API documentation.)
+
+    
+    In [235]: dfg = pd.DataFrame({"A": [1, 1, 2, 3, 2], "B": list("aaaba")})
+    
+    In [236]: dfg
+    Out[236]: 
+       A  B
+    0  1  a
+    1  1  a
+    2  2  a
+    3  3  b
+    4  2  a
+    
+    In [237]: dfg.groupby(["A", "B"]).ngroup()
+    Out[237]: 
+    0    0
+    1    0
+    2    1
+    3    2
+    4    1
+    dtype: int64
+    
+    In [238]: dfg.groupby(["A", [0, 0, 0, 1, 1]]).ngroup()
+    Out[238]: 
+    0    0
+    1    0
+    2    1
+    3    3
+    4    2
+    dtype: int64
+    
+### Groupby by indexer to ‘resample’ data
+
+Resampling produces new hypothetical samples (resamples) from already existing
+observed data or from a model that generates data. These new samples are
+similar to the pre-existing samples.
+
+In order to resample to work on indices that are non-datetimelike, the
+following procedure can be utilized.
+
+In the following examples, df.index // 5 returns a binary array which is used
+to determine what gets selected for the groupby operation.
+
+Note
+
+The below example shows how we can downsample by consolidation of samples into
+fewer samples. Here by using df.index // 5, we are aggregating the samples in
+bins. By applying std() function, we aggregate the information contained in
+many samples into a small subset of values which is their standard deviation
+thereby reducing the number of samples.
+
+    
+    In [239]: df = pd.DataFrame(np.random.randn(10, 2))
+    
+    In [240]: df
+    Out[240]: 
+              0         1
+    0 -0.793893  0.321153
+    1  0.342250  1.618906
+    2 -0.975807  1.918201
+    3 -0.810847 -1.405919
+    4 -1.977759  0.461659
+    5  0.730057 -1.316938
+    6 -0.751328  0.528290
+    7 -0.257759 -1.081009
+    8  0.505895 -1.701948
+    9 -1.006349  0.020208
+    
+    In [241]: df.index // 5
+    Out[241]: Int64Index([0, 0, 0, 0, 0, 1, 1, 1, 1, 1], dtype='int64')
+    
+    In [242]: df.groupby(df.index // 5).std()
+    Out[242]: 
+              0         1
+    0  0.823647  1.312912
+    1  0.760109  0.942941
+    
+### Returning a Series to propagate names
+
+Group DataFrame columns, compute a set of metrics and return a named Series.
+The Series name is used as the name for the column index. This is especially
+useful in conjunction with reshaping operations such as stacking in which the
+column index name will be used as the name of the inserted column:
+
+    
+    In [243]: df = pd.DataFrame(
+       .....:     {
+       .....:         "a": [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2],
+       .....:         "b": [0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+       .....:         "c": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+       .....:         "d": [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+       .....:     }
+       .....: )
+       .....: 
+    
+    In [244]: def compute_metrics(x):
+       .....:     result = {"b_sum": x["b"].sum(), "c_mean": x["c"].mean()}
+       .....:     return pd.Series(result, name="metrics")
+       .....: 
+    
+    In [245]: result = df.groupby("a").apply(compute_metrics)
+    
+    In [246]: result
+    Out[246]: 
+    metrics  b_sum  c_mean
+    a                     
+    0          2.0     0.5
+    1          2.0     0.5
+    2          2.0     0.5
+    
+    In [247]: result.stack()
+    Out[247]: 
+    a  metrics
+    0  b_sum      2.0
+       c_mean     0.5
+    1  b_sum      2.0
+       c_mean     0.5
+    2  b_sum      2.0
+       c_mean     0.5
+    dtype: float64
+    
+© 2008–2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData
+Development Team  
+Licensed under the 3-clause BSD License.  
+https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/groupby.html
+

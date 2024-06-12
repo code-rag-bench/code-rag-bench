@@ -1,0 +1,390 @@
+<h1 id="sparse-docs">torch.sparse</h1>  <h2 id="torch-sparse">Introduction</h2> <p>PyTorch provides <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> to represent a multi-dimensional array containing elements of a single data type. By default, array elements are stored contiguously in memory leading to efficient implementations of various array processing algorithms that relay on the fast access to array elements. However, there exists an important class of multi-dimensional arrays, so-called sparse arrays, where the contiguous memory storage of array elements turns out to be suboptimal. Sparse arrays have a property of having a vast portion of elements being equal to zero which means that a lot of memory as well as processor resources can be spared if only the non-zero elements are stored or/and processed. Various sparse storage formats (<a class="reference external" href="https://en.wikipedia.org/wiki/Sparse_matrix">such as COO, CSR/CSC, LIL, etc.</a>) have been developed that are optimized for a particular structure of non-zero elements in sparse arrays as well as for specific operations on the arrays.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>When talking about storing only non-zero elements of a sparse array, the usage of adjective “non-zero” is not strict: one is allowed to store also zeros in the sparse array data structure. Hence, in the following, we use “specified elements” for those array elements that are actually stored. In addition, the unspecified elements are typically assumed to have zero value, but not only, hence we use the term “fill value” to denote such elements.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Using a sparse storage format for storing sparse arrays can be advantageous only when the size and sparsity levels of arrays are high. Otherwise, for small-sized or low-sparsity arrays using the contiguous memory storage format is likely the most efficient approach.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The PyTorch API of sparse tensors is in beta and may change in the near future.</p> </div>   <h2 id="sparse-coo-docs">Sparse COO tensors</h2> <p id="sparse-coo-tensors">Currently, PyTorch implements the so-called Coordinate format, or COO format, as the default sparse storage format for storing sparse tensors. In COO format, the specified elements are stored as tuples of element indices and the corresponding values. In particular,</p>  <ul class="simple"> <li>the indices of specified elements are collected in <code>indices</code> tensor of size <code>(ndim, nse)</code> and with element type <code>torch.int64</code>,</li> <li>the corresponding values are collected in <code>values</code> tensor of size <code>(nse,)</code> and with an arbitrary integer or floating point number element type,</li> </ul>  <p>where <code>ndim</code> is the dimensionality of the tensor and <code>nse</code> is the number of specified elements.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The memory consumption of a sparse COO tensor is at least <code>(ndim *
+8 + &lt;size of element type in bytes&gt;) * nse</code> bytes (plus a constant overhead from storing other tensor data).</p> <p>The memory consumption of a strided tensor is at least <code>product(&lt;tensor shape&gt;) * &lt;size of element type in bytes&gt;</code>.</p> <p>For example, the memory consumption of a 10 000 x 10 000 tensor with 100 000 non-zero 32-bit floating point numbers is at least <code>(2 * 8 + 4) * 100 000 = 2 000 000</code> bytes when using COO tensor layout and <code>10 000 * 10 000 * 4 = 400 000 000</code> bytes when using the default strided tensor layout. Notice the 200 fold memory saving from using the COO storage format.</p> </div>  <h3 id="construction">Construction</h3> <p>A sparse COO tensor can be constructed by providing the two tensors of indices and values, as well as the size of the sparse tensor (when it cannot be inferred from the indices and values tensors) to a function <a class="reference internal" href="generated/torch.sparse_coo_tensor#torch.sparse_coo_tensor" title="torch.sparse_coo_tensor"><code>torch.sparse_coo_tensor()</code></a>.</p> <p>Suppose we want to define a sparse tensor with the entry 3 at location (0, 2), entry 4 at location (1, 0), and entry 5 at location (1, 2). Unspecified elements are assumed to have the same value, fill value, which is zero by default. We would then write:</p> <pre data-language="python">&gt;&gt;&gt; i = [[0, 1, 1],
+         [2, 0, 2]]
+&gt;&gt;&gt; v =  [3, 4, 5]
+&gt;&gt;&gt; s = torch.sparse_coo_tensor(i, v, (2, 3))
+&gt;&gt;&gt; s
+tensor(indices=tensor([[0, 1, 1],
+                       [2, 0, 2]]),
+       values=tensor([3, 4, 5]),
+       size=(2, 3), nnz=3, layout=torch.sparse_coo)
+&gt;&gt;&gt; s.to_dense()
+tensor([[0, 0, 3],
+        [4, 0, 5]])
+</pre> <p>Note that the input <code>i</code> is NOT a list of index tuples. If you want to write your indices this way, you should transpose before passing them to the sparse constructor:</p> <pre data-language="python">&gt;&gt;&gt; i = [[0, 2], [1, 0], [1, 2]]
+&gt;&gt;&gt; v =  [3,      4,      5    ]
+&gt;&gt;&gt; s = torch.sparse_coo_tensor(list(zip(*i)), v, (2, 3))
+&gt;&gt;&gt; # Or another equivalent formulation to get s
+&gt;&gt;&gt; s = torch.sparse_coo_tensor(torch.tensor(i).t(), v, (2, 3))
+&gt;&gt;&gt; torch.sparse_coo_tensor(i.t(), v, torch.Size([2,3])).to_dense()
+tensor([[0, 0, 3],
+        [4, 0, 5]])
+</pre> <p>An empty sparse COO tensor can be constructed by specifying its size only:</p> <pre data-language="python">&gt;&gt;&gt; torch.sparse_coo_tensor(size=(2, 3))
+tensor(indices=tensor([], size=(2, 0)),
+       values=tensor([], size=(0,)),
+       size=(2, 3), nnz=0, layout=torch.sparse_coo)
+</pre>   <h3 id="sparse-hybrid-coo-docs">Hybrid sparse COO tensors</h3> <p id="hybrid-sparse-coo-tensors">Pytorch implements an extension of sparse tensors with scalar values to sparse tensors with (contiguous) tensor values. Such tensors are called hybrid tensors.</p> <p>PyTorch hybrid COO tensor extends the sparse COO tensor by allowing the <code>values</code> tensor to be a multi-dimensional tensor so that we have:</p>  <ul class="simple"> <li>the indices of specified elements are collected in <code>indices</code> tensor of size <code>(sparse_dims, nse)</code> and with element type <code>torch.int64</code>,</li> <li>the corresponding (tensor) values are collected in <code>values</code> tensor of size <code>(nse, dense_dims)</code> and with an arbitrary integer or floating point number element type.</li> </ul>  <div class="admonition note"> <p class="admonition-title">Note</p> <p>We use (M + K)-dimensional tensor to denote a N-dimensional hybrid sparse tensor, where M and K are the numbers of sparse and dense dimensions, respectively, such that M + K == N holds.</p> </div> <p>Suppose we want to create a (2 + 1)-dimensional tensor with the entry [3, 4] at location (0, 2), entry [5, 6] at location (1, 0), and entry [7, 8] at location (1, 2). We would write</p> <pre data-language="python">&gt;&gt;&gt; i = [[0, 1, 1],
+         [2, 0, 2]]
+&gt;&gt;&gt; v =  [[3, 4], [5, 6], [7, 8]]
+&gt;&gt;&gt; s = torch.sparse_coo_tensor(i, v, (2, 3, 2))
+&gt;&gt;&gt; s
+tensor(indices=tensor([[0, 1, 1],
+                       [2, 0, 2]]),
+       values=tensor([[3, 4],
+                      [5, 6],
+                      [7, 8]]),
+       size=(2, 3, 2), nnz=3, layout=torch.sparse_coo)
+</pre> <pre data-language="python">&gt;&gt;&gt; s.to_dense()
+tensor([[[0, 0],
+         [0, 0],
+         [3, 4]],
+        [[5, 6],
+         [0, 0],
+         [7, 8]]])
+</pre> <p>In general, if <code>s</code> is a sparse COO tensor and <code>M =
+s.sparse_dim()</code>, <code>K = s.dense_dim()</code>, then we have the following invariants:</p>  <ul class="simple"> <li>
+<code>M + K == len(s.shape) == s.ndim</code> - dimensionality of a tensor is the sum of the number of sparse and dense dimensions,</li> <li>
+<code>s.indices().shape == (M, nse)</code> - sparse indices are stored explicitly,</li> <li>
+<code>s.values().shape == (nse,) + s.shape[M : M + K]</code> - the values of a hybrid tensor are K-dimensional tensors,</li> <li>
+<code>s.values().layout == torch.strided</code> - values are stored as strided tensors.</li> </ul>  <div class="admonition note"> <p class="admonition-title">Note</p> <p>Dense dimensions always follow sparse dimensions, that is, mixing of dense and sparse dimensions is not supported.</p> </div>   <h3 id="sparse-uncoalesced-coo-docs">Uncoalesced sparse COO tensors</h3> <p id="uncoalesced-sparse-coo-tensors">PyTorch sparse COO tensor format permits <em>uncoalesced</em> sparse tensors, where there may be duplicate coordinates in the indices; in this case, the interpretation is that the value at that index is the sum of all duplicate value entries. For example, one can specify multiple values, <code>3</code> and <code>4</code>, for the same index <code>1</code>, that leads to an 1-D uncoalesced tensor:</p> <pre data-language="python">&gt;&gt;&gt; i = [[1, 1]]
+&gt;&gt;&gt; v =  [3, 4]
+&gt;&gt;&gt; s=torch.sparse_coo_tensor(i, v, (3,))
+&gt;&gt;&gt; s
+tensor(indices=tensor([[1, 1]]),
+       values=tensor(  [3, 4]),
+       size=(3,), nnz=2, layout=torch.sparse_coo)
+</pre> <p>while the coalescing process will accumulate the multi-valued elements into a single value using summation:</p> <pre data-language="python">&gt;&gt;&gt; s.coalesce()
+tensor(indices=tensor([[1]]),
+       values=tensor([7]),
+       size=(3,), nnz=1, layout=torch.sparse_coo)
+</pre> <p>In general, the output of <a class="reference internal" href="#torch.Tensor.coalesce" title="torch.Tensor.coalesce"><code>torch.Tensor.coalesce()</code></a> method is a sparse tensor with the following properties:</p> <ul class="simple"> <li>the indices of specified tensor elements are unique,</li> <li>the indices are sorted in lexicographical order,</li> <li>
+<a class="reference internal" href="#torch.Tensor.is_coalesced" title="torch.Tensor.is_coalesced"><code>torch.Tensor.is_coalesced()</code></a> returns <code>True</code>.</li> </ul> <div class="admonition note"> <p class="admonition-title">Note</p> <p>For the most part, you shouldn’t have to care whether or not a sparse tensor is coalesced or not, as most operations will work identically given a coalesced or uncoalesced sparse tensor.</p> <p>However, some operations can be implemented more efficiently on uncoalesced tensors, and some on coalesced tensors.</p> <p>For instance, addition of sparse COO tensors is implemented by simply concatenating the indices and values tensors:</p> <pre data-language="python">&gt;&gt;&gt; a = torch.sparse_coo_tensor([[1, 1]], [5, 6], (2,))
+&gt;&gt;&gt; b = torch.sparse_coo_tensor([[0, 0]], [7, 8], (2,))
+&gt;&gt;&gt; a + b
+tensor(indices=tensor([[0, 0, 1, 1]]),
+       values=tensor([7, 8, 5, 6]),
+       size=(2,), nnz=4, layout=torch.sparse_coo)
+</pre> <p>If you repeatedly perform an operation that can produce duplicate entries (e.g., <a class="reference internal" href="tensors#torch.Tensor.add" title="torch.Tensor.add"><code>torch.Tensor.add()</code></a>), you should occasionally coalesce your sparse tensors to prevent them from growing too large.</p> <p>On the other hand, the lexicographical ordering of indices can be advantageous for implementing algorithms that involve many element selection operations, such as slicing or matrix products.</p> </div>   <h3 id="working-with-sparse-coo-tensors">Working with sparse COO tensors</h3> <p>Let’s consider the following example:</p> <pre data-language="python">&gt;&gt;&gt; i = [[0, 1, 1],
+         [2, 0, 2]]
+&gt;&gt;&gt; v =  [[3, 4], [5, 6], [7, 8]]
+&gt;&gt;&gt; s = torch.sparse_coo_tensor(i, v, (2, 3, 2))
+</pre> <p>As mentioned above, a sparse COO tensor is a <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> instance and to distinguish it from the <code>Tensor</code> instances that use some other layout, on can use <a class="reference internal" href="#torch.Tensor.is_sparse" title="torch.Tensor.is_sparse"><code>torch.Tensor.is_sparse</code></a> or <code>torch.Tensor.layout</code> properties:</p> <pre data-language="python">&gt;&gt;&gt; isinstance(s, torch.Tensor)
+True
+&gt;&gt;&gt; s.is_sparse
+True
+&gt;&gt;&gt; s.layout == torch.sparse_coo
+True
+</pre> <p>The number of sparse and dense dimensions can be acquired using methods <a class="reference internal" href="#torch.Tensor.sparse_dim" title="torch.Tensor.sparse_dim"><code>torch.Tensor.sparse_dim()</code></a> and <a class="reference internal" href="#torch.Tensor.dense_dim" title="torch.Tensor.dense_dim"><code>torch.Tensor.dense_dim()</code></a>, respectively. For instance:</p> <pre data-language="python">&gt;&gt;&gt; s.sparse_dim(), s.dense_dim()
+(2, 1)
+</pre> <p>If <code>s</code> is a sparse COO tensor then its COO format data can be acquired using methods <a class="reference internal" href="#torch.Tensor.indices" title="torch.Tensor.indices"><code>torch.Tensor.indices()</code></a> and <a class="reference internal" href="#torch.Tensor.values" title="torch.Tensor.values"><code>torch.Tensor.values()</code></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Currently, one can acquire the COO format data only when the tensor instance is coalesced:</p> <pre data-language="python">&gt;&gt;&gt; s.indices()
+RuntimeError: Cannot get indices on an uncoalesced tensor, please call .coalesce() first
+</pre> <p>For acquiring the COO format data of an uncoalesced tensor, use <code>torch.Tensor._values()</code> and <code>torch.Tensor._indices()</code>:</p> <pre data-language="python">&gt;&gt;&gt; s._indices()
+tensor([[0, 1, 1],
+        [2, 0, 2]])
+</pre> </div> <p>Constructing a new sparse COO tensor results a tensor that is not coalesced:</p> <pre data-language="python">&gt;&gt;&gt; s.is_coalesced()
+False
+</pre> <p>but one can construct a coalesced copy of a sparse COO tensor using the <a class="reference internal" href="#torch.Tensor.coalesce" title="torch.Tensor.coalesce"><code>torch.Tensor.coalesce()</code></a> method:</p> <pre data-language="python">&gt;&gt;&gt; s2 = s.coalesce()
+&gt;&gt;&gt; s2.indices()
+tensor([[0, 1, 1],
+       [2, 0, 2]])
+</pre> <p>When working with uncoalesced sparse COO tensors, one must take into an account the additive nature of uncoalesced data: the values of the same indices are the terms of a sum that evaluation gives the value of the corresponding tensor element. For example, the scalar multiplication on an uncoalesced sparse tensor could be implemented by multiplying all the uncoalesced values with the scalar because <code>c *
+(a + b) == c * a + c * b</code> holds. However, any nonlinear operation, say, a square root, cannot be implemented by applying the operation to uncoalesced data because <code>sqrt(a + b) == sqrt(a) + sqrt(b)</code> does not hold in general.</p> <p>Slicing (with positive step) of a sparse COO tensor is supported only for dense dimensions. Indexing is supported for both sparse and dense dimensions:</p> <pre data-language="python">&gt;&gt;&gt; s[1]
+tensor(indices=tensor([[0, 2]]),
+       values=tensor([[5, 6],
+                      [7, 8]]),
+       size=(3, 2), nnz=2, layout=torch.sparse_coo)
+&gt;&gt;&gt; s[1, 0, 1]
+tensor(6)
+&gt;&gt;&gt; s[1, 0, 1:]
+tensor([6])
+</pre> <p>In PyTorch, the fill value of a sparse tensor cannot be specified explicitly and is assumed to be zero in general. However, there exists operations that may interpret the fill value differently. For instance, <a class="reference internal" href="#torch.sparse.softmax" title="torch.sparse.softmax"><code>torch.sparse.softmax()</code></a> computes the softmax with the assumption that the fill value is negative infinity.</p>    <h2 id="supported-linear-algebra-operations">Supported Linear Algebra operations</h2> <p>The following table summarizes supported Linear Algebra operations on sparse matrices where the operands layouts may vary. Here <code>T[layout]</code> denotes a tensor with a given layout. Similarly, <code>M[layout]</code> denotes a matrix (2-D PyTorch tensor), and <code>V[layout]</code> denotes a vector (1-D PyTorch tensor). In addition, <code>f</code> denotes a scalar (float or 0-D PyTorch tensor), <code>*</code> is element-wise multiplication, and <code>@</code> is matrix multiplication.</p> <table class="colwidths-given docutils colwidths-auto align-default">  <thead> <tr>
+<th class="head"><p>PyTorch operation</p></th> <th class="head"><p>Sparse grad?</p></th> <th class="head"><p>Layout signature</p></th> </tr> </thead>  <tr>
+<td><p><a class="reference internal" href="generated/torch.mv#torch.mv" title="torch.mv"><code>torch.mv()</code></a></p></td> <td><p>no</p></td> <td><p><code>M[sparse_coo] @ V[strided] -&gt; V[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.matmul#torch.matmul" title="torch.matmul"><code>torch.matmul()</code></a></p></td> <td><p>no</p></td> <td><p><code>M[sparse_coo] @ M[strided] -&gt; M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.mm#torch.mm" title="torch.mm"><code>torch.mm()</code></a></p></td> <td><p>no</p></td> <td><p><code>M[sparse_coo] @ M[strided] -&gt; M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#torch.sparse.mm" title="torch.sparse.mm"><code>torch.sparse.mm()</code></a></p></td> <td><p>yes</p></td> <td><p><code>M[sparse_coo] @ M[strided] -&gt; M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#torch.smm" title="torch.smm"><code>torch.smm()</code></a></p></td> <td><p>no</p></td> <td><p><code>M[sparse_coo] @ M[strided] -&gt; M[sparse_coo]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#torch.hspmm" title="torch.hspmm"><code>torch.hspmm()</code></a></p></td> <td><p>no</p></td> <td><p><code>M[sparse_coo] @ M[strided] -&gt; M[hybrid sparse_coo]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.bmm#torch.bmm" title="torch.bmm"><code>torch.bmm()</code></a></p></td> <td><p>no</p></td> <td><p><code>T[sparse_coo] @ T[strided] -&gt; T[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.addmm#torch.addmm" title="torch.addmm"><code>torch.addmm()</code></a></p></td> <td><p>no</p></td> <td><p><code>f * M[strided] + f * (M[sparse_coo] @ M[strided]) -&gt; M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#torch.sparse.addmm" title="torch.sparse.addmm"><code>torch.sparse.addmm()</code></a></p></td> <td><p>yes</p></td> <td><p><code>f * M[strided] + f * (M[sparse_coo] @ M[strided]) -&gt; M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="#torch.sspaddmm" title="torch.sspaddmm"><code>torch.sspaddmm()</code></a></p></td> <td><p>no</p></td> <td><p><code>f * M[sparse_coo] + f * (M[sparse_coo] @ M[strided]) -&gt; M[sparse_coo]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.lobpcg#torch.lobpcg" title="torch.lobpcg"><code>torch.lobpcg()</code></a></p></td> <td><p>no</p></td> <td><p><code>GENEIG(M[sparse_coo]) -&gt; M[strided], M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.pca_lowrank#torch.pca_lowrank" title="torch.pca_lowrank"><code>torch.pca_lowrank()</code></a></p></td> <td><p>yes</p></td> <td><p><code>PCA(M[sparse_coo]) -&gt; M[strided], M[strided], M[strided]</code></p></td> </tr> <tr>
+<td><p><a class="reference internal" href="generated/torch.svd_lowrank#torch.svd_lowrank" title="torch.svd_lowrank"><code>torch.svd_lowrank()</code></a></p></td> <td><p>yes</p></td> <td><p><code>SVD(M[sparse_coo]) -&gt; M[strided], M[strided], M[strided]</code></p></td> </tr>  </table> <p>where “Sparse grad?” column indicates if the PyTorch operation supports backward with respect to sparse matrix argument. All PyTorch operations, except <a class="reference internal" href="#torch.smm" title="torch.smm"><code>torch.smm()</code></a>, support backward with respect to strided matrix arguments.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Currently, PyTorch does not support matrix multiplication with the layout signature <code>M[strided] @ M[sparse_coo]</code>. However, applications can still compute this using the matrix relation <code>D @
+S == (S.t() @ D.t()).t()</code>.</p> </div> <dl class="class"> <dt>
+<code>class torch.Tensor</code> </dt> <dd>
+<p>The following methods are specific to <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensors</span></a>:</p>  <dl class="attribute"> <dt id="torch.Tensor.is_sparse">
+<code>is_sparse</code> </dt> <dd>
+<p>Is <code>True</code> if the Tensor uses sparse storage layout, <code>False</code> otherwise.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.dense_dim">
+<code>dense_dim() → int</code> </dt> <dd>
+<p>Return the number of dense dimensions in a <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensor</span></a> <code>self</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse tensor.</p> </div> <p>See also <a class="reference internal" href="#torch.Tensor.sparse_dim" title="torch.Tensor.sparse_dim"><code>Tensor.sparse_dim()</code></a> and <a class="reference internal" href="#sparse-hybrid-coo-docs"><span class="std std-ref">hybrid tensors</span></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.sparse_dim">
+<code>sparse_dim() → int</code> </dt> <dd>
+<p>Return the number of sparse dimensions in a <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensor</span></a> <code>self</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse tensor.</p> </div> <p>See also <a class="reference internal" href="#torch.Tensor.dense_dim" title="torch.Tensor.dense_dim"><code>Tensor.dense_dim()</code></a> and <a class="reference internal" href="#sparse-hybrid-coo-docs"><span class="std std-ref">hybrid tensors</span></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.sparse_mask">
+<code>sparse_mask(mask) → Tensor</code> </dt> <dd>
+<p>Returns a new <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensor</span></a> with values from a strided tensor <code>self</code> filtered by the indices of the sparse tensor <code>mask</code>. The values of <code>mask</code> sparse tensor are ignored. <code>self</code> and <code>mask</code> tensors must have the same shape.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The returned sparse tensor has the same indices as the sparse tensor <code>mask</code>, even when the corresponding values in <code>self</code> are zeros.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>mask</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a sparse tensor whose indices are used as a filter</p> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; nse = 5
+&gt;&gt;&gt; dims = (5, 5, 2, 2)
+&gt;&gt;&gt; I = torch.cat([torch.randint(0, dims[0], size=(nse,)),
+...                torch.randint(0, dims[1], size=(nse,))], 0).reshape(2, nse)
+&gt;&gt;&gt; V = torch.randn(nse, dims[2], dims[3])
+&gt;&gt;&gt; S = torch.sparse_coo_tensor(I, V, dims).coalesce()
+&gt;&gt;&gt; D = torch.randn(dims)
+&gt;&gt;&gt; D.sparse_mask(S)
+tensor(indices=tensor([[0, 0, 0, 2],
+                       [0, 1, 4, 3]]),
+       values=tensor([[[ 1.6550,  0.2397],
+                       [-0.1611, -0.0779]],
+
+                      [[ 0.2326, -1.0558],
+                       [ 1.4711,  1.9678]],
+
+                      [[-0.5138, -0.0411],
+                       [ 1.9417,  0.5158]],
+
+                      [[ 0.0793,  0.0036],
+                       [-0.2569, -0.1055]]]),
+       size=(5, 5, 2, 2), nnz=4, layout=torch.sparse_coo)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.sparse_resize_">
+<code>sparse_resize_(size, sparse_dim, dense_dim) → Tensor</code> </dt> <dd>
+<p>Resizes <code>self</code> <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensor</span></a> to the desired size and the number of sparse and dense dimensions.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>If the number of specified elements in <code>self</code> is zero, then <a class="reference internal" href="tensors#torch.Tensor.size" title="torch.Tensor.size"><code>size</code></a>, <a class="reference internal" href="#torch.Tensor.sparse_dim" title="torch.Tensor.sparse_dim"><code>sparse_dim</code></a>, and <a class="reference internal" href="#torch.Tensor.dense_dim" title="torch.Tensor.dense_dim"><code>dense_dim</code></a> can be any size and positive integers such that <code>len(size) == sparse_dim +
+dense_dim</code>.</p> <p>If <code>self</code> specifies one or more elements, however, then each dimension in <a class="reference internal" href="tensors#torch.Tensor.size" title="torch.Tensor.size"><code>size</code></a> must not be smaller than the corresponding dimension of <code>self</code>, <a class="reference internal" href="#torch.Tensor.sparse_dim" title="torch.Tensor.sparse_dim"><code>sparse_dim</code></a> must equal the number of sparse dimensions in <code>self</code>, and <a class="reference internal" href="#torch.Tensor.dense_dim" title="torch.Tensor.dense_dim"><code>dense_dim</code></a> must equal the number of dense dimensions in <code>self</code>.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse tensor.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>size</strong> (<em>torch.Size</em>) – the desired size. If <code>self</code> is non-empty sparse tensor, the desired size cannot be smaller than the original size.</li> <li>
+<strong>sparse_dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – the number of sparse dimensions</li> <li>
+<strong>dense_dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – the number of dense dimensions</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.sparse_resize_and_clear_">
+<code>sparse_resize_and_clear_(size, sparse_dim, dense_dim) → Tensor</code> </dt> <dd>
+<p>Removes all specified elements from a <a class="reference internal" href="#sparse-docs"><span class="std std-ref">sparse tensor</span></a> <code>self</code> and resizes <code>self</code> to the desired size and the number of sparse and dense dimensions.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>size</strong> (<em>torch.Size</em>) – the desired size.</li> <li>
+<strong>sparse_dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – the number of sparse dimensions</li> <li>
+<strong>dense_dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – the number of dense dimensions</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.to_dense">
+<code>to_dense() → Tensor</code> </dt> <dd>
+<p>Creates a strided copy of <code>self</code>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is a strided tensor.</p> </div> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; s = torch.sparse_coo_tensor(
+...        torch.tensor([[1, 1],
+...                      [0, 2]]),
+...        torch.tensor([9, 10]),
+...        size=(3, 3))
+&gt;&gt;&gt; s.to_dense()
+tensor([[ 0,  0,  0],
+        [ 9,  0, 10],
+        [ 0,  0,  0]])
+</pre> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.to_sparse">
+<code>to_sparse(sparseDims) → Tensor</code> </dt> <dd>
+<p>Returns a sparse copy of the tensor. PyTorch supports sparse tensors in <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">coordinate format</span></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>sparseDims</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – the number of sparse dimensions to include in the new sparse tensor</p> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; d = torch.tensor([[0, 0, 0], [9, 0, 10], [0, 0, 0]])
+&gt;&gt;&gt; d
+tensor([[ 0,  0,  0],
+        [ 9,  0, 10],
+        [ 0,  0,  0]])
+&gt;&gt;&gt; d.to_sparse()
+tensor(indices=tensor([[1, 1],
+                       [0, 2]]),
+       values=tensor([ 9, 10]),
+       size=(3, 3), nnz=2, layout=torch.sparse_coo)
+&gt;&gt;&gt; d.to_sparse(1)
+tensor(indices=tensor([[1]]),
+       values=tensor([[ 9,  0, 10]]),
+       size=(3, 3), nnz=1, layout=torch.sparse_coo)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.coalesce">
+<code>coalesce() → Tensor</code> </dt> <dd>
+<p>Returns a coalesced copy of <code>self</code> if <code>self</code> is an <a class="reference internal" href="#sparse-uncoalesced-coo-docs"><span class="std std-ref">uncoalesced tensor</span></a>.</p> <p>Returns <code>self</code> if <code>self</code> is a coalesced tensor.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse COO tensor.</p> </div> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.is_coalesced">
+<code>is_coalesced() → bool</code> </dt> <dd>
+<p>Returns <code>True</code> if <code>self</code> is a <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO tensor</span></a> that is coalesced, <code>False</code> otherwise.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse COO tensor.</p> </div> <p>See <a class="reference internal" href="#torch.Tensor.coalesce" title="torch.Tensor.coalesce"><code>coalesce()</code></a> and <a class="reference internal" href="#sparse-uncoalesced-coo-docs"><span class="std std-ref">uncoalesced tensors</span></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.indices">
+<code>indices() → Tensor</code> </dt> <dd>
+<p>Return the indices tensor of a <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO tensor</span></a>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse COO tensor.</p> </div> <p>See also <a class="reference internal" href="#torch.Tensor.values" title="torch.Tensor.values"><code>Tensor.values()</code></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This method can only be called on a coalesced sparse tensor. See <a class="reference internal" href="#torch.Tensor.coalesce" title="torch.Tensor.coalesce"><code>Tensor.coalesce()</code></a> for details.</p> </div> </dd>
+</dl> <dl class="method"> <dt id="torch.Tensor.values">
+<code>values() → Tensor</code> </dt> <dd>
+<p>Return the values tensor of a <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO tensor</span></a>.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Throws an error if <code>self</code> is not a sparse COO tensor.</p> </div> <p>See also <a class="reference internal" href="#torch.Tensor.indices" title="torch.Tensor.indices"><code>Tensor.indices()</code></a>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This method can only be called on a coalesced sparse tensor. See <a class="reference internal" href="#torch.Tensor.coalesce" title="torch.Tensor.coalesce"><code>Tensor.coalesce()</code></a> for details.</p> </div> </dd>
+</dl>  </dd>
+</dl> <p>The following <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> methods support <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO tensors</span></a>:</p> <p><a class="reference internal" href="tensors#torch.Tensor.add" title="torch.Tensor.add"><code>add()</code></a> <a class="reference internal" href="tensors#torch.Tensor.add_" title="torch.Tensor.add_"><code>add_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.addmm" title="torch.Tensor.addmm"><code>addmm()</code></a> <a class="reference internal" href="tensors#torch.Tensor.addmm_" title="torch.Tensor.addmm_"><code>addmm_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.any" title="torch.Tensor.any"><code>any()</code></a> <a class="reference internal" href="tensors#torch.Tensor.asin" title="torch.Tensor.asin"><code>asin()</code></a> <a class="reference internal" href="tensors#torch.Tensor.asin_" title="torch.Tensor.asin_"><code>asin_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.arcsin" title="torch.Tensor.arcsin"><code>arcsin()</code></a> <a class="reference internal" href="tensors#torch.Tensor.arcsin_" title="torch.Tensor.arcsin_"><code>arcsin_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.bmm" title="torch.Tensor.bmm"><code>bmm()</code></a> <a class="reference internal" href="tensors#torch.Tensor.clone" title="torch.Tensor.clone"><code>clone()</code></a> <a class="reference internal" href="tensors#torch.Tensor.deg2rad" title="torch.Tensor.deg2rad"><code>deg2rad()</code></a> <code>deg2rad_()</code> <a class="reference internal" href="autograd#torch.Tensor.detach" title="torch.Tensor.detach"><code>detach()</code></a> <a class="reference internal" href="autograd#torch.Tensor.detach_" title="torch.Tensor.detach_"><code>detach_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.dim" title="torch.Tensor.dim"><code>dim()</code></a> <a class="reference internal" href="tensors#torch.Tensor.div" title="torch.Tensor.div"><code>div()</code></a> <a class="reference internal" href="tensors#torch.Tensor.div_" title="torch.Tensor.div_"><code>div_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.floor_divide" title="torch.Tensor.floor_divide"><code>floor_divide()</code></a> <a class="reference internal" href="tensors#torch.Tensor.floor_divide_" title="torch.Tensor.floor_divide_"><code>floor_divide_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.get_device" title="torch.Tensor.get_device"><code>get_device()</code></a> <a class="reference internal" href="tensors#torch.Tensor.index_select" title="torch.Tensor.index_select"><code>index_select()</code></a> <a class="reference internal" href="tensors#torch.Tensor.isnan" title="torch.Tensor.isnan"><code>isnan()</code></a> <a class="reference internal" href="tensors#torch.Tensor.log1p" title="torch.Tensor.log1p"><code>log1p()</code></a> <a class="reference internal" href="tensors#torch.Tensor.log1p_" title="torch.Tensor.log1p_"><code>log1p_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.mm" title="torch.Tensor.mm"><code>mm()</code></a> <a class="reference internal" href="tensors#torch.Tensor.mul" title="torch.Tensor.mul"><code>mul()</code></a> <a class="reference internal" href="tensors#torch.Tensor.mul_" title="torch.Tensor.mul_"><code>mul_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.mv" title="torch.Tensor.mv"><code>mv()</code></a> <a class="reference internal" href="tensors#torch.Tensor.narrow_copy" title="torch.Tensor.narrow_copy"><code>narrow_copy()</code></a> <a class="reference internal" href="tensors#torch.Tensor.neg" title="torch.Tensor.neg"><code>neg()</code></a> <a class="reference internal" href="tensors#torch.Tensor.neg_" title="torch.Tensor.neg_"><code>neg_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.negative" title="torch.Tensor.negative"><code>negative()</code></a> <a class="reference internal" href="tensors#torch.Tensor.negative_" title="torch.Tensor.negative_"><code>negative_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.numel" title="torch.Tensor.numel"><code>numel()</code></a> <a class="reference internal" href="tensors#torch.Tensor.rad2deg" title="torch.Tensor.rad2deg"><code>rad2deg()</code></a> <code>rad2deg_()</code> <a class="reference internal" href="tensors#torch.Tensor.resize_as_" title="torch.Tensor.resize_as_"><code>resize_as_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.size" title="torch.Tensor.size"><code>size()</code></a> <a class="reference internal" href="tensors#torch.Tensor.pow" title="torch.Tensor.pow"><code>pow()</code></a> <a class="reference internal" href="tensors#torch.Tensor.sqrt" title="torch.Tensor.sqrt"><code>sqrt()</code></a> <a class="reference internal" href="tensors#torch.Tensor.square" title="torch.Tensor.square"><code>square()</code></a> <code>smm()</code> <code>sspaddmm()</code> <a class="reference internal" href="tensors#torch.Tensor.sub" title="torch.Tensor.sub"><code>sub()</code></a> <a class="reference internal" href="tensors#torch.Tensor.sub_" title="torch.Tensor.sub_"><code>sub_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.t" title="torch.Tensor.t"><code>t()</code></a> <a class="reference internal" href="tensors#torch.Tensor.t_" title="torch.Tensor.t_"><code>t_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.transpose" title="torch.Tensor.transpose"><code>transpose()</code></a> <a class="reference internal" href="tensors#torch.Tensor.transpose_" title="torch.Tensor.transpose_"><code>transpose_()</code></a> <a class="reference internal" href="tensors#torch.Tensor.zero_" title="torch.Tensor.zero_"><code>zero_()</code></a></p>   <h2 id="sparse-tensor-functions">Sparse tensor functions</h2> <dl class="function"> <dt>
+<code>torch.sparse_coo_tensor(indices, values, size=None, *, dtype=None, device=None, requires_grad=False) → Tensor</code> </dt> <dd>
+<p>Constructs a <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse tensor in COO(rdinate) format</span></a> with specified values at the given <code>indices</code>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This function returns an <a class="reference internal" href="#sparse-uncoalesced-coo-docs"><span class="std std-ref">uncoalesced tensor</span></a>.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>indices</strong> (<em>array_like</em>) – Initial data for the tensor. Can be a list, tuple, NumPy <code>ndarray</code>, scalar, and other types. Will be cast to a <code>torch.LongTensor</code> internally. The indices are the coordinates of the non-zero values in the matrix, and thus should be two-dimensional where the first dimension is the number of tensor dimensions and the second dimension is the number of non-zero values.</li> <li>
+<strong>values</strong> (<em>array_like</em>) – Initial values for the tensor. Can be a list, tuple, NumPy <code>ndarray</code>, scalar, and other types.</li> <li>
+<strong>size</strong> (list, tuple, or <code>torch.Size</code>, optional) – Size of the sparse tensor. If not provided the size will be inferred as the minimum size big enough to hold all non-zero elements.</li> </ul> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>dtype</strong> (<a class="reference internal" href="tensor_attributes#torch.torch.dtype" title="torch.torch.dtype"><code>torch.dtype</code></a>, optional) – the desired data type of returned tensor. Default: if None, infers data type from <code>values</code>.</li> <li>
+<strong>device</strong> (<a class="reference internal" href="tensor_attributes#torch.torch.device" title="torch.torch.device"><code>torch.device</code></a>, optional) – the desired device of returned tensor. Default: if None, uses the current device for the default tensor type (see <a class="reference internal" href="generated/torch.set_default_tensor_type#torch.set_default_tensor_type" title="torch.set_default_tensor_type"><code>torch.set_default_tensor_type()</code></a>). <code>device</code> will be the CPU for CPU tensor types and the current CUDA device for CUDA tensor types.</li> <li>
+<strong>requires_grad</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – If autograd should record operations on the returned tensor. Default: <code>False</code>.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; i = torch.tensor([[0, 1, 1],
+...                   [2, 0, 2]])
+&gt;&gt;&gt; v = torch.tensor([3, 4, 5], dtype=torch.float32)
+&gt;&gt;&gt; torch.sparse_coo_tensor(i, v, [2, 4])
+tensor(indices=tensor([[0, 1, 1],
+                       [2, 0, 2]]),
+       values=tensor([3., 4., 5.]),
+       size=(2, 4), nnz=3, layout=torch.sparse_coo)
+
+&gt;&gt;&gt; torch.sparse_coo_tensor(i, v)  # Shape inference
+tensor(indices=tensor([[0, 1, 1],
+                       [2, 0, 2]]),
+       values=tensor([3., 4., 5.]),
+       size=(2, 3), nnz=3, layout=torch.sparse_coo)
+
+&gt;&gt;&gt; torch.sparse_coo_tensor(i, v, [2, 4],
+...                         dtype=torch.float64,
+...                         device=torch.device('cuda:0'))
+tensor(indices=tensor([[0, 1, 1],
+                       [2, 0, 2]]),
+       values=tensor([3., 4., 5.]),
+       device='cuda:0', size=(2, 4), nnz=3, dtype=torch.float64,
+       layout=torch.sparse_coo)
+
+# Create an empty sparse tensor with the following invariants:
+#   1. sparse_dim + dense_dim = len(SparseTensor.shape)
+#   2. SparseTensor._indices().shape = (sparse_dim, nnz)
+#   3. SparseTensor._values().shape = (nnz, SparseTensor.shape[sparse_dim:])
+#
+# For instance, to create an empty sparse tensor with nnz = 0, dense_dim = 0 and
+# sparse_dim = 1 (hence indices is a 2D tensor of shape = (1, 0))
+&gt;&gt;&gt; S = torch.sparse_coo_tensor(torch.empty([1, 0]), [], [1])
+tensor(indices=tensor([], size=(1, 0)),
+       values=tensor([], size=(0,)),
+       size=(1,), nnz=0, layout=torch.sparse_coo)
+
+# and to create an empty sparse tensor with nnz = 0, dense_dim = 1 and
+# sparse_dim = 1
+&gt;&gt;&gt; S = torch.sparse_coo_tensor(torch.empty([1, 0]), torch.empty([0, 2]), [1, 2])
+tensor(indices=tensor([], size=(1, 0)),
+       values=tensor([], size=(0, 2)),
+       size=(1, 2), nnz=0, layout=torch.sparse_coo)
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.sparse.sum">
+<code>torch.sparse.sum(input, dim=None, dtype=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/sparse.html#sum"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns the sum of each row of the sparse tensor <code>input</code> in the given dimensions <code>dim</code>. If <code>dim</code> is a list of dimensions, reduce over all of them. When sum over all <code>sparse_dim</code>, this method returns a dense tensor instead of a sparse tensor.</p> <p>All summed <code>dim</code> are squeezed (see <a class="reference internal" href="generated/torch.squeeze#torch.squeeze" title="torch.squeeze"><code>torch.squeeze()</code></a>), resulting an output tensor having <code>dim</code> fewer dimensions than <code>input</code>.</p> <p>During backward, only gradients at <code>nnz</code> locations of <code>input</code> will propagate back. Note that the gradients of <code>input</code> is coalesced.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – the input sparse tensor</li> <li>
+<strong>dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em> or </em><em>tuple of python:ints</em>) – a dimension or a list of dimensions to reduce. Default: reduce over all dims.</li> <li>
+<strong>dtype</strong> (<code>torch.dtype</code>, optional) – the desired data type of returned Tensor. Default: dtype of <code>input</code>.</li> </ul> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; nnz = 3
+&gt;&gt;&gt; dims = [5, 5, 2, 3]
+&gt;&gt;&gt; I = torch.cat([torch.randint(0, dims[0], size=(nnz,)),
+                   torch.randint(0, dims[1], size=(nnz,))], 0).reshape(2, nnz)
+&gt;&gt;&gt; V = torch.randn(nnz, dims[2], dims[3])
+&gt;&gt;&gt; size = torch.Size(dims)
+&gt;&gt;&gt; S = torch.sparse_coo_tensor(I, V, size)
+&gt;&gt;&gt; S
+tensor(indices=tensor([[2, 0, 3],
+                       [2, 4, 1]]),
+       values=tensor([[[-0.6438, -1.6467,  1.4004],
+                       [ 0.3411,  0.0918, -0.2312]],
+
+                      [[ 0.5348,  0.0634, -2.0494],
+                       [-0.7125, -1.0646,  2.1844]],
+
+                      [[ 0.1276,  0.1874, -0.6334],
+                       [-1.9682, -0.5340,  0.7483]]]),
+       size=(5, 5, 2, 3), nnz=3, layout=torch.sparse_coo)
+
+# when sum over only part of sparse_dims, return a sparse tensor
+&gt;&gt;&gt; torch.sparse.sum(S, [1, 3])
+tensor(indices=tensor([[0, 2, 3]]),
+       values=tensor([[-1.4512,  0.4073],
+                      [-0.8901,  0.2017],
+                      [-0.3183, -1.7539]]),
+       size=(5, 2), nnz=3, layout=torch.sparse_coo)
+
+# when sum over all sparse dim, return a dense tensor
+# with summed dims squeezed
+&gt;&gt;&gt; torch.sparse.sum(S, [0, 1, 3])
+tensor([-2.6596, -1.1450])
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.sparse.addmm">
+<code>torch.sparse.addmm(mat, mat1, mat2, beta=1.0, alpha=1.0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/sparse.html#addmm"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>This function does exact same thing as <a class="reference internal" href="generated/torch.addmm#torch.addmm" title="torch.addmm"><code>torch.addmm()</code></a> in the forward, except that it supports backward for sparse matrix <code>mat1</code>. <code>mat1</code> need to have <code>sparse_dim = 2</code>. Note that the gradients of <code>mat1</code> is a coalesced sparse tensor.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>mat</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a dense matrix to be added</li> <li>
+<strong>mat1</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a sparse matrix to be multiplied</li> <li>
+<strong>mat2</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a dense matrix to be multiplied</li> <li>
+<strong>beta</strong> (<em>Number</em><em>, </em><em>optional</em>) – multiplier for <code>mat</code> (<span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>β</mi></mrow><annotation encoding="application/x-tex">\beta</annotation></semantics></math></span></span> </span>)</li> <li>
+<strong>alpha</strong> (<em>Number</em><em>, </em><em>optional</em>) – multiplier for <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>m</mi><mi>a</mi><mi>t</mi><mn>1</mn><mi mathvariant="normal">@</mi><mi>m</mi><mi>a</mi><mi>t</mi><mn>2</mn></mrow><annotation encoding="application/x-tex">mat1 @ mat2</annotation></semantics></math></span></span> </span> (<span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>α</mi></mrow><annotation encoding="application/x-tex">\alpha</annotation></semantics></math></span></span> </span>)</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.sparse.mm">
+<code>torch.sparse.mm(mat1, mat2)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/sparse.html#mm"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Performs a matrix multiplication of the sparse matrix <code>mat1</code> and the (sparse or strided) matrix <code>mat2</code>. Similar to <a class="reference internal" href="generated/torch.mm#torch.mm" title="torch.mm"><code>torch.mm()</code></a>, If <code>mat1</code> is a <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>n</mi><mo>×</mo><mi>m</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(n \times m)</annotation></semantics></math></span></span> </span> tensor, <code>mat2</code> is a <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>m</mi><mo>×</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(m \times p)</annotation></semantics></math></span></span> </span> tensor, out will be a <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false">(</mo><mi>n</mi><mo>×</mo><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(n \times p)</annotation></semantics></math></span></span> </span> tensor. <code>mat1</code> need to have <code>sparse_dim = 2</code>. This function also supports backward for both matrices. Note that the gradients of <code>mat1</code> is a coalesced sparse tensor.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>mat1</strong> (<em>SparseTensor</em>) – the first sparse matrix to be multiplied</li> <li>
+<strong>mat2</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – the second matrix to be multiplied, which could be sparse or dense</li> </ul> </dd> </dl> <dl class="simple"> <dt>Shape:</dt>
+<dd>
+<p>The format of the output tensor of this function follows: - sparse x sparse -&gt; sparse - sparse x dense -&gt; dense</p> </dd> </dl> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; a = torch.randn(2, 3).to_sparse().requires_grad_(True)
+&gt;&gt;&gt; a
+tensor(indices=tensor([[0, 0, 0, 1, 1, 1],
+                       [0, 1, 2, 0, 1, 2]]),
+       values=tensor([ 1.5901,  0.0183, -0.6146,  1.8061, -0.0112,  0.6302]),
+       size=(2, 3), nnz=6, layout=torch.sparse_coo, requires_grad=True)
+
+&gt;&gt;&gt; b = torch.randn(3, 2, requires_grad=True)
+&gt;&gt;&gt; b
+tensor([[-0.6479,  0.7874],
+        [-1.2056,  0.5641],
+        [-1.1716, -0.9923]], requires_grad=True)
+
+&gt;&gt;&gt; y = torch.sparse.mm(a, b)
+&gt;&gt;&gt; y
+tensor([[-0.3323,  1.8723],
+        [-1.8951,  0.7904]], grad_fn=&lt;SparseAddmmBackward&gt;)
+&gt;&gt;&gt; y.sum().backward()
+&gt;&gt;&gt; a.grad
+tensor(indices=tensor([[0, 0, 0, 1, 1, 1],
+                       [0, 1, 2, 0, 1, 2]]),
+       values=tensor([ 0.1394, -0.6415, -2.1639,  0.1394, -0.6415, -2.1639]),
+       size=(2, 3), nnz=6, layout=torch.sparse_coo)
+</pre> </dd>
+</dl> <dl class="function"> <dt id="torch.sspaddmm">
+<code>torch.sspaddmm(input, mat1, mat2, *, beta=1, alpha=1, out=None) → Tensor</code> </dt> <dd>
+<p>Matrix multiplies a sparse tensor <code>mat1</code> with a dense tensor <code>mat2</code>, then adds the sparse tensor <code>input</code> to the result.</p> <p>Note: This function is equivalent to <a class="reference internal" href="generated/torch.addmm#torch.addmm" title="torch.addmm"><code>torch.addmm()</code></a>, except <code>input</code> and <code>mat1</code> are sparse.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a sparse matrix to be added</li> <li>
+<strong>mat1</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a sparse matrix to be matrix multiplied</li> <li>
+<strong>mat2</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a dense matrix to be matrix multiplied</li> </ul> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<ul class="simple"> <li>
+<strong>beta</strong> (<em>Number</em><em>, </em><em>optional</em>) – multiplier for <code>mat</code> (<span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>β</mi></mrow><annotation encoding="application/x-tex">\beta</annotation></semantics></math></span></span> </span>)</li> <li>
+<strong>alpha</strong> (<em>Number</em><em>, </em><em>optional</em>) – multiplier for <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>m</mi><mi>a</mi><mi>t</mi><mn>1</mn><mi mathvariant="normal">@</mi><mi>m</mi><mi>a</mi><mi>t</mi><mn>2</mn></mrow><annotation encoding="application/x-tex">mat1 @ mat2</annotation></semantics></math></span></span> </span> (<span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>α</mi></mrow><annotation encoding="application/x-tex">\alpha</annotation></semantics></math></span></span> </span>)</li> <li>
+<strong>out</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a><em>, </em><em>optional</em>) – the output tensor.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.hspmm">
+<code>torch.hspmm(mat1, mat2, *, out=None) → Tensor</code> </dt> <dd>
+<p>Performs a matrix multiplication of a <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO matrix</span></a> <code>mat1</code> and a strided matrix <code>mat2</code>. The result is a (1 + 1)-dimensional <a class="reference internal" href="#sparse-hybrid-coo-docs"><span class="std std-ref">hybrid COO matrix</span></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>mat1</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – the first sparse matrix to be matrix multiplied</li> <li>
+<strong>mat2</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – the second strided matrix to be matrix multiplied</li> </ul> </dd> <dt class="field-even">Keyword Arguments</dt> <dd class="field-even">
+<p><strong>{out}</strong> – </p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.smm">
+<code>torch.smm(input, mat) → Tensor</code> </dt> <dd>
+<p>Performs a matrix multiplication of the sparse matrix <code>input</code> with the dense matrix <code>mat</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a sparse matrix to be matrix multiplied</li> <li>
+<strong>mat</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – a dense matrix to be matrix multiplied</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.sparse.softmax">
+<code>torch.sparse.softmax(input, dim, dtype=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/sparse.html#softmax"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Applies a softmax function.</p> <p>Softmax is defined as:</p> <p><span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mtext>Softmax</mtext><mo stretchy="false">(</mo><msub><mi>x</mi><mi>i</mi></msub><mo stretchy="false">)</mo><mo>=</mo><mfrac><mrow><mi>e</mi><mi>x</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>i</mi></msub><mo stretchy="false">)</mo></mrow><mrow><msub><mo>∑</mo><mi>j</mi></msub><mi>e</mi><mi>x</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>j</mi></msub><mo stretchy="false">)</mo></mrow></mfrac></mrow><annotation encoding="application/x-tex">\text{Softmax}(x_{i}) = \frac{exp(x_i)}{\sum_j exp(x_j)}</annotation></semantics></math></span></span> </span></p> <p>where <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>i</mi><mo separator="true">,</mo><mi>j</mi></mrow><annotation encoding="application/x-tex">i, j</annotation></semantics></math></span></span> </span> run over sparse tensor indices and unspecified entries are ignores. This is equivalent to defining unspecified entries as negative infinity so that <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>e</mi><mi>x</mi><mi>p</mi><mo stretchy="false">(</mo><msub><mi>x</mi><mi>k</mi></msub><mo stretchy="false">)</mo><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">exp(x_k) = 0</annotation></semantics></math></span></span> </span> when the entry with index <span class="math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi></mrow><annotation encoding="application/x-tex">k</annotation></semantics></math></span></span> </span> has not specified.</p> <p>It is applied to all slices along <code>dim</code>, and will re-scale them so that the elements lie in the range <code>[0, 1]</code> and sum to 1.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – input</li> <li>
+<strong>dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – A dimension along which softmax will be computed.</li> <li>
+<strong>dtype</strong> (<code>torch.dtype</code>, optional) – the desired data type of returned tensor. If specified, the input tensor is casted to <code>dtype</code> before the operation is performed. This is useful for preventing data type overflows. Default: None</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.sparse.log_softmax">
+<code>torch.sparse.log_softmax(input, dim, dtype=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/sparse.html#log_softmax"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Applies a softmax function followed by logarithm.</p> <p>See <a class="reference internal" href="#torch.sparse.softmax" title="torch.sparse.softmax"><code>softmax</code></a> for more details.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a>) – input</li> <li>
+<strong>dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – A dimension along which softmax will be computed.</li> <li>
+<strong>dtype</strong> (<code>torch.dtype</code>, optional) – the desired data type of returned tensor. If specified, the input tensor is casted to <code>dtype</code> before the operation is performed. This is useful for preventing data type overflows. Default: None</li> </ul> </dd> </dl> </dd>
+</dl>   <h2 id="other-functions">Other functions</h2> <p>The following <code>torch</code> functions support <a class="reference internal" href="#sparse-coo-docs"><span class="std std-ref">sparse COO tensors</span></a>:</p> <p><a class="reference internal" href="generated/torch.cat#torch.cat" title="torch.cat"><code>cat()</code></a> <a class="reference internal" href="generated/torch.dstack#torch.dstack" title="torch.dstack"><code>dstack()</code></a> <a class="reference internal" href="generated/torch.empty#torch.empty" title="torch.empty"><code>empty()</code></a> <a class="reference internal" href="generated/torch.empty_like#torch.empty_like" title="torch.empty_like"><code>empty_like()</code></a> <a class="reference internal" href="generated/torch.hstack#torch.hstack" title="torch.hstack"><code>hstack()</code></a> <a class="reference internal" href="generated/torch.index_select#torch.index_select" title="torch.index_select"><code>index_select()</code></a> <a class="reference internal" href="generated/torch.is_complex#torch.is_complex" title="torch.is_complex"><code>is_complex()</code></a> <a class="reference internal" href="generated/torch.is_floating_point#torch.is_floating_point" title="torch.is_floating_point"><code>is_floating_point()</code></a> <a class="reference internal" href="generated/torch.is_nonzero#torch.is_nonzero" title="torch.is_nonzero"><code>is_nonzero()</code></a> <code>is_same_size()</code> <code>is_signed()</code> <a class="reference internal" href="generated/torch.is_tensor#torch.is_tensor" title="torch.is_tensor"><code>is_tensor()</code></a> <a class="reference internal" href="generated/torch.lobpcg#torch.lobpcg" title="torch.lobpcg"><code>lobpcg()</code></a> <a class="reference internal" href="generated/torch.mm#torch.mm" title="torch.mm"><code>mm()</code></a> <code>native_norm()</code> <a class="reference internal" href="generated/torch.pca_lowrank#torch.pca_lowrank" title="torch.pca_lowrank"><code>pca_lowrank()</code></a> <code>select()</code> <a class="reference internal" href="generated/torch.stack#torch.stack" title="torch.stack"><code>stack()</code></a> <a class="reference internal" href="generated/torch.svd_lowrank#torch.svd_lowrank" title="torch.svd_lowrank"><code>svd_lowrank()</code></a> <a class="reference internal" href="generated/torch.unsqueeze#torch.unsqueeze" title="torch.unsqueeze"><code>unsqueeze()</code></a> <a class="reference internal" href="generated/torch.vstack#torch.vstack" title="torch.vstack"><code>vstack()</code></a> <a class="reference internal" href="generated/torch.zeros#torch.zeros" title="torch.zeros"><code>zeros()</code></a> <a class="reference internal" href="generated/torch.zeros_like#torch.zeros_like" title="torch.zeros_like"><code>zeros_like()</code></a></p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/sparse.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/sparse.html</a>
+  </p>
+</div>

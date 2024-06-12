@@ -1,0 +1,417 @@
+<h1 id="django-s-cache-framework">Django’s cache framework</h1> <p id="s-django-s-cache-framework">A fundamental trade-off in dynamic websites is, well, they’re dynamic. Each time a user requests a page, the web server makes all sorts of calculations – from database queries to template rendering to business logic – to create the page that your site’s visitor sees. This is a lot more expensive, from a processing-overhead perspective, than your standard read-a-file-off-the-filesystem server arrangement.</p> <p>For most web applications, this overhead isn’t a big deal. Most web applications aren’t <code>washingtonpost.com</code> or <code>slashdot.org</code>; they’re small- to medium-sized sites with so-so traffic. But for medium- to high-traffic sites, it’s essential to cut as much overhead as possible.</p> <p>That’s where caching comes in.</p> <p>To cache something is to save the result of an expensive calculation so that you don’t have to perform the calculation next time. Here’s some pseudocode explaining how this would work for a dynamically generated web page:</p> <pre data-language="python">given a URL, try finding that page in the cache
+if the page is in the cache:
+    return the cached page
+else:
+    generate the page
+    save the generated page in the cache (for next time)
+    return the generated page
+</pre> <p>Django comes with a robust cache system that lets you save dynamic pages so they don’t have to be calculated for each request. For convenience, Django offers different levels of cache granularity: You can cache the output of specific views, you can cache only the pieces that are difficult to produce, or you can cache your entire site.</p> <p>Django also works well with “downstream” caches, such as <a class="reference external" href="http://www.squid-cache.org/">Squid</a> and browser-based caches. These are the types of caches that you don’t directly control but to which you can provide hints (via HTTP headers) about which parts of your site should be cached, and how.</p> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p class="last">The <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/misc/design-philosophies/#cache-design-philosophy"><span class="std std-ref">Cache Framework design philosophy</span></a> explains a few of the design decisions of the framework.</p> </div>  <h2 id="id1">Setting up the cache</h2> <p id="s-setting-up-the-cache">The cache system requires a small amount of setup. Namely, you have to tell it where your cached data should live – whether in a database, on the filesystem or directly in memory. This is an important decision that affects your cache’s performance; yes, some cache types are faster than others.</p> <p>Your cache preference goes in the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting in your settings file. Here’s an explanation of all available values for <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a>.</p>  <h3 id="id2">Memcached</h3> <p id="s-memcached"><a class="reference external" href="https://memcached.org/">Memcached</a> is an entirely memory-based cache server, originally developed to handle high loads at LiveJournal.com and subsequently open-sourced by Danga Interactive. It is used by sites such as Facebook and Wikipedia to reduce database access and dramatically increase site performance.</p> <p>Memcached runs as a daemon and is allotted a specified amount of RAM. All it does is provide a fast interface for adding, retrieving and deleting data in the cache. All data is stored directly in memory, so there’s no overhead of database or filesystem usage.</p> <p>After installing Memcached itself, you’ll need to install a Memcached binding. There are several Python Memcached bindings available; the two supported by Django are <a class="reference external" href="https://pypi.org/project/pylibmc/">pylibmc</a> and <a class="reference external" href="https://pypi.org/project/pymemcache/">pymemcache</a>.</p> <p>To use Memcached with Django:</p> <ul class="simple"> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> to <code>django.core.cache.backends.memcached.PyMemcacheCache</code> or <code>django.core.cache.backends.memcached.PyLibMCCache</code> (depending on your chosen memcached binding)</li> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> to <code>ip:port</code> values, where <code>ip</code> is the IP address of the Memcached daemon and <code>port</code> is the port on which Memcached is running, or to a <code>unix:path</code> value, where <code>path</code> is the path to a Memcached Unix socket file.</li> </ul> <p>In this example, Memcached is running on localhost (127.0.0.1) port 11211, using the <code>pymemcache</code> binding:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': '127.0.0.1:11211',
+    }
+}
+</pre> <p>In this example, Memcached is available through a local Unix socket file <code>/tmp/memcached.sock</code> using the <code>pymemcache</code> binding:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': 'unix:/tmp/memcached.sock',
+    }
+}
+</pre> <p>One excellent feature of Memcached is its ability to share a cache over multiple servers. This means you can run Memcached daemons on multiple machines, and the program will treat the group of machines as a <em>single</em> cache, without the need to duplicate cache values on each machine. To take advantage of this feature, include all server addresses in <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a>, either as a semicolon or comma delimited string, or as a list.</p> <p>In this example, the cache is shared over Memcached instances running on IP address 172.19.26.240 and 172.19.26.242, both on port 11211:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': [
+            '172.19.26.240:11211',
+            '172.19.26.242:11211',
+        ]
+    }
+}
+</pre> <p>In the following example, the cache is shared over Memcached instances running on the IP addresses 172.19.26.240 (port 11211), 172.19.26.242 (port 11212), and 172.19.26.244 (port 11213):</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': [
+            '172.19.26.240:11211',
+            '172.19.26.242:11212',
+            '172.19.26.244:11213',
+        ]
+    }
+}
+</pre> <p>A final point about Memcached is that memory-based caching has a disadvantage: because the cached data is stored in memory, the data will be lost if your server crashes. Clearly, memory isn’t intended for permanent data storage, so don’t rely on memory-based caching as your only data storage. Without a doubt, <em>none</em> of the Django caching backends should be used for permanent storage – they’re all intended to be solutions for caching, not storage – but we point this out here because memory-based caching is particularly temporary.</p> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>PyMemcacheCache</code> backend was added.</p> </div> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 3.2: </span>The <code>MemcachedCache</code> backend is deprecated as <code>python-memcached</code> has some problems and seems to be unmaintained. Use <code>PyMemcacheCache</code> or <code>PyLibMCCache</code> instead.</p> </div>   <h3 id="id4">Redis</h3> <div class="versionadded" id="s-redis"> <span class="title">New in Django 4.0.</span> </div> <p><a class="reference external" href="https://redis.io/">Redis</a> is an in-memory database that can be used for caching. To begin you’ll need a Redis server running either locally or on a remote machine.</p> <p>After setting up the Redis server, you’ll need to install Python bindings for Redis. <a class="reference external" href="https://pypi.org/project/redis/">redis-py</a> is the binding supported natively by Django. Installing the additional <a class="reference external" href="https://pypi.org/project/hiredis/">hiredis-py</a> package is also recommended.</p> <p>To use Redis as your cache backend with Django:</p> <ul class="simple"> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> to <code>django.core.cache.backends.redis.RedisCache</code>.</li> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> to the URL pointing to your Redis instance, using the appropriate scheme. See the <code>redis-py</code> docs for <a class="reference external" href="https://redis-py.readthedocs.io/en/stable/#redis.ConnectionPool.from_url">details on the available schemes</a>.</li> </ul> <p>For example, if Redis is running on localhost (127.0.0.1) port 6379:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379',
+    }
+}
+</pre> <p>Often Redis servers are protected with authentication. In order to supply a username and password, add them in the <code>LOCATION</code> along with the URL:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://username:password@127.0.0.1:6379',
+    }
+}
+</pre> <p>If you have multiple Redis servers set up in the replication mode, you can specify the servers either as a semicolon or comma delimited string, or as a list. While using multiple servers, write operations are performed on the first server (leader). Read operations are performed on the other servers (replicas) chosen at random:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': [
+            'redis://127.0.0.1:6379', # leader
+            'redis://127.0.0.1:6378', # read-replica 1
+            'redis://127.0.0.1:6377', # read-replica 2
+        ],
+    }
+}
+</pre>   <h3 id="id6">Database caching</h3> <p id="s-database-caching">Django can store its cached data in your database. This works best if you’ve got a fast, well-indexed database server.</p> <p>To use a database table as your cache backend:</p> <ul class="simple"> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> to <code>django.core.cache.backends.db.DatabaseCache</code>
+</li> <li>Set <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> to <code>tablename</code>, the name of the database table. This name can be whatever you want, as long as it’s a valid table name that’s not already being used in your database.</li> </ul> <p>In this example, the cache table’s name is <code>my_cache_table</code>:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'my_cache_table',
+    }
+}
+</pre> <p>Unlike other cache backends, the database cache does not support automatic culling of expired entries at the database level. Instead, expired cache entries are culled each time <code>add()</code>, <code>set()</code>, or <code>touch()</code> is called.</p>  <h4 id="creating-the-cache-table">Creating the cache table</h4> <p id="s-creating-the-cache-table">Before using the database cache, you must create the cache table with this command:</p> <pre data-language="python">python manage.py createcachetable
+</pre> <p>This creates a table in your database that is in the proper format that Django’s database-cache system expects. The name of the table is taken from <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a>.</p> <p>If you are using multiple database caches, <a class="reference internal" href="../ref/django-admin#django-admin-createcachetable"><code>createcachetable</code></a> creates one table for each cache.</p> <p>If you are using multiple databases, <a class="reference internal" href="../ref/django-admin#django-admin-createcachetable"><code>createcachetable</code></a> observes the <code>allow_migrate()</code> method of your database routers (see below).</p> <p>Like <a class="reference internal" href="../ref/django-admin#django-admin-migrate"><code>migrate</code></a>, <a class="reference internal" href="../ref/django-admin#django-admin-createcachetable"><code>createcachetable</code></a> won’t touch an existing table. It will only create missing tables.</p> <p>To print the SQL that would be run, rather than run it, use the <a class="reference internal" href="../ref/django-admin#cmdoption-createcachetable-dry-run"><code>createcachetable --dry-run</code></a> option.</p>   <h4 id="multiple-databases">Multiple databases</h4> <p id="s-multiple-databases">If you use database caching with multiple databases, you’ll also need to set up routing instructions for your database cache table. For the purposes of routing, the database cache table appears as a model named <code>CacheEntry</code>, in an application named <code>django_cache</code>. This model won’t appear in the models cache, but the model details can be used for routing purposes.</p> <p>For example, the following router would direct all cache read operations to <code>cache_replica</code>, and all write operations to <code>cache_primary</code>. The cache table will only be synchronized onto <code>cache_primary</code>:</p> <pre data-language="python">class CacheRouter:
+    """A router to control all database cache operations"""
+
+    def db_for_read(self, model, **hints):
+        "All cache read operations go to the replica"
+        if model._meta.app_label == 'django_cache':
+            return 'cache_replica'
+        return None
+
+    def db_for_write(self, model, **hints):
+        "All cache write operations go to primary"
+        if model._meta.app_label == 'django_cache':
+            return 'cache_primary'
+        return None
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        "Only install the cache model on primary"
+        if app_label == 'django_cache':
+            return db == 'cache_primary'
+        return None
+</pre> <p>If you don’t specify routing directions for the database cache model, the cache backend will use the <code>default</code> database.</p> <p>And if you don’t use the database cache backend, you don’t need to worry about providing routing instructions for the database cache model.</p>    <h3 id="filesystem-caching">Filesystem caching</h3> <p id="s-filesystem-caching">The file-based backend serializes and stores each cache value as a separate file. To use this backend set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> to <code>"django.core.cache.backends.filebased.FileBasedCache"</code> and <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> to a suitable directory. For example, to store cached data in <code>/var/tmp/django_cache</code>, use this setting:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': '/var/tmp/django_cache',
+    }
+}
+</pre> <p>If you’re on Windows, put the drive letter at the beginning of the path, like this:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': 'c:/foo/bar',
+    }
+}
+</pre> <p>The directory path should be absolute – that is, it should start at the root of your filesystem. It doesn’t matter whether you put a slash at the end of the setting.</p> <p>Make sure the directory pointed-to by this setting either exists and is readable and writable, or that it can be created by the system user under which your web server runs. Continuing the above example, if your server runs as the user <code>apache</code>, make sure the directory <code>/var/tmp/django_cache</code> exists and is readable and writable by the user <code>apache</code>, or that it can be created by the user <code>apache</code>.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>When the cache <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> is contained within <a class="reference internal" href="../ref/settings#std:setting-MEDIA_ROOT"><code>MEDIA_ROOT</code></a>, <a class="reference internal" href="../ref/settings#std:setting-STATIC_ROOT"><code>STATIC_ROOT</code></a>, or <a class="reference internal" href="../ref/settings#std:setting-STATICFILES_FINDERS"><code>STATICFILES_FINDERS</code></a>, sensitive data may be exposed.</p> <p class="last">An attacker who gains access to the cache file can not only falsify HTML content, which your site will trust, but also remotely execute arbitrary code, as the data is serialized using <a class="reference external" href="https://docs.python.org/3/library/pickle.html#module-pickle" title="(in Python v3.10)"><code>pickle</code></a>.</p> </div>   <h3 id="id7">Local-memory caching</h3> <p id="s-local-memory-caching">This is the default cache if another is not specified in your settings file. If you want the speed advantages of in-memory caching but don’t have the capability of running Memcached, consider the local-memory cache backend. This cache is per-process (see below) and thread-safe. To use it, set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> to <code>"django.core.cache.backends.locmem.LocMemCache"</code>. For example:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    }
+}
+</pre> <p>The cache <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a> is used to identify individual memory stores. If you only have one <code>locmem</code> cache, you can omit the <a class="reference internal" href="../ref/settings#std:setting-CACHES-LOCATION"><code>LOCATION</code></a>; however, if you have more than one local memory cache, you will need to assign a name to at least one of them in order to keep them separate.</p> <p>The cache uses a least-recently-used (LRU) culling strategy.</p> <p>Note that each process will have its own private cache instance, which means no cross-process caching is possible. This also means the local memory cache isn’t particularly memory-efficient, so it’s probably not a good choice for production environments. It’s nice for development.</p>   <h3 id="dummy-caching-for-development">Dummy caching (for development)</h3> <p id="s-dummy-caching-for-development">Finally, Django comes with a “dummy” cache that doesn’t actually cache – it just implements the cache interface without doing anything.</p> <p>This is useful if you have a production site that uses heavy-duty caching in various places but a development/test environment where you don’t want to cache and don’t want to have to change your code to special-case the latter. To activate dummy caching, set <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> like so:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+    }
+}
+</pre>   <h3 id="using-a-custom-cache-backend">Using a custom cache backend</h3> <p id="s-using-a-custom-cache-backend">While Django includes support for a number of cache backends out-of-the-box, sometimes you might want to use a customized cache backend. To use an external cache backend with Django, use the Python import path as the <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> of the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting, like so:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'path.to.backend',
+    }
+}
+</pre> <p>If you’re building your own backend, you can use the standard cache backends as reference implementations. You’ll find the code in the <code>django/core/cache/backends/</code> directory of the Django source.</p> <p>Note: Without a really compelling reason, such as a host that doesn’t support them, you should stick to the cache backends included with Django. They’ve been well-tested and are well-documented.</p>   <h3 id="id8">Cache arguments</h3> <p id="s-cache-arguments">Each cache backend can be given additional arguments to control caching behavior. These arguments are provided as additional keys in the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting. Valid arguments are as follows:</p> <ul> <li>
+<a class="reference internal" href="../ref/settings#std:setting-CACHES-TIMEOUT"><code>TIMEOUT</code></a>: The default timeout, in seconds, to use for the cache. This argument defaults to <code>300</code> seconds (5 minutes). You can set <code>TIMEOUT</code> to <code>None</code> so that, by default, cache keys never expire. A value of <code>0</code> causes keys to immediately expire (effectively “don’t cache”). </li> <li>
+<p class="first"><a class="reference internal" href="../ref/settings#std:setting-CACHES-OPTIONS"><code>OPTIONS</code></a>: Any options that should be passed to the cache backend. The list of valid options will vary with each backend, and cache backends backed by a third-party library will pass their options directly to the underlying cache library.</p> <p>Cache backends that implement their own culling strategy (i.e., the <code>locmem</code>, <code>filesystem</code> and <code>database</code> backends) will honor the following options:</p> <ul> <li>
+<code>MAX_ENTRIES</code>: The maximum number of entries allowed in the cache before old values are deleted. This argument defaults to <code>300</code>. </li> <li>
+<p class="first"><code>CULL_FREQUENCY</code>: The fraction of entries that are culled when <code>MAX_ENTRIES</code> is reached. The actual ratio is <code>1 / CULL_FREQUENCY</code>, so set <code>CULL_FREQUENCY</code> to <code>2</code> to cull half the entries when <code>MAX_ENTRIES</code> is reached. This argument should be an integer and defaults to <code>3</code>.</p> <p>A value of <code>0</code> for <code>CULL_FREQUENCY</code> means that the entire cache will be dumped when <code>MAX_ENTRIES</code> is reached. On some backends (<code>database</code> in particular) this makes culling <em>much</em> faster at the expense of more cache misses.</p> </li> </ul> <p>The Memcached and Redis backends pass the contents of <a class="reference internal" href="../ref/settings#std:setting-CACHES-OPTIONS"><code>OPTIONS</code></a> as keyword arguments to the client constructors, allowing for more advanced control of client behavior. For example usage, see below.</p> </li> <li>
+<p class="first"><a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_PREFIX"><code>KEY_PREFIX</code></a>: A string that will be automatically included (prepended by default) to all cache keys used by the Django server.</p> <p>See the <a class="reference internal" href="#cache-key-prefixing"><span class="std std-ref">cache documentation</span></a> for more information.</p> </li> <li>
+<p class="first"><a class="reference internal" href="../ref/settings#std:setting-CACHES-VERSION"><code>VERSION</code></a>: The default version number for cache keys generated by the Django server.</p> <p>See the <a class="reference internal" href="#cache-versioning"><span class="std std-ref">cache documentation</span></a> for more information.</p> </li> <li>
+<p class="first"><a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_FUNCTION"><code>KEY_FUNCTION</code></a> A string containing a dotted path to a function that defines how to compose a prefix, version and key into a final cache key.</p> <p>See the <a class="reference internal" href="#cache-key-transformation"><span class="std std-ref">cache documentation</span></a> for more information.</p> </li> </ul> <p>In this example, a filesystem backend is being configured with a timeout of 60 seconds, and a maximum capacity of 1000 items:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': '/var/tmp/django_cache',
+        'TIMEOUT': 60,
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000
+        }
+    }
+}
+</pre> <p>Here’s an example configuration for a <code>pylibmc</code> based backend that enables the binary protocol, SASL authentication, and the <code>ketama</code> behavior mode:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyLibMCCache',
+        'LOCATION': '127.0.0.1:11211',
+        'OPTIONS': {
+            'binary': True,
+            'username': 'user',
+            'password': 'pass',
+            'behaviors': {
+                'ketama': True,
+            }
+        }
+    }
+}
+</pre> <p>Here’s an example configuration for a <code>pymemcache</code> based backend that enables client pooling (which may improve performance by keeping clients connected), treats memcache/network errors as cache misses, and sets the <code>TCP_NODELAY</code> flag on the connection’s socket:</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': '127.0.0.1:11211',
+        'OPTIONS': {
+            'no_delay': True,
+            'ignore_exc': True,
+            'max_pool_size': 4,
+            'use_pooling': True,
+        }
+    }
+}
+</pre> <p>Here’s an example configuration for a <code>redis</code> based backend that selects database <code>10</code> (by default Redis ships with 16 logical databases), specifies a <a class="reference external" href="https://github.com/andymccurdy/redis-py#parsers">parser class</a> (<code>redis.connection.HiredisParser</code> will be used by default if the <code>hiredis-py</code> package is installed), and sets a custom <a class="reference external" href="https://github.com/andymccurdy/redis-py#connection-pools">connection pool class</a> (<code>redis.ConnectionPool</code> is used by default):</p> <pre data-language="python">CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379',
+        'OPTIONS': {
+            'db': '10',
+            'parser_class': 'redis.connection.PythonParser',
+            'pool_class': 'redis.BlockingConnectionPool',
+        }
+    }
+}
+</pre>    <h2 id="id9">The per-site cache</h2> <p id="s-the-per-site-cache">Once the cache is set up, the simplest way to use caching is to cache your entire site. You’ll need to add <code>'django.middleware.cache.UpdateCacheMiddleware'</code> and <code>'django.middleware.cache.FetchFromCacheMiddleware'</code> to your <a class="reference internal" href="../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> setting, as in this example:</p> <pre data-language="python">MIDDLEWARE = [
+    'django.middleware.cache.UpdateCacheMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.cache.FetchFromCacheMiddleware',
+]
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">No, that’s not a typo: the “update” middleware must be first in the list, and the “fetch” middleware must be last. The details are a bit obscure, but see <a class="reference internal" href="#order-of-middleware">Order of MIDDLEWARE</a> below if you’d like the full story.</p> </div> <p>Then, add the following required settings to your Django settings file:</p> <ul class="simple"> <li>
+<a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_ALIAS"><code>CACHE_MIDDLEWARE_ALIAS</code></a> – The cache alias to use for storage.</li> <li>
+<a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_SECONDS"><code>CACHE_MIDDLEWARE_SECONDS</code></a> – The number of seconds each page should be cached.</li> <li>
+<a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_KEY_PREFIX"><code>CACHE_MIDDLEWARE_KEY_PREFIX</code></a> – If the cache is shared across multiple sites using the same Django installation, set this to the name of the site, or some other string that is unique to this Django instance, to prevent key collisions. Use an empty string if you don’t care.</li> </ul> <p><code>FetchFromCacheMiddleware</code> caches GET and HEAD responses with status 200, where the request and response headers allow. Responses to requests for the same URL with different query parameters are considered to be unique pages and are cached separately. This middleware expects that a HEAD request is answered with the same response headers as the corresponding GET request; in which case it can return a cached GET response for HEAD request.</p> <p>Additionally, <code>UpdateCacheMiddleware</code> automatically sets a few headers in each <a class="reference internal" href="../ref/request-response#django.http.HttpResponse" title="django.http.HttpResponse"><code>HttpResponse</code></a> which affect <a class="reference internal" href="#downstream-caches"><span class="std std-ref">downstream caches</span></a>:</p> <ul class="simple"> <li>Sets the <code>Expires</code> header to the current date/time plus the defined <a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_SECONDS"><code>CACHE_MIDDLEWARE_SECONDS</code></a>.</li> <li>Sets the <code>Cache-Control</code> header to give a max age for the page – again, from the <a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_SECONDS"><code>CACHE_MIDDLEWARE_SECONDS</code></a> setting.</li> </ul> <p>See <a class="reference internal" href="http/middleware"><span class="doc">Middleware</span></a> for more on middleware.</p> <p>If a view sets its own cache expiry time (i.e. it has a <code>max-age</code> section in its <code>Cache-Control</code> header) then the page will be cached until the expiry time, rather than <a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_SECONDS"><code>CACHE_MIDDLEWARE_SECONDS</code></a>. Using the decorators in <code>django.views.decorators.cache</code> you can easily set a view’s expiry time (using the <a class="reference internal" href="http/decorators#django.views.decorators.cache.cache_control" title="django.views.decorators.cache.cache_control"><code>cache_control()</code></a> decorator) or disable caching for a view (using the <a class="reference internal" href="http/decorators#django.views.decorators.cache.never_cache" title="django.views.decorators.cache.never_cache"><code>never_cache()</code></a> decorator). See the <a class="reference internal" href="#controlling-cache-using-other-headers">using other headers</a> section for more on these decorators.</p> <p id="i18n-cache-key">If <a class="reference internal" href="../ref/settings#std:setting-USE_I18N"><code>USE_I18N</code></a> is set to <code>True</code> then the generated cache key will include the name of the active <a class="reference internal" href="i18n/index#term-language-code"><span class="xref std std-term">language</span></a> – see also <a class="reference internal" href="i18n/translation#how-django-discovers-language-preference"><span class="std std-ref">How Django discovers language preference</span></a>). This allows you to easily cache multilingual sites without having to create the cache key yourself.</p> <p>Cache keys also include the <a class="reference internal" href="i18n/timezones#default-current-time-zone"><span class="std std-ref">current time zone</span></a> when <a class="reference internal" href="../ref/settings#std:setting-USE_TZ"><code>USE_TZ</code></a> is set to <code>True</code>.</p>   <h2 id="the-per-view-cache">The per-view cache</h2> <dl class="function" id="s-the-per-view-cache"> <dt id="django.views.decorators.cache.cache_page">
+<code>django.views.decorators.cache.cache_page()</code> </dt> 
+</dl> <p>A more granular way to use the caching framework is by caching the output of individual views. <code>django.views.decorators.cache</code> defines a <code>cache_page</code> decorator that will automatically cache the view’s response for you:</p> <pre data-language="python">from django.views.decorators.cache import cache_page
+
+@cache_page(60 * 15)
+def my_view(request):
+    ...
+</pre> <p><code>cache_page</code> takes a single argument: the cache timeout, in seconds. In the above example, the result of the <code>my_view()</code> view will be cached for 15 minutes. (Note that we’ve written it as <code>60 * 15</code> for the purpose of readability. <code>60 * 15</code> will be evaluated to <code>900</code> – that is, 15 minutes multiplied by 60 seconds per minute.)</p> <p>The cache timeout set by <code>cache_page</code> takes precedence over the <code>max-age</code> directive from the <code>Cache-Control</code> header.</p> <p>The per-view cache, like the per-site cache, is keyed off of the URL. If multiple URLs point at the same view, each URL will be cached separately. Continuing the <code>my_view</code> example, if your URLconf looks like this:</p> <pre data-language="python">urlpatterns = [
+    path('foo/&lt;int:code&gt;/', my_view),
+]
+</pre> <p>then requests to <code>/foo/1/</code> and <code>/foo/23/</code> will be cached separately, as you may expect. But once a particular URL (e.g., <code>/foo/23/</code>) has been requested, subsequent requests to that URL will use the cache.</p> <p><code>cache_page</code> can also take an optional keyword argument, <code>cache</code>, which directs the decorator to use a specific cache (from your <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting) when caching view results. By default, the <code>default</code> cache will be used, but you can specify any cache you want:</p> <pre data-language="python">@cache_page(60 * 15, cache="special_cache")
+def my_view(request):
+    ...
+</pre> <p>You can also override the cache prefix on a per-view basis. <code>cache_page</code> takes an optional keyword argument, <code>key_prefix</code>, which works in the same way as the <a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_KEY_PREFIX"><code>CACHE_MIDDLEWARE_KEY_PREFIX</code></a> setting for the middleware. It can be used like this:</p> <pre data-language="python">@cache_page(60 * 15, key_prefix="site1")
+def my_view(request):
+    ...
+</pre> <p>The <code>key_prefix</code> and <code>cache</code> arguments may be specified together. The <code>key_prefix</code> argument and the <a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_PREFIX"><code>KEY_PREFIX</code></a> specified under <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> will be concatenated.</p> <p>Additionally, <code>cache_page</code> automatically sets <code>Cache-Control</code> and <code>Expires</code> headers in the response which affect <a class="reference internal" href="#downstream-caches"><span class="std std-ref">downstream caches</span></a>.</p>  <h3 id="specifying-per-view-cache-in-the-urlconf">Specifying per-view cache in the URLconf</h3> <p id="s-specifying-per-view-cache-in-the-urlconf">The examples in the previous section have hard-coded the fact that the view is cached, because <code>cache_page</code> alters the <code>my_view</code> function in place. This approach couples your view to the cache system, which is not ideal for several reasons. For instance, you might want to reuse the view functions on another, cache-less site, or you might want to distribute the views to people who might want to use them without being cached. The solution to these problems is to specify the per-view cache in the URLconf rather than next to the view functions themselves.</p> <p>You can do so by wrapping the view function with <code>cache_page</code> when you refer to it in the URLconf. Here’s the old URLconf from earlier:</p> <pre data-language="python">urlpatterns = [
+    path('foo/&lt;int:code&gt;/', my_view),
+]
+</pre> <p>Here’s the same thing, with <code>my_view</code> wrapped in <code>cache_page</code>:</p> <pre data-language="python">from django.views.decorators.cache import cache_page
+
+urlpatterns = [
+    path('foo/&lt;int:code&gt;/', cache_page(60 * 15)(my_view)),
+]
+</pre>    <h2 id="std:templatetag-cache">Template fragment caching</h2> <p id="s-template-fragment-caching">If you’re after even more control, you can also cache template fragments using the <code>cache</code> template tag. To give your template access to this tag, put <code>{% load cache %}</code> near the top of your template.</p> <p>The <code>{% cache %}</code> template tag caches the contents of the block for a given amount of time. It takes at least two arguments: the cache timeout, in seconds, and the name to give the cache fragment. The fragment is cached forever if timeout is <code>None</code>. The name will be taken as is, do not use a variable. For example:</p> <pre data-language="markup">{% load cache %}
+{% cache 500 sidebar %}
+    .. sidebar ..
+{% endcache %}
+</pre> <p>Sometimes you might want to cache multiple copies of a fragment depending on some dynamic data that appears inside the fragment. For example, you might want a separate cached copy of the sidebar used in the previous example for every user of your site. Do this by passing one or more additional arguments, which may be variables with or without filters, to the <code>{% cache %}</code> template tag to uniquely identify the cache fragment:</p> <pre data-language="markup">{% load cache %}
+{% cache 500 sidebar request.user.username %}
+    .. sidebar for logged in user ..
+{% endcache %}
+</pre> <p>If <a class="reference internal" href="../ref/settings#std:setting-USE_I18N"><code>USE_I18N</code></a> is set to <code>True</code> the per-site middleware cache will <a class="reference internal" href="#i18n-cache-key"><span class="std std-ref">respect the active language</span></a>. For the <code>cache</code> template tag you could use one of the <a class="reference internal" href="i18n/translation#template-translation-vars"><span class="std std-ref">translation-specific variables</span></a> available in templates to achieve the same result:</p> <pre data-language="markup">{% load i18n %}
+{% load cache %}
+
+{% get_current_language as LANGUAGE_CODE %}
+
+{% cache 600 welcome LANGUAGE_CODE %}
+    {% translate "Welcome to example.com" %}
+{% endcache %}
+</pre> <p>The cache timeout can be a template variable, as long as the template variable resolves to an integer value. For example, if the template variable <code>my_timeout</code> is set to the value <code>600</code>, then the following two examples are equivalent:</p> <pre data-language="markup">{% cache 600 sidebar %} ... {% endcache %}
+{% cache my_timeout sidebar %} ... {% endcache %}
+</pre> <p>This feature is useful in avoiding repetition in templates. You can set the timeout in a variable, in one place, and reuse that value.</p> <p>By default, the cache tag will try to use the cache called “template_fragments”. If no such cache exists, it will fall back to using the default cache. You may select an alternate cache backend to use with the <code>using</code> keyword argument, which must be the last argument to the tag.</p> <pre data-language="markup">{% cache 300 local-thing ...  using="localcache" %}
+</pre> <p>It is considered an error to specify a cache name that is not configured.</p> <dl class="function"> <dt id="django.core.cache.utils.make_template_fragment_key">
+<code>django.core.cache.utils.make_template_fragment_key(fragment_name, vary_on=None)</code> </dt> 
+</dl> <p>If you want to obtain the cache key used for a cached fragment, you can use <code>make_template_fragment_key</code>. <code>fragment_name</code> is the same as second argument to the <code>cache</code> template tag; <code>vary_on</code> is a list of all additional arguments passed to the tag. This function can be useful for invalidating or overwriting a cached item, for example:</p> <pre data-language="pycon">&gt;&gt;&gt; from django.core.cache import cache
+&gt;&gt;&gt; from django.core.cache.utils import make_template_fragment_key
+# cache key for {% cache 500 sidebar username %}
+&gt;&gt;&gt; key = make_template_fragment_key('sidebar', [username])
+&gt;&gt;&gt; cache.delete(key) # invalidates cached template fragment
+True
+</pre>   <h2 id="low-level-cache-api">The low-level cache API</h2> <p id="s-the-low-level-cache-api">Sometimes, caching an entire rendered page doesn’t gain you very much and is, in fact, inconvenient overkill.</p> <p>Perhaps, for instance, your site includes a view whose results depend on several expensive queries, the results of which change at different intervals. In this case, it would not be ideal to use the full-page caching that the per-site or per-view cache strategies offer, because you wouldn’t want to cache the entire result (since some of the data changes often), but you’d still want to cache the results that rarely change.</p> <p>For cases like this, Django exposes a low-level cache API. You can use this API to store objects in the cache with any level of granularity you like. You can cache any Python object that can be pickled safely: strings, dictionaries, lists of model objects, and so forth. (Most common Python objects can be pickled; refer to the Python documentation for more information about pickling.)</p>  <h3 id="accessing-the-cache">Accessing the cache</h3> <dl class="data" id="s-accessing-the-cache"> <dt id="django.core.cache.caches">
+<code>django.core.cache.caches</code> </dt> <dd>
+<p>You can access the caches configured in the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting through a dict-like object: <code>django.core.cache.caches</code>. Repeated requests for the same alias in the same thread will return the same object.</p> <pre data-language="python">&gt;&gt;&gt; from django.core.cache import caches
+&gt;&gt;&gt; cache1 = caches['myalias']
+&gt;&gt;&gt; cache2 = caches['myalias']
+&gt;&gt;&gt; cache1 is cache2
+True
+</pre> <p>If the named key does not exist, <code>InvalidCacheBackendError</code> will be raised.</p> <p>To provide thread-safety, a different instance of the cache backend will be returned for each thread.</p> </dd>
+</dl> <dl class="data"> <dt id="django.core.cache.cache">
+<code>django.core.cache.cache</code> </dt> <dd>
+<p>As a shortcut, the default cache is available as <code>django.core.cache.cache</code>:</p> <pre data-language="python">&gt;&gt;&gt; from django.core.cache import cache
+</pre> <p>This object is equivalent to <code>caches['default']</code>.</p> </dd>
+</dl>   <h3 id="cache-basic-interface">Basic usage</h3> <p id="s-basic-usage">The basic interface is:</p> <dl class="method"> <dt id="django.core.caches.cache.set">
+<code>cache.set(key, value, timeout=DEFAULT_TIMEOUT, version=None)</code> </dt> <dd>
+<pre data-language="python">&gt;&gt;&gt; cache.set('my_key', 'hello, world!', 30)
+</pre> </dd>
+</dl> <dl class="method"> <dt id="django.core.caches.cache.get">
+<code>cache.get(key, default=None, version=None)</code> </dt> <dd>
+<pre data-language="python">&gt;&gt;&gt; cache.get('my_key')
+'hello, world!'
+</pre> </dd>
+</dl> <p><code>key</code> should be a <code>str</code>, and <code>value</code> can be any picklable Python object.</p> <p>The <code>timeout</code> argument is optional and defaults to the <code>timeout</code> argument of the appropriate backend in the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting (explained above). It’s the number of seconds the value should be stored in the cache. Passing in <code>None</code> for <code>timeout</code> will cache the value forever. A <code>timeout</code> of <code>0</code> won’t cache the value.</p> <p>If the object doesn’t exist in the cache, <code>cache.get()</code> returns <code>None</code>:</p> <pre data-language="python">&gt;&gt;&gt; # Wait 30 seconds for 'my_key' to expire...
+&gt;&gt;&gt; cache.get('my_key')
+None
+</pre> <p>If you need to determine whether the object exists in the cache and you have stored a literal value <code>None</code>, use a sentinel object as the default:</p> <pre data-language="python">&gt;&gt;&gt; sentinel = object()
+&gt;&gt;&gt; cache.get('my_key', sentinel) is sentinel
+False
+&gt;&gt;&gt; # Wait 30 seconds for 'my_key' to expire...
+&gt;&gt;&gt; cache.get('my_key', sentinel) is sentinel
+True
+</pre> <div class="admonition-memcachedcache admonition"> <p class="first admonition-title"><code>MemcachedCache</code></p> <p class="last">Due to a <code>python-memcached</code> limitation, it’s not possible to distinguish between stored <code>None</code> value and a cache miss signified by a return value of <code>None</code> on the deprecated <code>MemcachedCache</code> backend.</p> </div> <p><code>cache.get()</code> can take a <code>default</code> argument. This specifies which value to return if the object doesn’t exist in the cache:</p> <pre data-language="python">&gt;&gt;&gt; cache.get('my_key', 'has expired')
+'has expired'
+</pre> <dl class="method"> <dt id="django.core.caches.cache.add">
+<code>cache.add(key, value, timeout=DEFAULT_TIMEOUT, version=None)</code> </dt> 
+</dl> <p>To add a key only if it doesn’t already exist, use the <code>add()</code> method. It takes the same parameters as <code>set()</code>, but it will not attempt to update the cache if the key specified is already present:</p> <pre data-language="python">&gt;&gt;&gt; cache.set('add_key', 'Initial value')
+&gt;&gt;&gt; cache.add('add_key', 'New value')
+&gt;&gt;&gt; cache.get('add_key')
+'Initial value'
+</pre> <p>If you need to know whether <code>add()</code> stored a value in the cache, you can check the return value. It will return <code>True</code> if the value was stored, <code>False</code> otherwise.</p> <dl class="method"> <dt id="django.core.caches.cache.get_or_set">
+<code>cache.get_or_set(key, default, timeout=DEFAULT_TIMEOUT, version=None)</code> </dt> 
+</dl> <p>If you want to get a key’s value or set a value if the key isn’t in the cache, there is the <code>get_or_set()</code> method. It takes the same parameters as <code>get()</code> but the default is set as the new cache value for that key, rather than returned:</p> <pre data-language="python">&gt;&gt;&gt; cache.get('my_new_key')  # returns None
+&gt;&gt;&gt; cache.get_or_set('my_new_key', 'my new value', 100)
+'my new value'
+</pre> <p>You can also pass any callable as a <em>default</em> value:</p> <pre data-language="python">&gt;&gt;&gt; import datetime
+&gt;&gt;&gt; cache.get_or_set('some-timestamp-key', datetime.datetime.now)
+datetime.datetime(2014, 12, 11, 0, 15, 49, 457920)
+</pre> <dl class="method"> <dt id="django.core.caches.cache.get_many">
+<code>cache.get_many(keys, version=None)</code> </dt> 
+</dl> <p>There’s also a <code>get_many()</code> interface that only hits the cache once. <code>get_many()</code> returns a dictionary with all the keys you asked for that actually exist in the cache (and haven’t expired):</p> <pre data-language="python">&gt;&gt;&gt; cache.set('a', 1)
+&gt;&gt;&gt; cache.set('b', 2)
+&gt;&gt;&gt; cache.set('c', 3)
+&gt;&gt;&gt; cache.get_many(['a', 'b', 'c'])
+{'a': 1, 'b': 2, 'c': 3}
+</pre> <dl class="method"> <dt id="django.core.caches.cache.set_many">
+<code>cache.set_many(dict, timeout)</code> </dt> 
+</dl> <p>To set multiple values more efficiently, use <code>set_many()</code> to pass a dictionary of key-value pairs:</p> <pre data-language="python">&gt;&gt;&gt; cache.set_many({'a': 1, 'b': 2, 'c': 3})
+&gt;&gt;&gt; cache.get_many(['a', 'b', 'c'])
+{'a': 1, 'b': 2, 'c': 3}
+</pre> <p>Like <code>cache.set()</code>, <code>set_many()</code> takes an optional <code>timeout</code> parameter.</p> <p>On supported backends (memcached), <code>set_many()</code> returns a list of keys that failed to be inserted.</p> <dl class="method"> <dt id="django.core.caches.cache.delete">
+<code>cache.delete(key, version=None)</code> </dt> 
+</dl> <p>You can delete keys explicitly with <code>delete()</code> to clear the cache for a particular object:</p> <pre data-language="python">&gt;&gt;&gt; cache.delete('a')
+True
+</pre> <p><code>delete()</code> returns <code>True</code> if the key was successfully deleted, <code>False</code> otherwise.</p> <dl class="method"> <dt id="django.core.caches.cache.delete_many">
+<code>cache.delete_many(keys, version=None)</code> </dt> 
+</dl> <p>If you want to clear a bunch of keys at once, <code>delete_many()</code> can take a list of keys to be cleared:</p> <pre data-language="python">&gt;&gt;&gt; cache.delete_many(['a', 'b', 'c'])
+</pre> <dl class="method"> <dt id="django.core.caches.cache.clear">
+<code>cache.clear()</code> </dt> 
+</dl> <p>Finally, if you want to delete all the keys in the cache, use <code>cache.clear()</code>. Be careful with this; <code>clear()</code> will remove <em>everything</em> from the cache, not just the keys set by your application.</p> <pre data-language="python">&gt;&gt;&gt; cache.clear()
+</pre> <dl class="method"> <dt id="django.core.caches.cache.touch">
+<code>cache.touch(key, timeout=DEFAULT_TIMEOUT, version=None)</code> </dt> 
+</dl> <p><code>cache.touch()</code> sets a new expiration for a key. For example, to update a key to expire 10 seconds from now:</p> <pre data-language="python">&gt;&gt;&gt; cache.touch('a', 10)
+True
+</pre> <p>Like other methods, the <code>timeout</code> argument is optional and defaults to the <code>TIMEOUT</code> option of the appropriate backend in the <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting.</p> <p><code>touch()</code> returns <code>True</code> if the key was successfully touched, <code>False</code> otherwise.</p> <dl class="method"> <dt id="django.core.caches.cache.incr">
+<code>cache.incr(key, delta=1, version=None)</code> </dt> 
+</dl> <dl class="method"> <dt id="django.core.caches.cache.decr">
+<code>cache.decr(key, delta=1, version=None)</code> </dt> 
+</dl> <p>You can also increment or decrement a key that already exists using the <code>incr()</code> or <code>decr()</code> methods, respectively. By default, the existing cache value will be incremented or decremented by 1. Other increment/decrement values can be specified by providing an argument to the increment/decrement call. A ValueError will be raised if you attempt to increment or decrement a nonexistent cache key.:</p> <pre data-language="python">&gt;&gt;&gt; cache.set('num', 1)
+&gt;&gt;&gt; cache.incr('num')
+2
+&gt;&gt;&gt; cache.incr('num', 10)
+12
+&gt;&gt;&gt; cache.decr('num')
+11
+&gt;&gt;&gt; cache.decr('num', 5)
+6
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last"><code>incr()</code>/<code>decr()</code> methods are not guaranteed to be atomic. On those backends that support atomic increment/decrement (most notably, the memcached backend), increment and decrement operations will be atomic. However, if the backend doesn’t natively provide an increment/decrement operation, it will be implemented using a two-step retrieve/update.</p> </div> <dl class="method"> <dt id="django.core.caches.cache.close">
+<code>cache.close()</code> </dt> 
+</dl> <p>You can close the connection to your cache with <code>close()</code> if implemented by the cache backend.</p> <pre data-language="python">&gt;&gt;&gt; cache.close()
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">For caches that don’t implement <code>close</code> methods it is a no-op.</p> </div> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">The async variants of base methods are prefixed with <code>a</code>, e.g. <code>cache.aadd()</code> or <code>cache.adelete_many()</code>. See <a class="reference internal" href="#id14">Asynchronous support</a> for more details.</p> </div> <div class="versionchanged"> <span class="title">Changed in Django 4.0:</span> <p>The async variants of methods were added to the <code>BaseCache</code>.</p> </div>   <h3 id="id11">Cache key prefixing</h3> <p id="s-cache-key-prefixing">If you are sharing a cache instance between servers, or between your production and development environments, it’s possible for data cached by one server to be used by another server. If the format of cached data is different between servers, this can lead to some very hard to diagnose problems.</p> <p>To prevent this, Django provides the ability to prefix all cache keys used by a server. When a particular cache key is saved or retrieved, Django will automatically prefix the cache key with the value of the <a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_PREFIX"><code>KEY_PREFIX</code></a> cache setting.</p> <p>By ensuring each Django instance has a different <a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_PREFIX"><code>KEY_PREFIX</code></a>, you can ensure that there will be no collisions in cache values.</p>   <h3 id="id12">Cache versioning</h3> <p id="s-cache-versioning">When you change running code that uses cached values, you may need to purge any existing cached values. The easiest way to do this is to flush the entire cache, but this can lead to the loss of cache values that are still valid and useful.</p> <p>Django provides a better way to target individual cache values. Django’s cache framework has a system-wide version identifier, specified using the <a class="reference internal" href="../ref/settings#std:setting-CACHES-VERSION"><code>VERSION</code></a> cache setting. The value of this setting is automatically combined with the cache prefix and the user-provided cache key to obtain the final cache key.</p> <p>By default, any key request will automatically include the site default cache key version. However, the primitive cache functions all include a <code>version</code> argument, so you can specify a particular cache key version to set or get. For example:</p> <pre data-language="python">&gt;&gt;&gt; # Set version 2 of a cache key
+&gt;&gt;&gt; cache.set('my_key', 'hello world!', version=2)
+&gt;&gt;&gt; # Get the default version (assuming version=1)
+&gt;&gt;&gt; cache.get('my_key')
+None
+&gt;&gt;&gt; # Get version 2 of the same key
+&gt;&gt;&gt; cache.get('my_key', version=2)
+'hello world!'
+</pre> <p>The version of a specific key can be incremented and decremented using the <code>incr_version()</code> and <code>decr_version()</code> methods. This enables specific keys to be bumped to a new version, leaving other keys unaffected. Continuing our previous example:</p> <pre data-language="python">&gt;&gt;&gt; # Increment the version of 'my_key'
+&gt;&gt;&gt; cache.incr_version('my_key')
+&gt;&gt;&gt; # The default version still isn't available
+&gt;&gt;&gt; cache.get('my_key')
+None
+# Version 2 isn't available, either
+&gt;&gt;&gt; cache.get('my_key', version=2)
+None
+&gt;&gt;&gt; # But version 3 *is* available
+&gt;&gt;&gt; cache.get('my_key', version=3)
+'hello world!'
+</pre>   <h3 id="id13">Cache key transformation</h3> <p id="s-cache-key-transformation">As described in the previous two sections, the cache key provided by a user is not used verbatim – it is combined with the cache prefix and key version to provide a final cache key. By default, the three parts are joined using colons to produce a final string:</p> <pre data-language="python">def make_key(key, key_prefix, version):
+    return '%s:%s:%s' % (key_prefix, version, key)
+</pre> <p>If you want to combine the parts in different ways, or apply other processing to the final key (e.g., taking a hash digest of the key parts), you can provide a custom key function.</p> <p>The <a class="reference internal" href="../ref/settings#std:setting-CACHES-KEY_FUNCTION"><code>KEY_FUNCTION</code></a> cache setting specifies a dotted-path to a function matching the prototype of <code>make_key()</code> above. If provided, this custom key function will be used instead of the default key combining function.</p>   <h3 id="cache-key-warnings">Cache key warnings</h3> <p id="s-cache-key-warnings">Memcached, the most commonly-used production cache backend, does not allow cache keys longer than 250 characters or containing whitespace or control characters, and using such keys will cause an exception. To encourage cache-portable code and minimize unpleasant surprises, the other built-in cache backends issue a warning (<code>django.core.cache.backends.base.CacheKeyWarning</code>) if a key is used that would cause an error on memcached.</p> <p>If you are using a production backend that can accept a wider range of keys (a custom backend, or one of the non-memcached built-in backends), and want to use this wider range without warnings, you can silence <code>CacheKeyWarning</code> with this code in the <code>management</code> module of one of your <a class="reference internal" href="../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>:</p> <pre data-language="python">import warnings
+
+from django.core.cache import CacheKeyWarning
+
+warnings.simplefilter("ignore", CacheKeyWarning)
+</pre> <p>If you want to instead provide custom key validation logic for one of the built-in backends, you can subclass it, override just the <code>validate_key</code> method, and follow the instructions for <a class="reference internal" href="#using-a-custom-cache-backend">using a custom cache backend</a>. For instance, to do this for the <code>locmem</code> backend, put this code in a module:</p> <pre data-language="python">from django.core.cache.backends.locmem import LocMemCache
+
+class CustomLocMemCache(LocMemCache):
+    def validate_key(self, key):
+        """Custom validation, raising exceptions or warnings as needed."""
+        ...
+</pre> <p>…and use the dotted Python path to this class in the <a class="reference internal" href="../ref/settings#std:setting-CACHES-BACKEND"><code>BACKEND</code></a> portion of your <a class="reference internal" href="../ref/settings#std:setting-CACHES"><code>CACHES</code></a> setting.</p>    <h2 id="id14">Asynchronous support</h2> <div class="versionadded" id="s-asynchronous-support"> <span class="title">New in Django 4.0.</span> </div> <p>Django has developing support for asynchronous cache backends, but does not yet support asynchronous caching. It will be coming in a future release.</p> <p><code>django.core.cache.backends.base.BaseCache</code> has async variants of <a class="reference internal" href="#cache-basic-interface"><span class="std std-ref">all base methods</span></a>. By convention, the asynchronous versions of all methods are prefixed with <code>a</code>. By default, the arguments for both variants are the same:</p> <pre data-language="python">&gt;&gt;&gt; await cache.aset('num', 1)
+&gt;&gt;&gt; await cache.ahas_key('num')
+True
+</pre>   <h2 id="id15">Downstream caches</h2> <p id="s-downstream-caches">So far, this document has focused on caching your <em>own</em> data. But another type of caching is relevant to web development, too: caching performed by “downstream” caches. These are systems that cache pages for users even before the request reaches your website.</p> <p>Here are a few examples of downstream caches:</p> <ul class="simple"> <li>When using HTTP, your <abbr title="Internet Service Provider">ISP</abbr> may cache certain pages, so if you requested a page from <code>http://example.com/</code>, your ISP would send you the page without having to access example.com directly. The maintainers of example.com have no knowledge of this caching; the ISP sits between example.com and your web browser, handling all of the caching transparently. Such caching is not possible under HTTPS as it would constitute a man-in-the-middle attack.</li> <li>Your Django website may sit behind a <em>proxy cache</em>, such as Squid Web Proxy Cache (<a class="reference external" href="http://www.squid-cache.org/">http://www.squid-cache.org/</a>), that caches pages for performance. In this case, each request first would be handled by the proxy, and it would be passed to your application only if needed.</li> <li>Your web browser caches pages, too. If a web page sends out the appropriate headers, your browser will use the local cached copy for subsequent requests to that page, without even contacting the web page again to see whether it has changed.</li> </ul> <p>Downstream caching is a nice efficiency boost, but there’s a danger to it: Many web pages’ contents differ based on authentication and a host of other variables, and cache systems that blindly save pages based purely on URLs could expose incorrect or sensitive data to subsequent visitors to those pages.</p> <p>For example, if you operate a web email system, then the contents of the “inbox” page depend on which user is logged in. If an ISP blindly cached your site, then the first user who logged in through that ISP would have their user-specific inbox page cached for subsequent visitors to the site. That’s not cool.</p> <p>Fortunately, HTTP provides a solution to this problem. A number of HTTP headers exist to instruct downstream caches to differ their cache contents depending on designated variables, and to tell caching mechanisms not to cache particular pages. We’ll look at some of these headers in the sections that follow.</p>   <h2 id="id16">Using <code>Vary</code> headers</h2> <p id="s-using-vary-headers">The <code>Vary</code> header defines which request headers a cache mechanism should take into account when building its cache key. For example, if the contents of a web page depend on a user’s language preference, the page is said to “vary on language.”</p> <p>By default, Django’s cache system creates its cache keys using the requested fully-qualified URL – e.g., <code>"https://www.example.com/stories/2005/?order_by=author"</code>. This means every request to that URL will use the same cached version, regardless of user-agent differences such as cookies or language preferences. However, if this page produces different content based on some difference in request headers – such as a cookie, or a language, or a user-agent – you’ll need to use the <code>Vary</code> header to tell caching mechanisms that the page output depends on those things.</p> <p>To do this in Django, use the convenient <a class="reference internal" href="http/decorators#django.views.decorators.vary.vary_on_headers" title="django.views.decorators.vary.vary_on_headers"><code>django.views.decorators.vary.vary_on_headers()</code></a> view decorator, like so:</p> <pre data-language="python">from django.views.decorators.vary import vary_on_headers
+
+@vary_on_headers('User-Agent')
+def my_view(request):
+    ...
+</pre> <p>In this case, a caching mechanism (such as Django’s own cache middleware) will cache a separate version of the page for each unique user-agent.</p> <p>The advantage to using the <code>vary_on_headers</code> decorator rather than manually setting the <code>Vary</code> header (using something like <code>response.headers['Vary'] =
+'user-agent'</code>) is that the decorator <em>adds</em> to the <code>Vary</code> header (which may already exist), rather than setting it from scratch and potentially overriding anything that was already in there.</p> <p>You can pass multiple headers to <code>vary_on_headers()</code>:</p> <pre data-language="python">@vary_on_headers('User-Agent', 'Cookie')
+def my_view(request):
+    ...
+</pre> <p>This tells downstream caches to vary on <em>both</em>, which means each combination of user-agent and cookie will get its own cache value. For example, a request with the user-agent <code>Mozilla</code> and the cookie value <code>foo=bar</code> will be considered different from a request with the user-agent <code>Mozilla</code> and the cookie value <code>foo=ham</code>.</p> <p>Because varying on cookie is so common, there’s a <a class="reference internal" href="http/decorators#django.views.decorators.vary.vary_on_cookie" title="django.views.decorators.vary.vary_on_cookie"><code>django.views.decorators.vary.vary_on_cookie()</code></a> decorator. These two views are equivalent:</p> <pre data-language="python">@vary_on_cookie
+def my_view(request):
+    ...
+
+@vary_on_headers('Cookie')
+def my_view(request):
+    ...
+</pre> <p>The headers you pass to <code>vary_on_headers</code> are not case sensitive; <code>"User-Agent"</code> is the same thing as <code>"user-agent"</code>.</p> <p>You can also use a helper function, <a class="reference internal" href="../ref/utils#django.utils.cache.patch_vary_headers" title="django.utils.cache.patch_vary_headers"><code>django.utils.cache.patch_vary_headers()</code></a>, directly. This function sets, or adds to, the <code>Vary header</code>. For example:</p> <pre data-language="python">from django.shortcuts import render
+from django.utils.cache import patch_vary_headers
+
+def my_view(request):
+    ...
+    response = render(request, 'template_name', context)
+    patch_vary_headers(response, ['Cookie'])
+    return response
+</pre> <p><code>patch_vary_headers</code> takes an <a class="reference internal" href="../ref/request-response#django.http.HttpResponse" title="django.http.HttpResponse"><code>HttpResponse</code></a> instance as its first argument and a list/tuple of case-insensitive header names as its second argument.</p> <p>For more on Vary headers, see the <a class="rfc reference external" href="https://tools.ietf.org/html/rfc7231.html#section-7.1.4" id="index-0"><strong>official Vary spec</strong></a>.</p>   <h2 id="controlling-cache-using-other-headers">Controlling cache: Using other headers</h2> <p id="s-controlling-cache-using-other-headers">Other problems with caching are the privacy of data and the question of where data should be stored in a cascade of caches.</p> <p>A user usually faces two kinds of caches: their own browser cache (a private cache) and their provider’s cache (a public cache). A public cache is used by multiple users and controlled by someone else. This poses problems with sensitive data–you don’t want, say, your bank account number stored in a public cache. So web applications need a way to tell caches which data is private and which is public.</p> <p>The solution is to indicate a page’s cache should be “private.” To do this in Django, use the <a class="reference internal" href="http/decorators#django.views.decorators.cache.cache_control" title="django.views.decorators.cache.cache_control"><code>cache_control()</code></a> view decorator. Example:</p> <pre data-language="python">from django.views.decorators.cache import cache_control
+
+@cache_control(private=True)
+def my_view(request):
+    ...
+</pre> <p>This decorator takes care of sending out the appropriate HTTP header behind the scenes.</p> <p>Note that the cache control settings “private” and “public” are mutually exclusive. The decorator ensures that the “public” directive is removed if “private” should be set (and vice versa). An example use of the two directives would be a blog site that offers both private and public entries. Public entries may be cached on any shared cache. The following code uses <a class="reference internal" href="../ref/utils#django.utils.cache.patch_cache_control" title="django.utils.cache.patch_cache_control"><code>patch_cache_control()</code></a>, the manual way to modify the cache control header (it is internally called by the <a class="reference internal" href="http/decorators#django.views.decorators.cache.cache_control" title="django.views.decorators.cache.cache_control"><code>cache_control()</code></a> decorator):</p> <pre data-language="python">from django.views.decorators.cache import patch_cache_control
+from django.views.decorators.vary import vary_on_cookie
+
+@vary_on_cookie
+def list_blog_entries_view(request):
+    if request.user.is_anonymous:
+        response = render_only_public_entries()
+        patch_cache_control(response, public=True)
+    else:
+        response = render_private_and_public_entries(request.user)
+        patch_cache_control(response, private=True)
+
+    return response
+</pre> <p>You can control downstream caches in other ways as well (see <a class="rfc reference external" href="https://tools.ietf.org/html/rfc7234.html" id="index-1"><strong>RFC 7234</strong></a> for details on HTTP caching). For example, even if you don’t use Django’s server-side cache framework, you can still tell clients to cache a view for a certain amount of time with the <a class="rfc reference external" href="https://tools.ietf.org/html/rfc7234.html#section-5.2.2.8" id="index-2"><strong>max-age</strong></a> directive:</p> <pre data-language="python">from django.views.decorators.cache import cache_control
+
+@cache_control(max_age=3600)
+def my_view(request):
+    ...
+</pre> <p>(If you <em>do</em> use the caching middleware, it already sets the <code>max-age</code> with the value of the <a class="reference internal" href="../ref/settings#std:setting-CACHE_MIDDLEWARE_SECONDS"><code>CACHE_MIDDLEWARE_SECONDS</code></a> setting. In that case, the custom <code>max_age</code> from the <a class="reference internal" href="http/decorators#django.views.decorators.cache.cache_control" title="django.views.decorators.cache.cache_control"><code>cache_control()</code></a> decorator will take precedence, and the header values will be merged correctly.)</p> <p>Any valid <code>Cache-Control</code> response directive is valid in <code>cache_control()</code>. Here are some more examples:</p> <ul class="simple"> <li><code>no_transform=True</code></li> <li><code>must_revalidate=True</code></li> <li><code>stale_while_revalidate=num_seconds</code></li> <li><code>no_cache=True</code></li> </ul> <p>The full list of known directives can be found in the <a class="reference external" href="https://www.iana.org/assignments/http-cache-directives/http-cache-directives.xhtml">IANA registry</a> (note that not all of them apply to responses).</p> <p>If you want to use headers to disable caching altogether, <a class="reference internal" href="http/decorators#django.views.decorators.cache.never_cache" title="django.views.decorators.cache.never_cache"><code>never_cache()</code></a> is a view decorator that adds headers to ensure the response won’t be cached by browsers or other caches. Example:</p> <pre data-language="python">from django.views.decorators.cache import never_cache
+
+@never_cache
+def myview(request):
+    ...
+</pre>   <h2 id="order-of-middleware">Order of <code>MIDDLEWARE</code>
+</h2> <p id="s-order-of-middleware">If you use caching middleware, it’s important to put each half in the right place within the <a class="reference internal" href="../ref/settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> setting. That’s because the cache middleware needs to know which headers by which to vary the cache storage. Middleware always adds something to the <code>Vary</code> response header when it can.</p> <p><code>UpdateCacheMiddleware</code> runs during the response phase, where middleware is run in reverse order, so an item at the top of the list runs <em>last</em> during the response phase. Thus, you need to make sure that <code>UpdateCacheMiddleware</code> appears <em>before</em> any other middleware that might add something to the <code>Vary</code> header. The following middleware modules do so:</p> <ul class="simple"> <li>
+<code>SessionMiddleware</code> adds <code>Cookie</code>
+</li> <li>
+<code>GZipMiddleware</code> adds <code>Accept-Encoding</code>
+</li> <li>
+<code>LocaleMiddleware</code> adds <code>Accept-Language</code>
+</li> </ul> <p><code>FetchFromCacheMiddleware</code>, on the other hand, runs during the request phase, where middleware is applied first-to-last, so an item at the top of the list runs <em>first</em> during the request phase. The <code>FetchFromCacheMiddleware</code> also needs to run after other middleware updates the <code>Vary</code> header, so <code>FetchFromCacheMiddleware</code> must be <em>after</em> any item that does so.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/cache/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/cache/</a>
+  </p>
+</div>

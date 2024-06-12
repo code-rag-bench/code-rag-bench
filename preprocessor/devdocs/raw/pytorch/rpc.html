@@ -1,0 +1,568 @@
+<h1 id="id1">Distributed RPC Framework</h1> <p id="distributed-rpc-framework">The distributed RPC framework provides mechanisms for multi-machine model training through a set of primitives to allow for remote communication, and a higher-level API to automatically differentiate models split across several machines.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>APIs in the RPC package are stable. There are multiple ongoing work items to improve performance and error handling, which will ship in future releases.</p> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Please refer to <a class="reference external" href="https://pytorch.org/tutorials/beginner/dist_overview.html">PyTorch Distributed Overview</a> for a brief introduction to all features related to distributed training.</p> </div>  <h2 id="basics">Basics</h2> <p>The distributed RPC framework makes it easy to run functions remotely, supports referencing remote objects without copying the real data around, and provides autograd and optimizer APIs to transparently run backward and update parameters across RPC boundaries. These features can be categorized into four sets of APIs.</p> <ol class="arabic simple"> <li>
+<strong>Remote Procedure Call (RPC)</strong> supports running a function on the specified destination worker with the given arguments and getting the return value back or creating a reference to the return value. There are three main RPC APIs: <a class="reference internal" href="#torch.distributed.rpc.rpc_sync" title="torch.distributed.rpc.rpc_sync"><code>rpc_sync()</code></a> (synchronous), <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a> (asynchronous), and <a class="reference internal" href="#torch.distributed.rpc.remote" title="torch.distributed.rpc.remote"><code>remote()</code></a> (asynchronous and returns a reference to the remote return value). Use the synchronous API if the user code cannot proceed without the return value. Otherwise, use the asynchronous API to get a future, and wait on the future when the return value is needed on the caller. The <a class="reference internal" href="#torch.distributed.rpc.remote" title="torch.distributed.rpc.remote"><code>remote()</code></a> API is useful when the requirement is to create something remotely but never need to fetch it to the caller. Imagine the case that a driver process is setting up a parameter server and a trainer. The driver can create an embedding table on the parameter server and then share the reference to the embedding table with the trainer, but itself will never use the embedding table locally. In this case, <a class="reference internal" href="#torch.distributed.rpc.rpc_sync" title="torch.distributed.rpc.rpc_sync"><code>rpc_sync()</code></a> and <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a> are no longer appropriate, as they always imply that the return value will be returned to the caller immediately or in the future.</li> <li>
+<strong>Remote Reference (RRef)</strong> serves as a distributed shared pointer to a local or remote object. It can be shared with other workers and reference counting will be handled transparently. Each RRef only has one owner and the object only lives on that owner. Non-owner workers holding RRefs can get copies of the object from the owner by explicitly requesting it. This is useful when a worker needs to access some data object, but itself is neither the creator (the caller of <a class="reference internal" href="#torch.distributed.rpc.remote" title="torch.distributed.rpc.remote"><code>remote()</code></a>) or the owner of the object. The distributed optimizer, as we will discuss below, is one example of such use cases.</li> <li>
+<strong>Distributed Autograd</strong> stitches together local autograd engines on all the workers involved in the forward pass, and automatically reach out to them during the backward pass to compute gradients. This is especially helpful if the forward pass needs to span multiple machines when conducting, e.g., distributed model parallel training, parameter-server training, etc. With this feature, user code no longer needs to worry about how to send gradients across RPC boundaries and in which order should the local autograd engines be launched, which can become quite complicated where there are nested and inter-dependent RPC calls in the forward pass.</li> <li>
+<strong>Distributed Optimizer</strong>’s constructor takes a <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>Optimizer()</code></a> (e.g., <a class="reference internal" href="optim#torch.optim.SGD" title="torch.optim.SGD"><code>SGD()</code></a>, <a class="reference internal" href="optim#torch.optim.Adagrad" title="torch.optim.Adagrad"><code>Adagrad()</code></a>, etc.) and a list of parameter RRefs, creates an <a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer"><code>Optimizer()</code></a> instance on each distinct RRef owner, and updates parameters accordingly when running <code>step()</code>. When you have distributed forward and backward passes, parameters and gradients will be scattered across multiple workers, and hence it requires an optimizer on each of the involved workers. Distributed Optimizer wraps all those local optimizers into one, and provides a concise constructor and <code>step()</code> API.</li> </ol>   <h2 id="id2">RPC</h2> <p id="rpc">Before using RPC and distributed autograd primitives, initialization must take place. To initialize the RPC framework we need to use <a class="reference internal" href="#torch.distributed.rpc.init_rpc" title="torch.distributed.rpc.init_rpc"><code>init_rpc()</code></a> which would initialize the RPC framework, RRef framework and distributed autograd.</p> <dl class="function" id="module-torch.distributed.rpc"> <dt id="torch.distributed.rpc.init_rpc">
+<code>torch.distributed.rpc.init_rpc(name, backend=None, rank=-1, world_size=None, rpc_backend_options=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc.html#init_rpc"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Initializes RPC primitives such as the local RPC agent and distributed autograd, which immediately makes the current process ready to send and receive RPCs.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – a globally unique name of this node. (e.g., <code>Trainer3</code>, <code>ParameterServer2</code>, <code>Master</code>, <code>Worker1</code>) Name can only contain number, alphabet, underscore, colon, and/or dash, and must be shorter than 128 characters.</li> <li>
+<strong>backend</strong> (<a class="reference internal" href="#torch.distributed.rpc.BackendType" title="torch.distributed.rpc.BackendType">BackendType</a><em>, </em><em>optional</em>) – The type of RPC backend implementation. Supported values include <code>BackendType.TENSORPIPE</code> (the default) and <code>BackendType.PROCESS_GROUP</code>. See <a class="reference internal" href="#rpc-backends"><span class="std std-ref">Backends</span></a> for more information.</li> <li>
+<strong>rank</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – a globally unique id/rank of this node.</li> <li>
+<strong>world_size</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The number of workers in the group.</li> <li>
+<strong>rpc_backend_options</strong> (<a class="reference internal" href="#torch.distributed.rpc.RpcBackendOptions" title="torch.distributed.rpc.RpcBackendOptions">RpcBackendOptions</a><em>, </em><em>optional</em>) – The options passed to the RpcAgent constructor. It must be an agent-specific subclass of <a class="reference internal" href="#torch.distributed.rpc.RpcBackendOptions" title="torch.distributed.rpc.RpcBackendOptions"><code>RpcBackendOptions</code></a> and contains agent-specific initialization configurations. By default, for all agents, it sets the default timeout to 60 seconds and performs the rendezvous with an underlying process group initialized using <code>init_method = "env://"</code>, meaning that environment variables <code>MASTER_ADDR</code> and <code>MASTER_PORT</code> need to be set properly. See <a class="reference internal" href="#rpc-backends"><span class="std std-ref">Backends</span></a> for more information and find which options are available.</li> </ul> </dd> </dl> </dd>
+</dl> <p>The following APIs allow users to remotely execute functions as well as create references (RRefs) to remote data objects. In these APIs, when passing a <code>Tensor</code> as an argument or a return value, the destination worker will try to create a <code>Tensor</code> with the same meta (i.e., shape, stride, etc.). We intentionally disallow transmitting CUDA tensors because it might crash if the device lists on source and destination workers do not match. In such cases, applications can always explicitly move the input tensors to CPU on the caller and move it to the desired devices on the callee if necessary.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>TorchScript support in RPC is a prototype feature and subject to change. Since v1.5.0, <code>torch.distributed.rpc</code> supports calling TorchScript functions as RPC target functions, and this will help improve parallelism on the callee side as executing TorchScript functions does not require GIL.</p> </div> <dl class="function"> <dt id="torch.distributed.rpc.rpc_sync">
+<code>torch.distributed.rpc.rpc_sync(to, func, args=None, kwargs=None, timeout=-1.0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#rpc_sync"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Make a blocking RPC call to run function <code>func</code> on worker <code>to</code>. RPC messages are sent and received in parallel to execution of Python code. This method is thread-safe.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>to</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em> or </em><a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo">WorkerInfo</a><em> or </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – name/rank/<code>WorkerInfo</code> of the destination worker.</li> <li>
+<strong>func</strong> (<em>callable</em>) – a callable function, such as Python callables, builtin operators (e.g. <a class="reference internal" href="generated/torch.add#torch.add" title="torch.add"><code>add()</code></a>) and annotated TorchScript functions.</li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.9)">tuple</a>) – the argument tuple for the <code>func</code> invocation.</li> <li>
+<strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.9)">dict</a>) – is a dictionary of keyword arguments for the <code>func</code> invocation.</li> <li>
+<strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – timeout in seconds to use for this RPC. If the RPC does not complete in this amount of time, an exception indicating it has timed out will be raised. A value of 0 indicates an infinite timeout, i.e. a timeout error will never be raised. If not provided, the default value set during initialization or with <code>_set_rpc_timeout</code> is used.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns the result of running <code>func</code> with <code>args</code> and <code>kwargs</code>.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Using GPU tensors as arguments or return values of <code>func</code> is not supported since we don’t support sending GPU tensors over the wire. You need to explicitly copy GPU tensors to CPU before using them as arguments or return values of <code>func</code>.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<p>Make sure that <code>MASTER_ADDR</code> and <code>MASTER_PORT</code> are set properly on both workers. Refer to <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> API for more details. For example,</p> <pre data-language="python">&gt;&gt;&gt; export MASTER_ADDR=localhost
+&gt;&gt;&gt; export MASTER_PORT=5678
+</pre> <p>Then run the following code in two different processes:</p> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; ret = rpc.rpc_sync("worker1", torch.add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <p>Below is an example of running a TorchScript function using RPC.</p> <pre data-language="python">&gt;&gt;&gt; # On both workers:
+&gt;&gt;&gt; @torch.jit.script
+&gt;&gt;&gt; def my_script_add(t1, t2):
+&gt;&gt;&gt;    return torch.add(t1, t2)
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; ret = rpc.rpc_sync("worker1", my_script_add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.rpc.rpc_async">
+<code>torch.distributed.rpc.rpc_async(to, func, args=None, kwargs=None, timeout=-1.0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#rpc_async"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Make a non-blocking RPC call to run function <code>func</code> on worker <code>to</code>. RPC messages are sent and received in parallel to execution of Python code. This method is thread-safe. This method will immediately return a <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> that can be awaited on.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>to</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em> or </em><a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo">WorkerInfo</a><em> or </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – name/rank/<code>WorkerInfo</code> of the destination worker.</li> <li>
+<strong>func</strong> (<em>callable</em>) – a callable function, such as Python callables, builtin operators (e.g. <a class="reference internal" href="generated/torch.add#torch.add" title="torch.add"><code>add()</code></a>) and annotated TorchScript functions.</li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.9)">tuple</a>) – the argument tuple for the <code>func</code> invocation.</li> <li>
+<strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.9)">dict</a>) – is a dictionary of keyword arguments for the <code>func</code> invocation.</li> <li>
+<strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – timeout in seconds to use for this RPC. If the RPC does not complete in this amount of time, an exception indicating it has timed out will be raised. A value of 0 indicates an infinite timeout, i.e. a timeout error will never be raised. If not provided, the default value set during initialization or with <code>_set_rpc_timeout</code> is used.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object that can be waited on. When completed, the return value of <code>func</code> on <code>args</code> and <code>kwargs</code> can be retrieved from the <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Using GPU tensors as arguments or return values of <code>func</code> is not supported since we don’t support sending GPU tensors over the wire. You need to explicitly copy GPU tensors to CPU before using them as arguments or return values of <code>func</code>.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The <code>rpc_async</code> API does not copy storages of argument tensors until sending them over the wire, which could be done by a different thread depending on the RPC backend type. The caller should make sure that the contents of those tensors stay intact until the returned <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> completes.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<p>Make sure that <code>MASTER_ADDR</code> and <code>MASTER_PORT</code> are set properly on both workers. Refer to <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> API for more details. For example,</p> <pre data-language="python">&gt;&gt;&gt; export MASTER_ADDR=localhost
+&gt;&gt;&gt; export MASTER_PORT=5678
+</pre> <p>Then run the following code in two different processes:</p> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; fut1 = rpc.rpc_async("worker1", torch.add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; fut2 = rpc.rpc_async("worker1", min, args=(1, 2))
+&gt;&gt;&gt; result = fut1.wait() + fut2.wait()
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <p>Below is an example of running a TorchScript function using RPC.</p> <pre data-language="python">&gt;&gt;&gt; # On both workers:
+&gt;&gt;&gt; @torch.jit.script
+&gt;&gt;&gt; def my_script_add(t1, t2):
+&gt;&gt;&gt;    return torch.add(t1, t2)
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; fut = rpc.rpc_async("worker1", my_script_add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; ret = fut.wait()
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.rpc.remote">
+<code>torch.distributed.rpc.remote(to, func, args=None, kwargs=None, timeout=-1.0)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#remote"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Make a remote call to run <code>func</code> on worker <code>to</code> and return an <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a> to the result value immediately. Worker <code>to</code> will be the owner of the returned <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a>, and the worker calling <code>remote</code> is a user. The owner manages the global reference count of its <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a>, and the owner <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a> is only destructed when globally there are no living references to it.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>to</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em> or </em><a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo">WorkerInfo</a><em> or </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – name/rank/<code>WorkerInfo</code> of the destination worker.</li> <li>
+<strong>func</strong> (<em>callable</em>) – a callable function, such as Python callables, builtin operators (e.g. <a class="reference internal" href="generated/torch.add#torch.add" title="torch.add"><code>add()</code></a>) and annotated TorchScript functions.</li> <li>
+<strong>args</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#tuple" title="(in Python v3.9)">tuple</a>) – the argument tuple for the <code>func</code> invocation.</li> <li>
+<strong>kwargs</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.9)">dict</a>) – is a dictionary of keyword arguments for the <code>func</code> invocation.</li> <li>
+<strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – timeout in seconds for this remote call. If the creation of this <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a> on worker <code>to</code> is not successfully processed on this worker within this timeout, then the next time there is an attempt to use the RRef (such as <code>to_here()</code>), a timeout will be raised indicating this failure. A value of 0 indicates an infinite timeout, i.e. a timeout error will never be raised. If not provided, the default value set during initialization or with <code>_set_rpc_timeout</code> is used.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A user <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a> instance to the result value. Use the blocking API <a class="reference internal" href="#torch.distributed.rpc.RRef.to_here" title="torch.distributed.rpc.RRef.to_here"><code>torch.distributed.rpc.RRef.to_here()</code></a> to retrieve the result value locally.</p> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Using GPU tensors as arguments or return values of <code>func</code> is not supported since we don’t support sending GPU tensors over the wire. You need to explicitly copy GPU tensors to CPU before using them as arguments or return values of <code>func</code>.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The <code>remote</code> API does not copy storages of argument tensors until sending them over the wire, which could be done by a different thread depending on the RPC backend type. The caller should make sure that the contents of those tensors stay intact until the returned RRef is confirmed by the owner, which can be checked using the <a class="reference internal" href="#torch.distributed.rpc.RRef.confirmed_by_owner" title="torch.distributed.rpc.RRef.confirmed_by_owner"><code>torch.distributed.rpc.RRef.confirmed_by_owner()</code></a> API.</p> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Errors such as timeouts for the <code>remote</code> API are handled on a best-effort basis. This means that when remote calls initiated by <code>remote</code> fail, such as with a timeout error, we take a best-effort approach to error handling. This means that errors are handled and set on the resulting RRef on an asynchronous basis. If the RRef has not been used by the application before this handling (such as <code>to_here</code> or fork call), then future uses of the <code>RRef</code> will appropriately raise errors. However, it is possible that the user application will use the <code>RRef</code> before the errors are handled. In this case, errors may not be raised as they have not yet been handled.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<p>Make sure that <code>MASTER_ADDR</code> and <code>MASTER_PORT</code> are set properly on both workers. Refer to <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> API for more details. For example,</p> <pre data-language="python">&gt;&gt;&gt; export MASTER_ADDR=localhost
+&gt;&gt;&gt; export MASTER_PORT=5678
+</pre> <p>Then run the following code in two different processes:</p> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; rref1 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; rref2 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 1))
+&gt;&gt;&gt; x = rref1.to_here() + rref2.to_here()
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <p>Below is an example of running a TorchScript function using RPC.</p> <pre data-language="python">&gt;&gt;&gt; # On both workers:
+&gt;&gt;&gt; @torch.jit.script
+&gt;&gt;&gt; def my_script_add(t1, t2):
+&gt;&gt;&gt;    return torch.add(t1, t2)
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; rref = rpc.remote("worker1", my_script_add, args=(torch.ones(2), 3))
+&gt;&gt;&gt; rref.to_here()
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; rpc.shutdown()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.rpc.get_worker_info">
+<code>torch.distributed.rpc.get_worker_info(worker_name=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#get_worker_info"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Get <a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo"><code>WorkerInfo</code></a> of a given worker name. Use this <a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo"><code>WorkerInfo</code></a> to avoid passing an expensive string on every invocation.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>worker_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – the string name of a worker. If <code>None</code>, return the the id of the current worker. (default <code>None</code>)</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p><a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo"><code>WorkerInfo</code></a> instance for the given <code>worker_name</code> or <a class="reference internal" href="#torch.distributed.rpc.WorkerInfo" title="torch.distributed.rpc.WorkerInfo"><code>WorkerInfo</code></a> of the current worker if <code>worker_name</code> is <code>None</code>.</p> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.rpc.shutdown">
+<code>torch.distributed.rpc.shutdown(graceful=True)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#shutdown"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Perform a shutdown of the RPC agent, and then destroy the RPC agent. This stops the local agent from accepting outstanding requests, and shuts down the RPC framework by terminating all RPC threads. If <code>graceful=True</code>, this will block until all local and remote RPC processes reach this method and wait for all outstanding work to complete. Otherwise, if <code>graceful=False</code>, this is a local shutdown, and it does not wait for other RPC processes to reach this method.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>For <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> objects returned by <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a>, <code>future.wait()</code> should not be called after <code>shutdown()</code>.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>graceful</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – Whether to do a graceful shutdown or not. If True, this will 1) wait until there is no pending system messages for <code>UserRRefs</code> and delete them; 2) block until all local and remote RPC processes have reached this method and wait for all outstanding work to complete.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<p>Make sure that <code>MASTER_ADDR</code> and <code>MASTER_PORT</code> are set properly on both workers. Refer to <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> API for more details. For example,</p> <pre data-language="python">&gt;&gt;&gt; export MASTER_ADDR=localhost
+&gt;&gt;&gt; export MASTER_PORT=5678
+</pre> <p>Then run the following code in two different processes:</p> <pre data-language="python">&gt;&gt;&gt; # On worker 0:
+&gt;&gt;&gt; import torch
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker0", rank=0, world_size=2)
+&gt;&gt;&gt; # do some work
+&gt;&gt;&gt; result = rpc.rpc_sync("worker1", torch.add, args=(torch.ones(1), 1))
+&gt;&gt;&gt; # ready to shutdown
+&gt;&gt;&gt; rpc.shutdown()
+</pre> <pre data-language="python">&gt;&gt;&gt; # On worker 1:
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; rpc.init_rpc("worker1", rank=1, world_size=2)
+&gt;&gt;&gt; # wait for worker 0 to finish work, and then shutdown.
+&gt;&gt;&gt; rpc.shutdown()
+</pre> </dd> </dl> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.rpc.WorkerInfo">
+<code>class torch.distributed.rpc.WorkerInfo</code> </dt> <dd>
+<p>A structure that encapsulates information of a worker in the system. Contains the name and ID of the worker. This class is not meant to be constructed directly, rather, an instance can be retrieved through <a class="reference internal" href="#torch.distributed.rpc.get_worker_info" title="torch.distributed.rpc.get_worker_info"><code>get_worker_info()</code></a> and the result can be passed in to functions such as <a class="reference internal" href="#torch.distributed.rpc.rpc_sync" title="torch.distributed.rpc.rpc_sync"><code>rpc_sync()</code></a>, <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a>, <a class="reference internal" href="#torch.distributed.rpc.remote" title="torch.distributed.rpc.remote"><code>remote()</code></a> to avoid copying a string on every invocation.</p> <dl class="method"> <dt id="torch.distributed.rpc.WorkerInfo.id">
+<code>property id</code> </dt> <dd>
+<p>Globally unique id to identify the worker.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.WorkerInfo.name">
+<code>property name</code> </dt> <dd>
+<p>The name of the worker.</p> </dd>
+</dl> </dd>
+</dl> <p>The RPC package also provides decorators which allow applications to specify how a given function should be treated on the callee side.</p> <dl class="function"> <dt id="torch.distributed.rpc.functions.async_execution">
+<code>torch.distributed.rpc.functions.async_execution(fn)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/functions.html#async_execution"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>A decorator for a function indicating that the return value of the function is guaranteed to be a <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object and this function can run asynchronously on the RPC callee. More specifically, the callee extracts the <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> returned by the wrapped function and installs subsequent processing steps as a callback to that <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a>. The installed callback will read the value from the <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> when completed and send the value back as the RPC response. That also means the returned <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> only exists on the callee side and is never sent through RPC. This decorator is useful when the wrapped function’s (<code>fn</code>) execution needs to pause and resume due to, e.g., containing <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a> or waiting for other signals.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>To enable asynchronous execution, applications must pass the function object returned by this decorator to RPC APIs. If RPC detected attributes installed by this decorator, it knows that this function returns a <code>Future</code> object and will handle that accordingly. However, this does not mean this decorator has to be outmost one when defining a function. For example, when combined with <code>@staticmethod</code> or <code>@classmethod</code>, <code>@rpc.functions.async_execution</code> needs to be the inner decorator to allow the target function be recognized as a static or class function. This target function can still execute asynchronously because, when accessed, the static or class method preserves attributes installed by <code>@rpc.functions.async_execution</code>.</p> </div> <dl> <dt>Example::</dt>
+<dd>
+<p>The returned <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> object can come from <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a>, <a class="reference internal" href="futures#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a>, or <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> constructor. The example below shows directly using the <a class="reference internal" href="futures#torch.futures.Future" title="torch.futures.Future"><code>Future</code></a> returned by <a class="reference internal" href="futures#torch.futures.Future.then" title="torch.futures.Future.then"><code>then()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt;
+&gt;&gt;&gt; # omitting setup and shutdown RPC
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On all workers
+&gt;&gt;&gt; @rpc.functions.async_execution
+&gt;&gt;&gt; def async_add_chained(to, x, y, z):
+&gt;&gt;&gt;     # This function runs on "worker1" and returns immediately when
+&gt;&gt;&gt;     # the callback is installed through the `then(cb)` API. In the
+&gt;&gt;&gt;     # mean time, the `rpc_async` to "worker2" can run concurrently.
+&gt;&gt;&gt;     # When the return value of that `rpc_async` arrives at
+&gt;&gt;&gt;     # "worker1", "worker1" will run the lambda function accordingly
+&gt;&gt;&gt;     # and set the value for the previously returned `Future`, which
+&gt;&gt;&gt;     # will then trigger RPC to send the result back to "worker0".
+&gt;&gt;&gt;     return rpc.rpc_async(to, torch.add, args=(x, y)).then(
+&gt;&gt;&gt;         lambda fut: fut.wait() + z
+&gt;&gt;&gt;     )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On worker0
+&gt;&gt;&gt; ret = rpc.rpc_sync(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     async_add_chained,
+&gt;&gt;&gt;     args=("worker2", torch.ones(2), 1, 1)
+&gt;&gt;&gt; )
+&gt;&gt;&gt; print(ret)  # prints tensor([3., 3.])
+</pre> <p>When combined with TorchScript decorators, this decorator must be the outmost one.</p> <pre data-language="python">&gt;&gt;&gt; from torch import Tensor
+&gt;&gt;&gt; from torch.futures import Future
+&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt;
+&gt;&gt;&gt; # omitting setup and shutdown RPC
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On all workers
+&gt;&gt;&gt; @torch.jit.script
+&gt;&gt;&gt; def script_add(x: Tensor, y: Tensor) -&gt; Tensor:
+&gt;&gt;&gt;     return x + y
+&gt;&gt;&gt;
+&gt;&gt;&gt; @rpc.functions.async_execution
+&gt;&gt;&gt; @torch.jit.script
+&gt;&gt;&gt; def async_add(to: str, x: Tensor, y: Tensor) -&gt; Future[Tensor]:
+&gt;&gt;&gt;     return rpc.rpc_async(to, script_add, (x, y))
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On worker0
+&gt;&gt;&gt; ret = rpc.rpc_sync(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     async_add,
+&gt;&gt;&gt;     args=("worker2", torch.ones(2), 1)
+&gt;&gt;&gt; )
+&gt;&gt;&gt; print(ret)  # prints tensor([2., 2.])
+</pre> <p>When combined with static or class method, this decorator must be the inner one.</p> <pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt;
+&gt;&gt;&gt; # omitting setup and shutdown RPC
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On all workers
+&gt;&gt;&gt; class AsyncExecutionClass:
+&gt;&gt;&gt;
+&gt;&gt;&gt;     @staticmethod
+&gt;&gt;&gt;     @rpc.functions.async_execution
+&gt;&gt;&gt;     def static_async_add(to, x, y, z):
+&gt;&gt;&gt;         return rpc.rpc_async(to, torch.add, args=(x, y)).then(
+&gt;&gt;&gt;             lambda fut: fut.wait() + z
+&gt;&gt;&gt;         )
+&gt;&gt;&gt;
+&gt;&gt;&gt;     @classmethod
+&gt;&gt;&gt;     @rpc.functions.async_execution
+&gt;&gt;&gt;     def class_async_add(cls, to, x, y, z):
+&gt;&gt;&gt;         ret_fut = torch.futures.Future()
+&gt;&gt;&gt;         rpc.rpc_async(to, torch.add, args=(x, y)).then(
+&gt;&gt;&gt;             lambda fut: ret_fut.set_result(fut.wait() + z)
+&gt;&gt;&gt;         )
+&gt;&gt;&gt;         return ret_fut
+&gt;&gt;&gt;
+&gt;&gt;&gt;     @rpc.functions.async_execution
+&gt;&gt;&gt;     def bound_async_add(self, to, x, y, z):
+&gt;&gt;&gt;         return rpc.rpc_async(to, torch.add, args=(x, y)).then(
+&gt;&gt;&gt;             lambda fut: fut.wait() + z
+&gt;&gt;&gt;         )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # On worker0
+&gt;&gt;&gt; ret = rpc.rpc_sync(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     AsyncExecutionClass.static_async_add,
+&gt;&gt;&gt;     args=("worker2", torch.ones(2), 1, 2)
+&gt;&gt;&gt; )
+&gt;&gt;&gt; print(ret)  # prints tensor([4., 4.])
+&gt;&gt;&gt;
+&gt;&gt;&gt; ret = rpc.rpc_sync(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     AsyncExecutionClass.class_async_add,
+&gt;&gt;&gt;     args=("worker2", torch.ones(2), 1, 2)
+&gt;&gt;&gt; )
+&gt;&gt;&gt; print(ret)  # prints tensor([4., 4.])
+</pre> <p>This decorator also works with RRef helpers, i.e., . <a class="reference internal" href="#torch.distributed.rpc.RRef.rpc_sync" title="torch.distributed.rpc.RRef.rpc_sync"><code>torch.distributed.rpc.RRef.rpc_sync()</code></a>, <a class="reference internal" href="#torch.distributed.rpc.RRef.rpc_async" title="torch.distributed.rpc.RRef.rpc_async"><code>torch.distributed.rpc.RRef.rpc_async()</code></a>, and <a class="reference internal" href="#torch.distributed.rpc.RRef.remote" title="torch.distributed.rpc.RRef.remote"><code>torch.distributed.rpc.RRef.remote()</code></a>.</p> <pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt;
+&gt;&gt;&gt; # reuse the AsyncExecutionClass class above
+&gt;&gt;&gt; rref = rpc.remote("worker1", AsyncExecutionClass)
+&gt;&gt;&gt; ret = rref.rpc_sync().static_async_add("worker2", torch.ones(2), 1, 2)
+&gt;&gt;&gt; print(ret)  # prints tensor([4., 4.])
+&gt;&gt;&gt;
+&gt;&gt;&gt; rref = rpc.remote("worker1", AsyncExecutionClass)
+&gt;&gt;&gt; ret = rref.rpc_async().static_async_add("worker2", torch.ones(2), 1, 2).wait()
+&gt;&gt;&gt; print(ret)  # prints tensor([4., 4.])
+&gt;&gt;&gt;
+&gt;&gt;&gt; rref = rpc.remote("worker1", AsyncExecutionClass)
+&gt;&gt;&gt; ret = rref.remote().static_async_add("worker2", torch.ones(2), 1, 2).to_here()
+&gt;&gt;&gt; print(ret)  # prints tensor([4., 4.])
+</pre> </dd> </dl> </dd>
+</dl>  <h3 id="rpc-backends">Backends</h3> <p id="backends">The RPC module can leverage different backends to perform the communication between the nodes. The backend to be used can be specified in the <a class="reference internal" href="#torch.distributed.rpc.init_rpc" title="torch.distributed.rpc.init_rpc"><code>init_rpc()</code></a> function, by passing a certain value of the <a class="reference internal" href="#torch.distributed.rpc.BackendType" title="torch.distributed.rpc.BackendType"><code>BackendType</code></a> enum. Regardless of what backend is used, the rest of the RPC API won’t change. Each backend also defines its own subclass of the <a class="reference internal" href="#torch.distributed.rpc.RpcBackendOptions" title="torch.distributed.rpc.RpcBackendOptions"><code>RpcBackendOptions</code></a> class, an instance of which can also be passed to <a class="reference internal" href="#torch.distributed.rpc.init_rpc" title="torch.distributed.rpc.init_rpc"><code>init_rpc()</code></a> to configure the backend’s behavior.</p> <dl class="class"> <dt id="torch.distributed.rpc.BackendType">
+<code>class torch.distributed.rpc.BackendType</code> </dt> <dd>
+<p>An enum class of available backends.</p> <p>PyTorch ships with two builtin backends: <code>BackendType.TENSORPIPE</code> and <code>BackendType.PROCESS_GROUP</code>. Additional ones can be registered using the <code>register_backend()</code> function.</p> </dd>
+</dl> <dl class="class"> <dt id="torch.distributed.rpc.RpcBackendOptions">
+<code>class torch.distributed.rpc.RpcBackendOptions</code> </dt> <dd>
+<p>An abstract structure encapsulating the options passed into the RPC backend. An instance of this class can be passed in to <a class="reference internal" href="#torch.distributed.rpc.init_rpc" title="torch.distributed.rpc.init_rpc"><code>init_rpc()</code></a> in order to initialize RPC with specific configurations, such as the RPC timeout and <code>init_method</code> to be used.</p> <dl class="method"> <dt id="torch.distributed.rpc.RpcBackendOptions.init_method">
+<code>property init_method</code> </dt> <dd>
+<p>URL specifying how to initialize the process group. Default is <code>env://</code></p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RpcBackendOptions.rpc_timeout">
+<code>property rpc_timeout</code> </dt> <dd>
+<p>A float indicating the timeout to use for all RPCs. If an RPC does not complete in this timeframe, it will complete with an exception indicating that it has timed out.</p> </dd>
+</dl> </dd>
+</dl>  <h4 id="tensorpipe-backend">TensorPipe Backend</h4> <p>The TensorPipe agent, which is the default, leverages <a class="reference external" href="https://github.com/pytorch/tensorpipe">the TensorPipe library</a>, which provides a natively point-to-point communication primitive specifically suited for machine learning that fundamentally addresses some of the limitations of Gloo. Compared to Gloo, it has the advantage of being asynchronous, which allows a large number of transfers to occur simultaneously, each at their own speed, without blocking each other. It will only open pipes between pairs of nodes when needed, on demand, and when one node fails only its incident pipes will be closed, while all other ones will keep working as normal. In addition, it is able to support multiple different transports (TCP, of course, but also shared memory, NVLink, InfiniBand, …) and can automatically detect their availability and negotiate the best transport to use for each pipe.</p> <p>The TensorPipe backend has been introduced in PyTorch v1.6 and is being actively developed. At the moment, it only supports CPU tensors, with GPU support coming soon. It comes with a TCP-based transport, just like Gloo. It is also able to automatically chunk and multiplex large tensors over multiple sockets and threads in order to achieve very high bandwidths. The agent will be able to pick the best transport on its own, with no intervention required.</p> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt; os.environ['MASTER_ADDR'] = 'localhost'
+&gt;&gt;&gt; os.environ['MASTER_PORT'] = '29500'
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.init_rpc(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     rank=0,
+&gt;&gt;&gt;     world_size=2,
+&gt;&gt;&gt;     rpc_backend_options=rpc.TensorPipeRpcBackendOptions(
+&gt;&gt;&gt;         num_worker_threads=8,
+&gt;&gt;&gt;         rpc_timeout=20 # 20 second timeout
+&gt;&gt;&gt;     )
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # omitting init_rpc invocation on worker2
+</pre> <dl class="class"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions">
+<code>class torch.distributed.rpc.TensorPipeRpcBackendOptions(*, num_worker_threads=16, rpc_timeout=60.0, init_method='env://', device_maps=None, _transports=None, _channels=None)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/options.html#TensorPipeRpcBackendOptions"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>The backend options for <code>TensorPipeAgent</code>, derived from <a class="reference internal" href="#torch.distributed.rpc.RpcBackendOptions" title="torch.distributed.rpc.RpcBackendOptions"><code>RpcBackendOptions</code></a>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>num_worker_threads</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – The number of threads in the thread-pool used by <code>TensorPipeAgent</code> to execute requests (default: 16).</li> <li>
+<strong>rpc_timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – The default timeout, in seconds, for RPC requests (default: 60 seconds). If the RPC has not completed in this timeframe, an exception indicating so will be raised. Callers can override this timeout for individual RPCs in <a class="reference internal" href="#torch.distributed.rpc.rpc_sync" title="torch.distributed.rpc.rpc_sync"><code>rpc_sync()</code></a> and <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a> if necessary.</li> <li>
+<strong>init_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>optional</em>) – The URL to initialize the distributed store used for rendezvous. It takes any value accepted for the same argument of <a class="reference internal" href="distributed#torch.distributed.init_process_group" title="torch.distributed.init_process_group"><code>init_process_group()</code></a> (default: <code>env://</code>).</li> <li>
+<strong>device_maps</strong> (<em>Dict</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Dict</em><em>]</em>) – Device placement mappings from this worker to the callee. Key is the callee worker name and value the dictionary (<code>Dict</code> of <code>int</code>, <code>str</code>, or <code>torch.device</code>) that maps this worker’s devices to the callee worker’s devices. (default: <code>None</code>)</li> </ul> </dd> </dl> <dl class="method"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions.device_maps">
+<code>property device_maps</code> </dt> <dd>
+<p>The device map locations.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions.init_method">
+<code>property init_method</code> </dt> <dd>
+<p>URL specifying how to initialize the process group. Default is <code>env://</code></p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions.num_worker_threads">
+<code>property num_worker_threads</code> </dt> <dd>
+<p>The number of threads in the thread-pool used by <code>TensorPipeAgent</code> to execute requests.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions.rpc_timeout">
+<code>property rpc_timeout</code> </dt> <dd>
+<p>A float indicating the timeout to use for all RPCs. If an RPC does not complete in this timeframe, it will complete with an exception indicating that it has timed out.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.TensorPipeRpcBackendOptions.set_device_map">
+<code>set_device_map(to, device_map)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/options.html#TensorPipeRpcBackendOptions.set_device_map"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Set device mapping between each RPC caller and callee pair. This function can be called multiple times to incrementally add device placement configurations.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>worker_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – Callee name.</li> <li>
+<strong>device_map</strong> (<em>Dict of python:int</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, or </em><a class="reference internal" href="tensor_attributes#torch.torch.device" title="torch.torch.device">torch.device</a>) – Device placement mappings from this worker to the callee. This map must be invertible.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; # both workers
+&gt;&gt;&gt; def add(x, y):
+&gt;&gt;&gt;     print(x)  # tensor([1., 1.], device='cuda:1')
+&gt;&gt;&gt;     return x + y, (x + y).to(2)
+&gt;&gt;&gt;
+&gt;&gt;&gt; # on worker 0
+&gt;&gt;&gt; options = TensorPipeRpcBackendOptions(
+&gt;&gt;&gt;     num_worker_threads=8,
+&gt;&gt;&gt;     device_maps={"worker1": {0, 1}}
+&gt;&gt;&gt;     # maps worker0's cuda:0 to worker1's cuda:1
+&gt;&gt;&gt; )
+&gt;&gt;&gt; options.set_device_map("worker1", {1, 2})
+&gt;&gt;&gt; # maps worker0's cuda:1 to worker1's cuda:2
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.init_rpc(
+&gt;&gt;&gt;     "worker0",
+&gt;&gt;&gt;     rank=0,
+&gt;&gt;&gt;     world_size=2
+&gt;&gt;&gt;     backend=rpc.BackendType.TENSORPIPE,
+&gt;&gt;&gt;     rpc_backend_options=options
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; x = torch.ones(2)
+&gt;&gt;&gt; rets = rpc.rpc_sync("worker1", add, args=(x.to(0), 1))
+&gt;&gt;&gt; # The first argument will be moved to cuda:1 on worker1. When
+&gt;&gt;&gt; # sending the return value back, it will follow the invert of
+&gt;&gt;&gt; # the device map, and hence will be moved back to cuda:0 and
+&gt;&gt;&gt; # cuda:1 on worker0
+&gt;&gt;&gt; print(rets[0])  # tensor([2., 2.], device='cuda:0')
+&gt;&gt;&gt; print(rets[0])  # tensor([2., 2.], device='cuda:1')
+</pre> </dd> </dl> </dd>
+</dl> </dd>
+</dl>   <h4 id="process-group-backend">Process Group Backend</h4> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>The Process Group Backend will be deprecated soon, we recommend using the TensorPipe Backend instead.</p> </div> <p>The Process Group agent instantiates a process group from the <a class="reference internal" href="distributed#module-torch.distributed" title="torch.distributed"><code>distributed</code></a> module and utilizes its point-to-point communication capabilities to send RPC messages. Internally, the process group uses <a class="reference external" href="https://github.com/facebookincubator/gloo/">the Gloo library</a>.</p> <p>Gloo has been hardened by years of extensive use in PyTorch and is thus very reliable. However, as it was designed to perform collective communication, it may not always be the best fit for RPC. For example, each networking operation is synchronous and blocking, which means that it cannot be run in parallel with others. Moreover, it opens a connection between all pairs of nodes, and brings down all of them when one fails, thus reducing the resiliency and the elasticity of the system.</p> <p>Example:</p> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt; os.environ['MASTER_ADDR'] = 'localhost'
+&gt;&gt;&gt; os.environ['MASTER_PORT'] = '29500'
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.init_rpc(
+&gt;&gt;&gt;     "worker1",
+&gt;&gt;&gt;     rank=0,
+&gt;&gt;&gt;     world_size=2,
+&gt;&gt;&gt;     backend=rpc.BackendType.PROCESS_GROUP,
+&gt;&gt;&gt;     rpc_backend_options=rpc.ProcessGroupRpcBackendOptions(
+&gt;&gt;&gt;         num_send_recv_threads=16,
+&gt;&gt;&gt;         rpc_timeout=20 # 20 second timeout
+&gt;&gt;&gt;     )
+&gt;&gt;&gt; )
+&gt;&gt;&gt;
+&gt;&gt;&gt; # omitting init_rpc invocation on worker2
+</pre> <dl class="class"> <dt id="torch.distributed.rpc.ProcessGroupRpcBackendOptions">
+<code>class torch.distributed.rpc.ProcessGroupRpcBackendOptions</code> </dt> <dd>
+<p>The backend options class for <code>ProcessGroupAgent</code>, which is derived from <code>RpcBackendOptions</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>num_send_recv_threads</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – The number of threads in the thread-pool used by <code>ProcessGroupAgent</code> (default: 4).</li> <li>
+<strong>rpc_timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – The default timeout, in seconds, for RPC requests (default: 60 seconds). If the RPC has not completed in this timeframe, an exception indicating so will be raised. Callers can override this timeout for individual RPCs in <a class="reference internal" href="#torch.distributed.rpc.rpc_sync" title="torch.distributed.rpc.rpc_sync"><code>rpc_sync()</code></a> and <a class="reference internal" href="#torch.distributed.rpc.rpc_async" title="torch.distributed.rpc.rpc_async"><code>rpc_async()</code></a> if necessary.</li> <li>
+<strong>init_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>optional</em>) – The URL to initialize <code>ProcessGroupGloo</code> (default: <code>env://</code>).</li> </ul> </dd> </dl> <dl class="method"> <dt id="torch.distributed.rpc.ProcessGroupRpcBackendOptions.init_method">
+<code>property init_method</code> </dt> <dd>
+<p>URL specifying how to initialize the process group. Default is <code>env://</code></p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.ProcessGroupRpcBackendOptions.num_send_recv_threads">
+<code>property num_send_recv_threads</code> </dt> <dd>
+<p>The number of threads in the thread-pool used by ProcessGroupAgent.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.ProcessGroupRpcBackendOptions.rpc_timeout">
+<code>property rpc_timeout</code> </dt> <dd>
+<p>A float indicating the timeout to use for all RPCs. If an RPC does not complete in this timeframe, it will complete with an exception indicating that it has timed out.</p> </dd>
+</dl> </dd>
+</dl>     <h2 id="id3">RRef</h2> <p id="rref">An <code>RRef</code> (Remote REFerence) is a reference to a value of some type <code>T</code> (e.g. <code>Tensor</code>) on a remote worker. This handle keeps the referenced remote value alive on the owner, but there is no implication that the value will be transferred to the local worker in the future. RRefs can be used in multi-machine training by holding references to <a class="reference external" href="https://pytorch.org/docs/stable/nn.html#torch.nn.Module">nn.Modules</a> that exist on other workers, and calling the appropriate functions to retrieve or modify their parameters during training. See <a class="reference internal" href="rpc/rref#remote-reference-protocol"><span class="std std-ref">Remote Reference Protocol</span></a> for more details.</p> <dl class="class"> <dt id="torch.distributed.rpc.RRef">
+<code>class torch.distributed.rpc.RRef</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/rpc/api.html#RRef"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<dl class="method"> <dt id="torch.distributed.rpc.RRef.backward">
+<code>backward(self: torch._C._distributed_rpc.PyRRef, dist_autograd_ctx_id: int = -1, retain_graph: bool = False) → None</code> </dt> <dd> <p>Runs the backward pass using the RRef as the root of the backward pass. If <code>dist_autograd_ctx_id</code> is provided, we perform a distributed backward pass using the provided ctx_id starting from the owner of the RRef. In this case, <a class="reference internal" href="#torch.distributed.autograd.get_gradients" title="torch.distributed.autograd.get_gradients"><code>get_gradients()</code></a> should be used to retrieve the gradients. If <code>dist_autograd_ctx_id</code> is <code>None</code>, it is assumed that this is a local autograd graph and we only perform a local backward pass. In the local case, the node calling this API has to be the owner of the RRef. The value of the RRef is expected to be a scalar Tensor.</p>  <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>dist_autograd_ctx_id</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>, </em><em>optional</em>) – The distributed autograd context id for which we should retrieve the gradients (default: -1).</li> <li>
+<strong>retain_graph</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – If <code>False</code>, the graph used to compute the grad will be freed. Note that in nearly all cases setting this option to <code>True</code> is not needed and often can be worked around in a much more efficient way. Usually, you need to set this to <code>True</code> to run backward multiple times (default: False).</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;     rref.backward(context_id)
+</pre> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.confirmed_by_owner">
+<code>confirmed_by_owner(self: torch._C._distributed_rpc.PyRRef) → bool</code> </dt> <dd>
+<p>Returns whether this <code>RRef</code> has been confirmed by the owner. <code>OwnerRRef</code> always returns true, while <code>UserRRef</code> only returns true when the owner knowns about this <code>UserRRef</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.is_owner">
+<code>is_owner(self: torch._C._distributed_rpc.PyRRef) → bool</code> </dt> <dd>
+<p>Returns whether or not the current node is the owner of this <code>RRef</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.local_value">
+<code>local_value(self: torch._C._distributed_rpc.PyRRef) → object</code> </dt> <dd>
+<p>If the current node is the owner, returns a reference to the local value. Otherwise, throws an exception.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.owner">
+<code>owner(self: torch._C._distributed_rpc.PyRRef) → torch._C._distributed_rpc.WorkerInfo</code> </dt> <dd>
+<p>Returns worker information of the node that owns this <code>RRef</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.owner_name">
+<code>owner_name(self: torch._C._distributed_rpc.PyRRef) → str</code> </dt> <dd>
+<p>Returns worker name of the node that owns this <code>RRef</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.remote">
+<code>remote(self: torch._C._distributed_rpc.PyRRef, timeout: float = -1.0) → object</code> </dt> <dd>
+<p>Create a helper proxy to easily launch a <code>remote</code> using the owner of the RRef as the destination to run functions on the object referenced by this RRef. More specifically, <code>rref.remote().func_name(*args, **kwargs)</code> is the same as the following:</p> <pre data-language="python">&gt;&gt;&gt; def run(rref, func_name, args, kwargs):
+&gt;&gt;&gt;   return getattr(rref.local_value(), func_name)(*args, **kwargs)
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.remote(rref.owner(), run, args=(rref, func_name, args, kwargs))
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – Timeout for <code>rref.remote()</code>. If the creation of this <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a> is not successfully completed within the timeout, then the next time there is an attempt to use the RRef (such as <code>to_here</code>), a timeout will be raised. If not provided, the default RPC timeout will be used. Please see <code>rpc.remote()</code> for specific timeout semantics for <a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a>.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt; rref = rpc.remote("worker1", torch.add, args=(torch.zeros(2, 2), 1))
+&gt;&gt;&gt; rref.remote().size().to_here()  # returns torch.Size([2, 2])
+&gt;&gt;&gt; rref.remote().view(1, 4).to_here()  # returns tensor([[1., 1., 1., 1.]])
+</pre> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.rpc_async">
+<code>rpc_async(self: torch._C._distributed_rpc.PyRRef, timeout: float = -1.0) → object</code> </dt> <dd>
+<p>Create a helper proxy to easily launch an <code>rpc_async</code> using the owner of the RRef as the destination to run functions on the object referenced by this RRef. More specifically, <code>rref.rpc_async().func_name(*args, **kwargs)</code> is the same as the following:</p> <pre data-language="python">&gt;&gt;&gt; def run(rref, func_name, args, kwargs):
+&gt;&gt;&gt;   return getattr(rref.local_value(), func_name)(*args, **kwargs)
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.rpc_async(rref.owner(), run, args=(rref, func_name, args, kwargs))
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – Timeout for <code>rref.rpc_async()</code>. If the call does not complete within this timeframe, an exception indicating so will be raised. If this argument is not provided, the default RPC timeout will be used.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt; rref = rpc.remote("worker1", torch.add, args=(torch.zeros(2, 2), 1))
+&gt;&gt;&gt; rref.rpc_async().size().wait()  # returns torch.Size([2, 2])
+&gt;&gt;&gt; rref.rpc_async().view(1, 4).wait()  # returns tensor([[1., 1., 1., 1.]])
+</pre> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.rpc_sync">
+<code>rpc_sync(self: torch._C._distributed_rpc.PyRRef, timeout: float = -1.0) → object</code> </dt> <dd>
+<p>Create a helper proxy to easily launch an <code>rpc_sync</code> using the owner of the RRef as the destination to run functions on the object referenced by this RRef. More specifically, <code>rref.rpc_sync().func_name(*args, **kwargs)</code> is the same as the following:</p> <pre data-language="python">&gt;&gt;&gt; def run(rref, func_name, args, kwargs):
+&gt;&gt;&gt;   return getattr(rref.local_value(), func_name)(*args, **kwargs)
+&gt;&gt;&gt;
+&gt;&gt;&gt; rpc.rpc_sync(rref.owner(), run, args=(rref, func_name, args, kwargs))
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – Timeout for <code>rref.rpc_sync()</code>. If the call does not complete within this timeframe, an exception indicating so will be raised. If this argument is not provided, the default RPC timeout will be used.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; from torch.distributed import rpc
+&gt;&gt;&gt; rref = rpc.remote("worker1", torch.add, args=(torch.zeros(2, 2), 1))
+&gt;&gt;&gt; rref.rpc_sync().size()  # returns torch.Size([2, 2])
+&gt;&gt;&gt; rref.rpc_sync().view(1, 4)  # returns tensor([[1., 1., 1., 1.]])
+</pre> </dd> </dl> </dd>
+</dl> <dl class="method"> <dt id="torch.distributed.rpc.RRef.to_here">
+<code>to_here(self: torch._C._distributed_rpc.PyRRef, timeout: float = -1.0) → object</code> </dt> <dd>
+<p>Blocking call that copies the value of the RRef from the owner to the local node and returns it. If the current node is the owner, returns a reference to the local value.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>timeout</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>, </em><em>optional</em>) – Timeout for <code>to_here</code>. If the call does not complete within this timeframe, an exception indicating so will be raised. If this argument is not provided, the default RPC timeout (60s) will be used.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl>  <p class="caption"><span class="caption-text">More Information about RRef</span></p> <ul> <li class="toctree-l1">
+<a class="reference internal" href="rpc/rref">Remote Reference Protocol</a><ul> <li class="toctree-l2"><a class="reference internal" href="rpc/rref#background">Background</a></li> <li class="toctree-l2"><a class="reference internal" href="rpc/rref#assumptions">Assumptions</a></li> <li class="toctree-l2">
+<a class="reference internal" href="rpc/rref#rref-lifetime">RRef Lifetime</a><ul> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#design-reasoning">Design Reasoning</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#implementation">Implementation</a></li> </ul> </li> <li class="toctree-l2">
+<a class="reference internal" href="rpc/rref#protocol-scenarios">Protocol Scenarios</a><ul> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#user-share-rref-with-owner-as-return-value">User Share RRef with Owner as Return Value</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#user-share-rref-with-owner-as-argument">User Share RRef with Owner as Argument</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#owner-share-rref-with-user">Owner Share RRef with User</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/rref#user-share-rref-with-user">User Share RRef with User</a></li> </ul> </li> </ul> </li> </ul>    <h2 id="distributed-autograd-framework">Distributed Autograd Framework</h2> <p>This module provides an RPC-based distributed autograd framework that can be used for applications such as model parallel training. In short, applications may send and receive gradient recording tensors over RPC. In the forward pass, we record when gradient recording tensors are sent over RPC and during the backward pass we use this information to perform a distributed backward pass using RPC. For more details see <a class="reference internal" href="rpc/distributed_autograd#distributed-autograd-design"><span class="std std-ref">Distributed Autograd Design</span></a>.</p> <dl class="class" id="module-torch.distributed.autograd"> <dt id="torch.distributed.autograd.context">
+<code>class torch.distributed.autograd.context</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/autograd.html#context"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Context object to wrap forward and backward passes when using distributed autograd. The <code>context_id</code> generated in the <code>with</code> statement is required to uniquely identify a distributed backward pass on all workers. Each worker stores metadata associated with this <code>context_id</code>, which is required to correctly execute a distributed autograd pass.</p> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;   t1 = torch.rand((3, 3), requires_grad=True)
+&gt;&gt;&gt;   t2 = torch.rand((3, 3), requires_grad=True)
+&gt;&gt;&gt;   loss = rpc.rpc_sync("worker1", torch.add, args=(t1, t2)).sum()
+&gt;&gt;&gt;   dist_autograd.backward(context_id, [loss])
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.autograd.backward">
+<code>torch.distributed.autograd.backward(context_id: int, roots: List[Tensor], retain_graph = False) → None</code> </dt> <dd>
+<p>Kicks off the distributed backward pass using the provided roots. This currently implements the <a class="reference internal" href="rpc/distributed_autograd#fast-mode-algorithm"><span class="std std-ref">FAST mode algorithm</span></a> which assumes all RPC messages sent in the same distributed autograd context across workers would be part of the autograd graph during the backward pass.</p> <p>We use the provided roots to discover the autograd graph and compute appropriate dependencies. This method blocks until the entire autograd computation is done.</p> <p>We accumulate the gradients in the appropriate <a class="reference internal" href="#torch.distributed.autograd.context" title="torch.distributed.autograd.context"><code>torch.distributed.autograd.context</code></a> on each of the nodes. The autograd context to be used is looked up given the <code>context_id</code> that is passed in when <a class="reference internal" href="#torch.distributed.autograd.backward" title="torch.distributed.autograd.backward"><code>torch.distributed.autograd.backward()</code></a> is called. If there is no valid autograd context corresponding to the given ID, we throw an error. You can retrieve the accumulated gradients using the <a class="reference internal" href="#torch.distributed.autograd.get_gradients" title="torch.distributed.autograd.get_gradients"><code>get_gradients()</code></a> API.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>context_id</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The autograd context id for which we should retrieve the gradients.</li> <li>
+<strong>roots</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a>) – Tensors which represent the roots of the autograd computation. All the tensors should be scalars.</li> <li>
+<strong>retain_graph</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>, </em><em>optional</em>) – If False, the graph used to compute the grad will be freed. Note that in nearly all cases setting this option to True is not needed and often can be worked around in a much more efficient way. Usually, you need to set this to True to run backward multiple times.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;     pred = model.forward()
+&gt;&gt;&gt;     loss = loss_func(pred, loss)
+&gt;&gt;&gt;     dist_autograd.backward(context_id, loss)
+</pre> </dd> </dl> </dd>
+</dl> <dl class="function"> <dt id="torch.distributed.autograd.get_gradients">
+<code>torch.distributed.autograd.get_gradients(context_id: int) → Dict[Tensor, Tensor]</code> </dt> <dd>
+<p>Retrieves a map from Tensor to the appropriate gradient for that Tensor accumulated in the provided context corresponding to the given <code>context_id</code> as part of the distributed autograd backward pass.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>context_id</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The autograd context id for which we should retrieve the gradients.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A map where the key is the Tensor and the value is the associated gradient for that Tensor.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;     t1 = torch.rand((3, 3), requires_grad=True)
+&gt;&gt;&gt;     t2 = torch.rand((3, 3), requires_grad=True)
+&gt;&gt;&gt;     loss = t1 + t2
+&gt;&gt;&gt;     dist_autograd.backward(context_id, [loss.sum()])
+&gt;&gt;&gt;     grads = dist_autograd.get_gradients(context_id)
+&gt;&gt;&gt;     print(grads[t1])
+&gt;&gt;&gt;     print(grads[t2])
+</pre> </dd> </dl> </dd>
+</dl>  <p class="caption"><span class="caption-text">More Information about RPC Autograd</span></p> <ul> <li class="toctree-l1">
+<a class="reference internal" href="rpc/distributed_autograd">Distributed Autograd Design</a><ul> <li class="toctree-l2"><a class="reference internal" href="rpc/distributed_autograd#background">Background</a></li> <li class="toctree-l2"><a class="reference internal" href="rpc/distributed_autograd#autograd-recording-during-the-forward-pass">Autograd recording during the forward pass</a></li> <li class="toctree-l2"><a class="reference internal" href="rpc/distributed_autograd#distributed-autograd-context">Distributed Autograd Context</a></li> <li class="toctree-l2">
+<a class="reference internal" href="rpc/distributed_autograd#distributed-backward-pass">Distributed Backward Pass</a><ul> <li class="toctree-l3"><a class="reference internal" href="rpc/distributed_autograd#computing-dependencies">Computing dependencies</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/distributed_autograd#fast-mode-algorithm">FAST mode algorithm</a></li> <li class="toctree-l3"><a class="reference internal" href="rpc/distributed_autograd#smart-mode-algorithm">SMART mode algorithm</a></li> </ul> </li> <li class="toctree-l2"><a class="reference internal" href="rpc/distributed_autograd#distributed-optimizer">Distributed Optimizer</a></li> <li class="toctree-l2"><a class="reference internal" href="rpc/distributed_autograd#simple-end-to-end-example">Simple end to end example</a></li> </ul> </li> </ul>    <h2 id="distributed-optimizer">Distributed Optimizer</h2> <p id="module-torch.distributed.optim"><a class="reference internal" href="#module-torch.distributed.optim" title="torch.distributed.optim"><code>torch.distributed.optim</code></a> exposes DistributedOptimizer, which takes a list of remote parameters (<a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef"><code>RRef</code></a>) and runs the optimizer locally on the workers where the parameters live. The distributed optimizer can use any of the local optimizer <a class="reference internal" href="optim#optimizer-algorithms"><span class="std std-ref">Algorithms</span></a> to apply the gradients on each worker.</p> <dl class="class"> <dt id="torch.distributed.optim.DistributedOptimizer">
+<code>class torch.distributed.optim.DistributedOptimizer(optimizer_class, params_rref, *args, **kwargs)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/optim/optimizer.html#DistributedOptimizer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>DistributedOptimizer takes remote references to parameters scattered across workers and applies the given optimizer locally for each parameter.</p> <p>This class uses <a class="reference internal" href="#torch.distributed.autograd.get_gradients" title="torch.distributed.autograd.get_gradients"><code>get_gradients()</code></a> in order to retrieve the gradients for specific parameters.</p> <p>Concurrent calls to <a class="reference internal" href="#torch.distributed.optim.DistributedOptimizer.step" title="torch.distributed.optim.DistributedOptimizer.step"><code>step()</code></a>, either from the same or different clients, will be serialized on each worker – as each worker’s optimizer can only work on one set of gradients at a time. However, there is no guarantee that the full forward-backward-optimizer sequence will execute for one client at a time. This means that the gradients being applied may not correspond to the latest forward pass executed on a given worker. Also, there is no guaranteed ordering across workers.</p> <p><code>DistributedOptimizer</code> creates the local optimizer with TorchScript enabled by default, so that optimizer updates are not blocked by the Python Global Interpreter Lock (GIL) during multithreaded training (e.g. Distributed Model Parallel). This feature is currently in beta stage, enabled for optimizers including <code>Adagrad</code>, <code>Adam</code>, <code>SGD</code>, <code>RMSprop</code>, <code>AdamW</code> and <code>Adadelta</code>. We are increasing the coverage to all optimizers in future releases.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>optimizer_class</strong> (<a class="reference internal" href="optim#torch.optim.Optimizer" title="torch.optim.Optimizer">optim.Optimizer</a>) – the class of optimizer to instantiate on each worker.</li> <li>
+<strong>params_rref</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#list" title="(in Python v3.9)">list</a><em>[</em><a class="reference internal" href="#torch.distributed.rpc.RRef" title="torch.distributed.rpc.RRef">RRef</a><em>]</em>) – list of RRefs to local or remote parameters to optimize.</li> <li>
+<strong>args</strong> – arguments to pass to the optimizer constructor on each worker.</li> <li>
+<strong>kwargs</strong> – arguments to pass to the optimizer constructor on each worker.</li> </ul> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; import torch.distributed.autograd as dist_autograd
+&gt;&gt;&gt; import torch.distributed.rpc as rpc
+&gt;&gt;&gt; from torch import optim
+&gt;&gt;&gt; from torch.distributed.optim import DistributedOptimizer
+&gt;&gt;&gt;
+&gt;&gt;&gt; with dist_autograd.context() as context_id:
+&gt;&gt;&gt;   # Forward pass.
+&gt;&gt;&gt;   rref1 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 3))
+&gt;&gt;&gt;   rref2 = rpc.remote("worker1", torch.add, args=(torch.ones(2), 1))
+&gt;&gt;&gt;   loss = rref1.to_here() + rref2.to_here()
+&gt;&gt;&gt;
+&gt;&gt;&gt;   # Backward pass.
+&gt;&gt;&gt;   dist_autograd.backward(context_id, [loss.sum()])
+&gt;&gt;&gt;
+&gt;&gt;&gt;   # Optimizer.
+&gt;&gt;&gt;   dist_optim = DistributedOptimizer(
+&gt;&gt;&gt;      optim.SGD,
+&gt;&gt;&gt;      [rref1, rref2],
+&gt;&gt;&gt;      lr=0.05,
+&gt;&gt;&gt;   )
+&gt;&gt;&gt;   dist_optim.step(context_id)
+</pre> </dd> </dl> <dl class="method"> <dt id="torch.distributed.optim.DistributedOptimizer.step">
+<code>step(context_id)</code> <a class="reference internal" href="https://pytorch.org/docs/1.8.0/_modules/torch/distributed/optim/optimizer.html#DistributedOptimizer.step"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Performs a single optimization step.</p> <p>This will call <a class="reference internal" href="optim#torch.optim.Optimizer.step" title="torch.optim.Optimizer.step"><code>torch.optim.Optimizer.step()</code></a> on each worker containing parameters to be optimized, and will block until all workers return. The provided <code>context_id</code> will be used to retrieve the corresponding <a class="reference internal" href="#torch.distributed.autograd.context" title="torch.distributed.autograd.context"><code>context</code></a> that contains the gradients that should be applied to the parameters.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>context_id</strong> – the autograd context id for which we should run the optimizer step.</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl>   <h2 id="design-notes">Design Notes</h2> <p>The distributed autograd design note covers the design of the RPC-based distributed autograd framework that is useful for applications such as model parallel training.</p> <ul class="simple"> <li><a class="reference internal" href="rpc/distributed_autograd#distributed-autograd-design"><span class="std std-ref">Distributed Autograd Design</span></a></li> </ul> <p>The RRef design note covers the design of the <a class="reference internal" href="#rref"><span class="std std-ref">RRef</span></a> (Remote REFerence) protocol used to refer to values on remote workers by the framework.</p> <ul class="simple"> <li><a class="reference internal" href="rpc/rref#remote-reference-protocol"><span class="std std-ref">Remote Reference Protocol</span></a></li> </ul>   <h2 id="tutorials">Tutorials</h2> <p>The RPC tutorials introduce users to the RPC framework, provide several example applications using <a class="reference internal" href="#distributed-rpc-framework"><span class="std std-ref">torch.distributed.rpc</span></a> APIs, and demonstrate how to use <a class="reference external" href="https://pytorch.org/docs/stable/autograd.html#profiler">the profiler</a> to profile RPC-based workloads.</p> <ul class="simple"> <li><a class="reference external" href="https://pytorch.org/tutorials/intermediate/rpc_tutorial.html">Getting started with Distributed RPC Framework</a></li> <li><a class="reference external" href="https://pytorch.org/tutorials/intermediate/rpc_param_server_tutorial.html">Implementing a Parameter Server using Distributed RPC Framework</a></li> <li><a class="reference external" href="https://pytorch.org/tutorials/advanced/rpc_ddp_tutorial.html">Combining Distributed DataParallel with Distributed RPC Framework</a></li> <li><a class="reference external" href="https://pytorch.org/tutorials/recipes/distributed_rpc_profiling.html">Profiling RPC-based Workloads</a></li> <li><a class="reference external" href="https://pytorch.org/tutorials/intermediate/rpc_async_execution.html">Implementing batch RPC processing</a></li> <li><a class="reference external" href="https://pytorch.org/tutorials/intermediate/dist_pipeline_parallel_tutorial.html">Distributed Pipeline Parallel</a></li> </ul><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2019 Torch Contributors<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pytorch.org/docs/1.8.0/rpc.html" class="_attribution-link">https://pytorch.org/docs/1.8.0/rpc.html</a>
+  </p>
+</div>

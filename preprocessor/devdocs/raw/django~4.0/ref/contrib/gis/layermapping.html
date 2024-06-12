@@ -1,0 +1,70 @@
+<h1 id="layermapping-data-import-utility">LayerMapping data import utility</h1> <p id="s-module-django.contrib.gis.utils.layermapping">The <a class="reference internal" href="#django.contrib.gis.utils.LayerMapping" title="django.contrib.gis.utils.LayerMapping"><code>LayerMapping</code></a> class provides a way to map the contents of vector spatial data files (e.g. shapefiles) into GeoDjango models.</p> <p>This utility grew out of the author’s personal needs to eliminate the code repetition that went into pulling geometries and fields out of a vector layer, converting to another coordinate system (e.g. WGS84), and then inserting into a GeoDjango model.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Use of <a class="reference internal" href="#django.contrib.gis.utils.LayerMapping" title="django.contrib.gis.utils.LayerMapping"><code>LayerMapping</code></a> requires GDAL.</p> </div> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">GIS data sources, like shapefiles, may be very large. If you find that <a class="reference internal" href="#django.contrib.gis.utils.LayerMapping" title="django.contrib.gis.utils.LayerMapping"><code>LayerMapping</code></a> is using too much memory, set <a class="reference internal" href="../../settings#std:setting-DEBUG"><code>DEBUG</code></a> to <code>False</code> in your settings. When <a class="reference internal" href="../../settings#std:setting-DEBUG"><code>DEBUG</code></a> is set to <code>True</code>, Django <a class="reference internal" href="https://docs.djangoproject.com/en/4.0/faq/models/#faq-see-raw-sql-queries"><span class="std std-ref">automatically logs</span></a> <em>every</em> SQL query – and when SQL statements contain geometries, this may consume more memory than is typical.</p> </div>  <h2 id="example">Example</h2> <ol class="arabic" id="s-example"> <li>
+<p class="first">You need a GDAL-supported data source, like a shapefile (here we’re using a simple polygon shapefile, <code>test_poly.shp</code>, with three features):</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.gdal import DataSource
+&gt;&gt;&gt; ds = DataSource('test_poly.shp')
+&gt;&gt;&gt; layer = ds[0]
+&gt;&gt;&gt; print(layer.fields) # Exploring the fields in the layer, we only want the 'str' field.
+['float', 'int', 'str']
+&gt;&gt;&gt; print(len(layer)) # getting the number of features in the layer (should be 3)
+3
+&gt;&gt;&gt; print(layer.geom_type) # Should be 'Polygon'
+Polygon
+&gt;&gt;&gt; print(layer.srs) # WGS84 in WKT
+GEOGCS["GCS_WGS_1984",
+    DATUM["WGS_1984",
+        SPHEROID["WGS_1984",6378137,298.257223563]],
+    PRIMEM["Greenwich",0],
+    UNIT["Degree",0.017453292519943295]]
+</pre> </li> <li>
+<p class="first">Now we define our corresponding Django model (make sure to use <a class="reference internal" href="../../django-admin#django-admin-migrate"><code>migrate</code></a>):</p> <pre data-language="python">from django.contrib.gis.db import models
+
+class TestGeo(models.Model):
+    name = models.CharField(max_length=25) # corresponds to the 'str' field
+    poly = models.PolygonField(srid=4269) # we want our model in a different SRID
+
+    def __str__(self):
+        return 'Name: %s' % self.name
+</pre> </li> <li>
+<p class="first">Use <a class="reference internal" href="#django.contrib.gis.utils.LayerMapping" title="django.contrib.gis.utils.LayerMapping"><code>LayerMapping</code></a> to extract all the features and place them in the database:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.gis.utils import LayerMapping
+&gt;&gt;&gt; from geoapp.models import TestGeo
+&gt;&gt;&gt; mapping = {'name' : 'str', # The 'name' model field maps to the 'str' layer field.
+               'poly' : 'POLYGON', # For geometry fields use OGC name.
+               } # The mapping is a dictionary
+&gt;&gt;&gt; lm = LayerMapping(TestGeo, 'test_poly.shp', mapping)
+&gt;&gt;&gt; lm.save(verbose=True) # Save the layermap, imports the data.
+Saved: Name: 1
+Saved: Name: 2
+Saved: Name: 3
+</pre> </li> </ol> <p>Here, <a class="reference internal" href="#django.contrib.gis.utils.LayerMapping" title="django.contrib.gis.utils.LayerMapping"><code>LayerMapping</code></a> transformed the three geometries from the shapefile in their original spatial reference system (WGS84) to the spatial reference system of the GeoDjango model (NAD83). If no spatial reference system is defined for the layer, use the <code>source_srs</code> keyword with a <a class="reference internal" href="gdal#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>SpatialReference</code></a> object to specify one.</p>   <h2 id="layermapping-api">
+<code>LayerMapping</code> API</h2> <dl class="class" id="s-layermapping-api"> <dt id="django.contrib.gis.utils.LayerMapping">
+<code>class LayerMapping(model, data_source, mapping, layer=0, source_srs=None, encoding=None, transaction_mode='commit_on_success', transform=True, unique=True, using='default')</code> </dt> 
+</dl> <p>The following are the arguments and keywords that may be used during instantiation of <code>LayerMapping</code> objects.</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Argument</th> <th class="head">Description</th> </tr> </thead>  <tr>
+<td><code>model</code></td> <td>The geographic model, <em>not</em> an instance.</td> </tr> <tr>
+<td><code>data_source</code></td> <td>The path to the OGR-supported data source file (e.g., a shapefile). Also accepts <a class="reference internal" href="gdal#django.contrib.gis.gdal.DataSource" title="django.contrib.gis.gdal.DataSource"><code>django.contrib.gis.gdal.DataSource</code></a> instances.</td> </tr> <tr>
+<td><code>mapping</code></td> <td>A dictionary: keys are strings corresponding to the model field, and values correspond to string field names for the OGR feature, or if the model field is a geographic then it should correspond to the OGR geometry type, e.g., <code>'POINT'</code>, <code>'LINESTRING'</code>, <code>'POLYGON'</code>.</td> </tr>  </table> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Keyword Arguments</th> <th class="head"> </th> </tr> </thead>  <tr>
+<td><code>layer</code></td> <td>The index of the layer to use from the Data Source (defaults to 0)</td> </tr> <tr>
+<td><code>source_srs</code></td> <td>Use this to specify the source SRS manually (for example, some shapefiles don’t come with a <code>'.prj'</code> file). An integer SRID, WKT or PROJ strings, and <a class="reference internal" href="gdal#django.contrib.gis.gdal.SpatialReference" title="django.contrib.gis.gdal.SpatialReference"><code>django.contrib.gis.gdal.SpatialReference</code></a> objects are accepted.</td> </tr> <tr>
+<td><code>encoding</code></td> <td>Specifies the character set encoding of the strings in the OGR data source. For example, <code>'latin-1'</code>, <code>'utf-8'</code>, and <code>'cp437'</code> are all valid encoding parameters.</td> </tr> <tr>
+<td><code>transaction_mode</code></td> <td>May be <code>'commit_on_success'</code> (default) or <code>'autocommit'</code>.</td> </tr> <tr>
+<td><code>transform</code></td> <td>Setting this to False will disable coordinate transformations. In other words, geometries will be inserted into the database unmodified from their original state in the data source.</td> </tr> <tr>
+<td><code>unique</code></td> <td>Setting this to the name, or a tuple of names, from the given model will create models unique only to the given name(s). Geometries from each feature will be added into the collection associated with the unique model. Forces the transaction mode to be <code>'autocommit'</code>.</td> </tr> <tr>
+<td><code>using</code></td> <td>Sets the database to use when importing spatial data. Default is <code>'default'</code>.</td> </tr>  </table> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>Support for <a class="reference external" href="https://docs.python.org/3/library/pathlib.html#pathlib.Path" title="(in Python v3.10)"><code>pathlib.Path</code></a> <code>data_source</code> was added.</p> </div>  <h3 id="save-keyword-arguments">
+<code>save()</code> Keyword Arguments</h3> <dl class="method" id="s-save-keyword-arguments"> <dt id="django.contrib.gis.utils.LayerMapping.save">
+<code>LayerMapping.save(verbose=False, fid_range=False, step=False, progress=False, silent=False, stream=sys.stdout, strict=False)</code> </dt> 
+</dl> <p>The <code>save()</code> method also accepts keywords. These keywords are used for controlling output logging, error handling, and for importing specific feature ranges.</p> <table class="docutils">  <thead valign="bottom"> <tr>
+<th class="head">Save Keyword Arguments</th> <th class="head">Description</th> </tr> </thead>  <tr>
+<td><code>fid_range</code></td> <td>May be set with a slice or tuple of (begin, end) feature ID’s to map from the data source. In other words, this keyword enables the user to selectively import a subset range of features in the geographic data source.</td> </tr> <tr>
+<td><code>progress</code></td> <td>When this keyword is set, status information will be printed giving the number of features processed and successfully saved. By default, progress information will be printed every 1000 features processed, however, this default may be overridden by setting this keyword with an integer for the desired interval.</td> </tr> <tr>
+<td><code>silent</code></td> <td>By default, non-fatal error notifications are printed to <code>sys.stdout</code>, but this keyword may be set to disable these notifications.</td> </tr> <tr>
+<td><code>step</code></td> <td>If set with an integer, transactions will occur at every step interval. For example, if <code>step=1000</code>, a commit would occur after the 1,000th feature, the 2,000th feature etc.</td> </tr> <tr>
+<td><code>stream</code></td> <td>Status information will be written to this file handle. Defaults to using <code>sys.stdout</code>, but any object with a <code>write</code> method is supported.</td> </tr> <tr>
+<td><code>strict</code></td> <td>Execution of the model mapping will cease upon the first error encountered. The default value (<code>False</code>) behavior is to attempt to continue.</td> </tr> <tr>
+<td><code>verbose</code></td> <td>If set, information will be printed subsequent to each model save executed on the database.</td> </tr>  </table>    <h2 id="troubleshooting">Troubleshooting</h2>  <h3 id="running-out-of-memory">Running out of memory</h3> <p id="s-troubleshooting">As noted in the warning at the top of this section, Django stores all SQL queries when <code>DEBUG=True</code>. Set <code>DEBUG=False</code> in your settings, and this should stop excessive memory use when running <code>LayerMapping</code> scripts.</p>   <h3 id="mysql-max-allowed-packet-error">MySQL: <code>max_allowed_packet</code> error</h3> <p id="s-mysql-max-allowed-packet-error">If you encounter the following error when using <code>LayerMapping</code> and MySQL:</p> <pre data-language="python">OperationalError: (1153, "Got a packet bigger than 'max_allowed_packet' bytes")
+</pre> <p>Then the solution is to increase the value of the <code>max_allowed_packet</code> setting in your MySQL configuration. For example, the default value may be something low like one megabyte – the setting may be modified in MySQL’s configuration file (<code>my.cnf</code>) in the <code>[mysqld]</code> section:</p> <pre data-language="python">max_allowed_packet = 10M
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/gis/layermapping/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/gis/layermapping/</a>
+  </p>
+</div>

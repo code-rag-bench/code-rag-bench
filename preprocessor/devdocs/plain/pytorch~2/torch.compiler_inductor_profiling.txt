@@ -1,0 +1,142 @@
+# TorchInductor GPU Profiling
+
+This section lists useful commands and workflows that can help you dive into a
+model’s performance in TorchInductor. When a model is not running as fast as
+expected, you may want to check individual kernels of the model. Usually,
+those kernels taking the majority of the GPU time are the most interesting
+ones. After that, you may also want to run individual kernels directly and
+inspect its perf. PyTorch provides tools to cover everything mentioned above.
+
+## Relevant Environment Variables
+
+You can use the following environment variables in your analysis:
+
+  * `TORCHINDUCTOR_UNIQUE_KERNEL_NAMES`
+    * By default, TorchInductor names a Triton kernel as `‘triton\_’`. When this environmental variable is enabled, inductor generates a more meaningful kernel name in the trace, for example, `triton_poi_fused_cat_155` which contains the kernel category (`poi` for pointwise) and original ATen operator. This config is disabled by default to improve the chance of compilation cache hit.
+  * `TORCHINDUCTOR_BENCHMARK_KERNEL`
+    * Enabling this will make inductor codegen harness to benchmark individual triton kernels.
+  * `TORCHINDUCTOR_MAX_AUTOTUNE`
+    * Inductor autotuner will benchmark more `triton.Configs` and pick the one with the best performance results. This will increase compilation time with the hope to improve performance.
+
+## Breakdown Model GPU Time
+
+Below are the steps to breakdown execution time of a model into individual
+kernels. We take `mixnet_l` as an example.
+
+  1. Run the benchmark script for the model:
+        TORCHINDUCTOR_UNIQUE_KERNEL_NAMES=1 TORCHINDUCTOR_BENCHMARK_KERNEL=1
+    python -u benchmarks/dynamo/timm_models.py –backend inductor –amp
+    –performance –dashboard –only mixnet_l –disable-cudagraphs –training
+    
+Note
+
+The tool relies on kernel name to decide its category. Enabling
+`TORCHINDUCTOR_UNIQUE_KERNEL_NAMES` is crucial for that.
+
+  2. In the output log, look for lines:
+        **Compiled module path:
+    /tmp/torchinductor_shunting/qz/cqz7hvhood7y3psp7fy6msjxsxyli7qiwiybizdwtjw6ffyq5wwd.py**
+    
+
+We have one line for each compiled module. If there are no extra graph breaks,
+we would see 2 such lines in the log, one for the forward graph and one for
+the backward graph.
+
+For our example command, we get the following compiled module for the forward
+and backward graphs respectively:
+
+  * https://gist.github.com/shunting314/c2a4d8a28b00fcb5586d0e9d9bf77f9f
+  * https://gist.github.com/shunting314/48efc83b12ec3ead950052e4a0220b10
+
+  3. Now we can dive into the perf for each individual compiled module. Let’s pick the one for the forward graph for illustration purposes. I’ll name it `fwd.py` for convenience. Run it directly with the `-p` argument:
+        **> python fwd.py -p**
+    
+
+See the full output log in this example gist.
+
+In the output, you can notice the following:
+
+  * We write a chrome trace file for the profile so we can load the trace and interact with it. In the log, look for lines as follows to find the path of the trace file.
+
+Chrome trace for the profile is written to /tmp/compiled_module_profile.json
+
+Loading the trace into Chrome (visit chrome://tracing in the chrome browser
+and load the file as the UI suggested) will show UI as follows:
+
+![_images/trace.png](https://pytorch.org/docs/2.1/_images/trace.png)
+
+You can zoom in and out to check the profile.
+
+  * We report the percent of GPU time regarding to the wall time by log line like:
+Percent of time when GPU is busy: 102.88%
+
+Sometimes you may see a value larger than 100%. The reason is because PyTorch
+uses the kernel execution time with profiling enabled while using wall time
+with profiling disabled. Profiling may distort the kernel execution time a
+bit. But overall it should not be a big deal.
+
+If we run the model like `densenet121` with a small batch size, we would see
+low percent of time when GPU is busy:
+
+        (Forward graph) Percent of time when GPU is busy: 32.69%
+    
+This means the model has a lot of CPU overhead. This is consistent with the
+fact that enabling cudagraphs improve densenet121’s perf a lot.
+
+  * We can break down the GPU time to different categories of kernels. In the `mixnet_l` example, we see
+    * pointwise kernel takes 28.58%
+    * reduction kernel takes 13.85%
+    * persistent reduction kernel takes 3.89%
+    * the rest are cutlass/cudnn kernels for mm/conv which takes 56.57%
+This information can be found in the summary line (last line) of the report
+for each kernel category.
+
+  * We also call zoom into a certain category of kernels. For example, let’s check reduction kernels:
+![_images/kernel_breakdown.png](https://pytorch.org/docs/2.1/_images/kernel_breakdown.png)
+
+We can see an ordered table of execution time for each individual reduction
+kernel. We also see how many times a kernel is executed. This is helpful for a
+few reasons:
+
+    * If a kernel only takes a tiny amount of time, for example, 0.1%, improving it will at most bring 0.1% overall gain. It is not worth spending a lot of effort on it.
+    * Ff a kernel takes 2% of time, improving it by 2x will bring in 1% overall gain which justifies the effort.
+
+## Benchmark Individual Triton Kernel
+
+Let’s say we want to take a closer look at
+`triton_red_fused\__native_batch_norm_legit_functional_16` which is the most
+expensive reduction kernel and takes 2.19% of overall wall time for the
+forward graph.
+
+We can lookup the kernel name in the `fwd.py`, and find comment like:
+
+# kernel path:
+/tmp/torchinductor_shunting/jk/cjk2vm3446xrk7rth7hr6pun7xxo3dnzubwcn6ydrpifal4eykrz.py
+
+![_images/inductor_code.png](data:image/png;base64,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)
+
+I’ll rename it k.py for convenience. Here is a paste for this file.
+
+`k.py` is a standalone Python module containing the kernel code and its
+benchmark.
+
+Run `k.py` directly will report its execution time and bandwidth:
+
+![_images/terminal_printout.png](https://pytorch.org/docs/2.1/_images/terminal_printout.png)
+
+We can check if max-autotune helps this kernel, by running:
+
+    
+    **TORCHINDUCTOR_MAX_AUTOTUNE=1 python /tmp/k.py**
+    
+We may also temporarily add more reduction heuristics and run the script again
+to check how that helps with the kernel.
+
+© 2024, PyTorch Contributors  
+PyTorch has a BSD-style license, as found in the LICENSE file.  
+https://pytorch.org/docs/2.1/torch.compiler_inductor_profiling.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

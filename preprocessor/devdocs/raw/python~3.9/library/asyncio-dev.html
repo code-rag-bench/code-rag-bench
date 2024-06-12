@@ -1,0 +1,74 @@
+<h1 id="asyncio-dev">Developing with asyncio</h1> <p id="developing-with-asyncio">Asynchronous programming is different from classic “sequential” programming.</p> <p>This page lists common mistakes and traps and explains how to avoid them.</p>  <h2 id="asyncio-debug-mode">Debug Mode</h2> <p id="debug-mode">By default asyncio runs in production mode. In order to ease the development asyncio has a <em>debug mode</em>.</p> <p>There are several ways to enable asyncio debug mode:</p> <ul class="simple"> <li>Setting the <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#envvar-PYTHONASYNCIODEBUG" id="index-0"><code>PYTHONASYNCIODEBUG</code></a> environment variable to <code>1</code>.</li> <li>Using the <a class="reference internal" href="devmode#devmode"><span class="std std-ref">Python Development Mode</span></a>.</li> <li>Passing <code>debug=True</code> to <a class="reference internal" href="asyncio-task#asyncio.run" title="asyncio.run"><code>asyncio.run()</code></a>.</li> <li>Calling <a class="reference internal" href="asyncio-eventloop#asyncio.loop.set_debug" title="asyncio.loop.set_debug"><code>loop.set_debug()</code></a>.</li> </ul> <p>In addition to enabling the debug mode, consider also:</p> <ul> <li>
+<p>setting the log level of the <a class="reference internal" href="#asyncio-logger"><span class="std std-ref">asyncio logger</span></a> to <code>logging.DEBUG</code>, for example the following snippet of code can be run at startup of the application:</p> <pre data-language="python">logging.basicConfig(level=logging.DEBUG)
+</pre> </li> <li>configuring the <a class="reference internal" href="warnings#module-warnings" title="warnings: Issue warning messages and control their disposition."><code>warnings</code></a> module to display <a class="reference internal" href="exceptions#ResourceWarning" title="ResourceWarning"><code>ResourceWarning</code></a> warnings. One way of doing that is by using the <a class="reference internal" href="https://docs.python.org/3.9/using/cmdline.html#cmdoption-w"><code>-W</code></a> <code>default</code> command line option.</li> </ul> <p>When the debug mode is enabled:</p> <ul class="simple"> <li>asyncio checks for <a class="reference internal" href="#asyncio-coroutine-not-scheduled"><span class="std std-ref">coroutines that were not awaited</span></a> and logs them; this mitigates the “forgotten await” pitfall.</li> <li>Many non-threadsafe asyncio APIs (such as <a class="reference internal" href="asyncio-eventloop#asyncio.loop.call_soon" title="asyncio.loop.call_soon"><code>loop.call_soon()</code></a> and <a class="reference internal" href="asyncio-eventloop#asyncio.loop.call_at" title="asyncio.loop.call_at"><code>loop.call_at()</code></a> methods) raise an exception if they are called from a wrong thread.</li> <li>The execution time of the I/O selector is logged if it takes too long to perform an I/O operation.</li> <li>Callbacks taking longer than 100ms are logged. The <code>loop.slow_callback_duration</code> attribute can be used to set the minimum execution duration in seconds that is considered “slow”.</li> </ul>   <h2 id="asyncio-multithreading">Concurrency and Multithreading</h2> <p id="concurrency-and-multithreading">An event loop runs in a thread (typically the main thread) and executes all callbacks and Tasks in its thread. While a Task is running in the event loop, no other Tasks can run in the same thread. When a Task executes an <code>await</code> expression, the running Task gets suspended, and the event loop executes the next Task.</p> <p>To schedule a <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-callback"><span class="xref std std-term">callback</span></a> from another OS thread, the <a class="reference internal" href="asyncio-eventloop#asyncio.loop.call_soon_threadsafe" title="asyncio.loop.call_soon_threadsafe"><code>loop.call_soon_threadsafe()</code></a> method should be used. Example:</p> <pre data-language="python">loop.call_soon_threadsafe(callback, *args)
+</pre> <p>Almost all asyncio objects are not thread safe, which is typically not a problem unless there is code that works with them from outside of a Task or a callback. If there’s a need for such code to call a low-level asyncio API, the <a class="reference internal" href="asyncio-eventloop#asyncio.loop.call_soon_threadsafe" title="asyncio.loop.call_soon_threadsafe"><code>loop.call_soon_threadsafe()</code></a> method should be used, e.g.:</p> <pre data-language="python">loop.call_soon_threadsafe(fut.cancel)
+</pre> <p>To schedule a coroutine object from a different OS thread, the <a class="reference internal" href="asyncio-task#asyncio.run_coroutine_threadsafe" title="asyncio.run_coroutine_threadsafe"><code>run_coroutine_threadsafe()</code></a> function should be used. It returns a <a class="reference internal" href="concurrent.futures#concurrent.futures.Future" title="concurrent.futures.Future"><code>concurrent.futures.Future</code></a> to access the result:</p> <pre data-language="python">async def coro_func():
+     return await asyncio.sleep(1, 42)
+
+# Later in another OS thread:
+
+future = asyncio.run_coroutine_threadsafe(coro_func(), loop)
+# Wait for the result:
+result = future.result()
+</pre> <p>To handle signals and to execute subprocesses, the event loop must be run in the main thread.</p> <p>The <a class="reference internal" href="asyncio-eventloop#asyncio.loop.run_in_executor" title="asyncio.loop.run_in_executor"><code>loop.run_in_executor()</code></a> method can be used with a <a class="reference internal" href="concurrent.futures#concurrent.futures.ThreadPoolExecutor" title="concurrent.futures.ThreadPoolExecutor"><code>concurrent.futures.ThreadPoolExecutor</code></a> to execute blocking code in a different OS thread without blocking the OS thread that the event loop runs in.</p> <p>There is currently no way to schedule coroutines or callbacks directly from a different process (such as one started with <a class="reference internal" href="multiprocessing#module-multiprocessing" title="multiprocessing: Process-based parallelism."><code>multiprocessing</code></a>). The <a class="reference internal" href="asyncio-eventloop#asyncio-event-loop"><span class="std std-ref">Event Loop Methods</span></a> section lists APIs that can read from pipes and watch file descriptors without blocking the event loop. In addition, asyncio’s <a class="reference internal" href="asyncio-subprocess#asyncio-subprocess"><span class="std std-ref">Subprocess</span></a> APIs provide a way to start a process and communicate with it from the event loop. Lastly, the aforementioned <a class="reference internal" href="asyncio-eventloop#asyncio.loop.run_in_executor" title="asyncio.loop.run_in_executor"><code>loop.run_in_executor()</code></a> method can also be used with a <a class="reference internal" href="concurrent.futures#concurrent.futures.ProcessPoolExecutor" title="concurrent.futures.ProcessPoolExecutor"><code>concurrent.futures.ProcessPoolExecutor</code></a> to execute code in a different process.</p>   <h2 id="asyncio-handle-blocking">Running Blocking Code</h2> <p id="running-blocking-code">Blocking (CPU-bound) code should not be called directly. For example, if a function performs a CPU-intensive calculation for 1 second, all concurrent asyncio Tasks and IO operations would be delayed by 1 second.</p> <p>An executor can be used to run a task in a different thread or even in a different process to avoid blocking the OS thread with the event loop. See the <a class="reference internal" href="asyncio-eventloop#asyncio.loop.run_in_executor" title="asyncio.loop.run_in_executor"><code>loop.run_in_executor()</code></a> method for more details.</p>   <h2 id="asyncio-logger">Logging</h2> <p id="logging">asyncio uses the <a class="reference internal" href="logging#module-logging" title="logging: Flexible event logging system for applications."><code>logging</code></a> module and all logging is performed via the <code>"asyncio"</code> logger.</p> <p>The default log level is <code>logging.INFO</code>, which can be easily adjusted:</p> <pre data-language="python">logging.getLogger("asyncio").setLevel(logging.WARNING)
+</pre>   <h2 id="asyncio-coroutine-not-scheduled">Detect never-awaited coroutines</h2> <p id="detect-never-awaited-coroutines">When a coroutine function is called, but not awaited (e.g. <code>coro()</code> instead of <code>await coro()</code>) or the coroutine is not scheduled with <a class="reference internal" href="asyncio-task#asyncio.create_task" title="asyncio.create_task"><code>asyncio.create_task()</code></a>, asyncio will emit a <a class="reference internal" href="exceptions#RuntimeWarning" title="RuntimeWarning"><code>RuntimeWarning</code></a>:</p> <pre data-language="python">import asyncio
+
+async def test():
+    print("never scheduled")
+
+async def main():
+    test()
+
+asyncio.run(main())
+</pre> <p>Output:</p> <pre data-language="python">test.py:7: RuntimeWarning: coroutine 'test' was never awaited
+  test()
+</pre> <p>Output in debug mode:</p> <pre data-language="python">test.py:7: RuntimeWarning: coroutine 'test' was never awaited
+Coroutine created at (most recent call last)
+  File "../t.py", line 9, in &lt;module&gt;
+    asyncio.run(main(), debug=True)
+
+  &lt; .. &gt;
+
+  File "../t.py", line 7, in main
+    test()
+  test()
+</pre> <p>The usual fix is to either await the coroutine or call the <a class="reference internal" href="asyncio-task#asyncio.create_task" title="asyncio.create_task"><code>asyncio.create_task()</code></a> function:</p> <pre data-language="python">async def main():
+    await test()
+</pre>   <h2 id="detect-never-retrieved-exceptions">Detect never-retrieved exceptions</h2> <p>If a <a class="reference internal" href="asyncio-future#asyncio.Future.set_exception" title="asyncio.Future.set_exception"><code>Future.set_exception()</code></a> is called but the Future object is never awaited on, the exception would never be propagated to the user code. In this case, asyncio would emit a log message when the Future object is garbage collected.</p> <p>Example of an unhandled exception:</p> <pre data-language="python">import asyncio
+
+async def bug():
+    raise Exception("not consumed")
+
+async def main():
+    asyncio.create_task(bug())
+
+asyncio.run(main())
+</pre> <p>Output:</p> <pre data-language="python">Task exception was never retrieved
+future: &lt;Task finished coro=&lt;bug() done, defined at test.py:3&gt;
+  exception=Exception('not consumed')&gt;
+
+Traceback (most recent call last):
+  File "test.py", line 4, in bug
+    raise Exception("not consumed")
+Exception: not consumed
+</pre> <p><a class="reference internal" href="#asyncio-debug-mode"><span class="std std-ref">Enable the debug mode</span></a> to get the traceback where the task was created:</p> <pre data-language="python">asyncio.run(main(), debug=True)
+</pre> <p>Output in debug mode:</p> <pre data-language="python">Task exception was never retrieved
+future: &lt;Task finished coro=&lt;bug() done, defined at test.py:3&gt;
+    exception=Exception('not consumed') created at asyncio/tasks.py:321&gt;
+
+source_traceback: Object created at (most recent call last):
+  File "../t.py", line 9, in &lt;module&gt;
+    asyncio.run(main(), debug=True)
+
+&lt; .. &gt;
+
+Traceback (most recent call last):
+  File "../t.py", line 4, in bug
+    raise Exception("not consumed")
+Exception: not consumed
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/asyncio-dev.html" class="_attribution-link">https://docs.python.org/3.9/library/asyncio-dev.html</a>
+  </p>
+</div>

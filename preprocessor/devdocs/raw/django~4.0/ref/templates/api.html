@@ -1,0 +1,360 @@
+<h1 id="the-django-template-language-for-python-programmers">The Django template language: for Python programmers</h1> <p id="s-the-django-template-language-for-python-programmers">This document explains the Django template system from a technical perspective – how it works and how to extend it. If you’re looking for reference on the language syntax, see <a class="reference internal" href="language"><span class="doc">The Django template language</span></a>.</p> <p>It assumes an understanding of templates, contexts, variables, tags, and rendering. Start with the <a class="reference internal" href="../../topics/templates#template-language-intro"><span class="std std-ref">introduction to the Django template language</span></a> if you aren’t familiar with these concepts.</p>  <h2 id="overview">Overview</h2> <p id="s-overview">Using the template system in Python is a three-step process:</p> <ol class="arabic simple"> <li>You configure an <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a>.</li> <li>You compile template code into a <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a>.</li> <li>You render the template with a <a class="reference internal" href="#django.template.Context" title="django.template.Context"><code>Context</code></a>.</li> </ol> <p>Django projects generally rely on the <a class="reference internal" href="../../topics/templates#template-engines"><span class="std std-ref">high level, backend agnostic APIs</span></a> for each of these steps instead of the template system’s lower level APIs:</p> <ol class="arabic simple"> <li>For each <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> backend in the <a class="reference internal" href="../settings#std:setting-TEMPLATES"><code>TEMPLATES</code></a> setting, Django instantiates an <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a>. <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> wraps <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a> and adapts it to the common template backend API.</li> <li>The <a class="reference internal" href="../../topics/templates#module-django.template.loader" title="django.template.loader"><code>django.template.loader</code></a> module provides functions such as <a class="reference internal" href="../../topics/templates#django.template.loader.get_template" title="django.template.loader.get_template"><code>get_template()</code></a> for loading templates. They return a <code>django.template.backends.django.Template</code> which wraps the actual <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>django.template.Template</code></a>.</li> <li>The <code>Template</code> obtained in the previous step has a <a class="reference internal" href="../../topics/templates#django.template.backends.base.Template.render" title="django.template.backends.base.Template.render"><code>render()</code></a> method which marshals a context and possibly a request into a <a class="reference internal" href="#django.template.Context" title="django.template.Context"><code>Context</code></a> and delegates the rendering to the underlying <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a>.</li> </ol>   <h2 id="configuring-an-engine">Configuring an engine</h2> <p id="s-configuring-an-engine">If you are using the <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> backend, this probably isn’t the documentation you’re looking for. An instance of the <code>Engine</code> class described below is accessible using the <code>engine</code> attribute of that backend and any attribute defaults mentioned below are overridden by what’s passed by <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a>.</p> <dl class="class"> <dt id="django.template.Engine">
+<code>class Engine(dirs=None, app_dirs=False, context_processors=None, debug=False, loaders=None, string_if_invalid='', file_charset='utf-8', libraries=None, builtins=None, autoescape=True)</code> </dt> <dd>
+<p>When instantiating an <code>Engine</code> all arguments must be passed as keyword arguments:</p> <ul> <li>
+<p class="first"><code>dirs</code> is a list of directories where the engine should look for template source files. It is used to configure <a class="reference internal" href="#django.template.loaders.filesystem.Loader" title="django.template.loaders.filesystem.Loader"><code>filesystem.Loader</code></a>.</p> <p>It defaults to an empty list.</p> </li> <li>
+<p class="first"><code>app_dirs</code> only affects the default value of <code>loaders</code>. See below.</p> <p>It defaults to <code>False</code>.</p> </li> <li>
+<p class="first"><code>autoescape</code> controls whether HTML autoescaping is enabled.</p> <p>It defaults to <code>True</code>.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">Only set it to <code>False</code> if you’re rendering non-HTML templates!</p> </div> </li> <li>
+<p class="first"><code>context_processors</code> is a list of dotted Python paths to callables that are used to populate the context when a template is rendered with a request. These callables take a request object as their argument and return a <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#dict" title="(in Python v3.10)"><code>dict</code></a> of items to be merged into the context.</p> <p>It defaults to an empty list.</p> <p>See <a class="reference internal" href="#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> for more information.</p> </li> <li>
+<p class="first"><code>debug</code> is a boolean that turns on/off template debug mode. If it is <code>True</code>, the template engine will store additional debug information which can be used to display a detailed report for any exception raised during template rendering.</p> <p>It defaults to <code>False</code>.</p> </li> <li>
+<p class="first"><code>loaders</code> is a list of template loader classes, specified as strings. Each <code>Loader</code> class knows how to import templates from a particular source. Optionally, a tuple can be used instead of a string. The first item in the tuple should be the <code>Loader</code> class name, subsequent items are passed to the <code>Loader</code> during initialization.</p> <p>It defaults to a list containing:</p> <ul class="simple"> <li><code>'django.template.loaders.filesystem.Loader'</code></li> <li>
+<code>'django.template.loaders.app_directories.Loader'</code> if and only if <code>app_dirs</code> is <code>True</code>.</li> </ul> <p>If <code>debug</code> is <code>False</code>, these loaders are wrapped in <a class="reference internal" href="#django.template.loaders.cached.Loader" title="django.template.loaders.cached.Loader"><code>django.template.loaders.cached.Loader</code></a>.</p> <p>See <a class="reference internal" href="#template-loaders"><span class="std std-ref">Loader types</span></a> for details.</p> </li> <li>
+<p class="first"><code>string_if_invalid</code> is the output, as a string, that the template system should use for invalid (e.g. misspelled) variables.</p> <p>It defaults to the empty string.</p> <p>See <a class="reference internal" href="#invalid-template-variables"><span class="std std-ref">How invalid variables are handled</span></a> for details.</p> </li> <li>
+<p class="first"><code>file_charset</code> is the charset used to read template files on disk.</p> <p>It defaults to <code>'utf-8'</code>.</p> </li> <li>
+<p class="first"><code>'libraries'</code>: A dictionary of labels and dotted Python paths of template tag modules to register with the template engine. This is used to add new libraries or provide alternate labels for existing ones. For example:</p> <pre data-language="python">Engine(
+    libraries={
+        'myapp_tags': 'path.to.myapp.tags',
+        'admin.urls': 'django.contrib.admin.templatetags.admin_urls',
+    },
+)
+</pre> <p>Libraries can be loaded by passing the corresponding dictionary key to the <a class="reference internal" href="builtins#std:templatetag-load"><code>{% load %}</code></a> tag.</p> </li> <li>
+<p class="first"><code>'builtins'</code>: A list of dotted Python paths of template tag modules to add to <a class="reference internal" href="builtins"><span class="doc">built-ins</span></a>. For example:</p> <pre data-language="python">Engine(
+    builtins=['myapp.builtins'],
+)
+</pre> <p>Tags and filters from built-in libraries can be used without first calling the <a class="reference internal" href="builtins#std:templatetag-load"><code>{% load %}</code></a> tag.</p> </li> </ul> </dd>
+</dl> <dl class="staticmethod"> <dt id="django.template.Engine.get_default">
+<code>static Engine.get_default()</code> </dt> <dd>
+<p>Returns the underlying <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a> from the first configured <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> engine. Raises <a class="reference internal" href="../exceptions#django.core.exceptions.ImproperlyConfigured" title="django.core.exceptions.ImproperlyConfigured"><code>ImproperlyConfigured</code></a> if no engines are configured.</p> <p>It’s required for preserving APIs that rely on a globally available, implicitly configured engine. Any other use is strongly discouraged.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Engine.from_string">
+<code>Engine.from_string(template_code)</code> </dt> <dd>
+<p>Compiles the given template code and returns a <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Engine.get_template">
+<code>Engine.get_template(template_name)</code> </dt> <dd>
+<p>Loads a template with the given name, compiles it and returns a <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> object.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Engine.select_template">
+<code>Engine.select_template(template_name_list)</code> </dt> <dd>
+<p>Like <a class="reference internal" href="#django.template.Engine.get_template" title="django.template.Engine.get_template"><code>get_template()</code></a>, except it takes a list of names and returns the first template that was found.</p> </dd>
+</dl>   <h2 id="loading-a-template">Loading a template</h2> <p id="s-loading-a-template">The recommended way to create a <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> is by calling the factory methods of the <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a>: <a class="reference internal" href="#django.template.Engine.get_template" title="django.template.Engine.get_template"><code>get_template()</code></a>, <a class="reference internal" href="#django.template.Engine.select_template" title="django.template.Engine.select_template"><code>select_template()</code></a> and <a class="reference internal" href="#django.template.Engine.from_string" title="django.template.Engine.from_string"><code>from_string()</code></a>.</p> <p>In a Django project where the <a class="reference internal" href="../settings#std:setting-TEMPLATES"><code>TEMPLATES</code></a> setting defines a <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> engine, it’s possible to instantiate a <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> directly. If more than one <a class="reference internal" href="../../topics/templates#django.template.backends.django.DjangoTemplates" title="django.template.backends.django.DjangoTemplates"><code>DjangoTemplates</code></a> engine is defined, the first one will be used.</p> <dl class="class"> <dt id="django.template.Template">
+<code>class Template</code> </dt> <dd>
+<p>This class lives at <code>django.template.Template</code>. The constructor takes one argument — the raw template code:</p> <pre data-language="python">from django.template import Template
+
+template = Template("My name is {{ my_name }}.")
+</pre> </dd>
+</dl> <div class="admonition-behind-the-scenes admonition"> <p class="first admonition-title">Behind the scenes</p> <p>The system only parses your raw template code once – when you create the <code>Template</code> object. From then on, it’s stored internally as a tree structure for performance.</p> <p class="last">Even the parsing itself is quite fast. Most of the parsing happens via a single call to a single, short, regular expression.</p> </div>   <h2 id="rendering-a-context">Rendering a context</h2> <p id="s-rendering-a-context">Once you have a compiled <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> object, you can render a context with it. You can reuse the same template to render it several times with different contexts.</p> <dl class="class"> <dt id="django.template.Context">
+<code>class Context(dict_=None)</code> </dt> <dd>
+<p>The constructor of <code>django.template.Context</code> takes an optional argument — a dictionary mapping variable names to variable values.</p> <p>For details, see <a class="reference internal" href="#playing-with-context"><span class="std std-ref">Playing with Context objects</span></a> below.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Template.render">
+<code>Template.render(context)</code> </dt> <dd>
+<p>Call the <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> object’s <code>render()</code> method with a <a class="reference internal" href="#django.template.Context" title="django.template.Context"><code>Context</code></a> to “fill” the template:</p> <pre data-language="python">&gt;&gt;&gt; from django.template import Context, Template
+&gt;&gt;&gt; template = Template("My name is {{ my_name }}.")
+
+&gt;&gt;&gt; context = Context({"my_name": "Adrian"})
+&gt;&gt;&gt; template.render(context)
+"My name is Adrian."
+
+&gt;&gt;&gt; context = Context({"my_name": "Dolores"})
+&gt;&gt;&gt; template.render(context)
+"My name is Dolores."
+</pre> </dd>
+</dl>  <h3 id="variables-and-lookups">Variables and lookups</h3> <p id="s-variables-and-lookups">Variable names must consist of any letter (A-Z), any digit (0-9), an underscore (but they must not start with an underscore) or a dot.</p> <p>Dots have a special meaning in template rendering. A dot in a variable name signifies a <strong>lookup</strong>. Specifically, when the template system encounters a dot in a variable name, it tries the following lookups, in this order:</p> <ul class="simple"> <li>Dictionary lookup. Example: <code>foo["bar"]</code>
+</li> <li>Attribute lookup. Example: <code>foo.bar</code>
+</li> <li>List-index lookup. Example: <code>foo[bar]</code>
+</li> </ul> <p>Note that “bar” in a template expression like <code>{{ foo.bar }}</code> will be interpreted as a literal string and not using the value of the variable “bar”, if one exists in the template context.</p> <p>The template system uses the first lookup type that works. It’s short-circuit logic. Here are a few examples:</p> <pre data-language="python">&gt;&gt;&gt; from django.template import Context, Template
+&gt;&gt;&gt; t = Template("My name is {{ person.first_name }}.")
+&gt;&gt;&gt; d = {"person": {"first_name": "Joe", "last_name": "Johnson"}}
+&gt;&gt;&gt; t.render(Context(d))
+"My name is Joe."
+
+&gt;&gt;&gt; class PersonClass: pass
+&gt;&gt;&gt; p = PersonClass()
+&gt;&gt;&gt; p.first_name = "Ron"
+&gt;&gt;&gt; p.last_name = "Nasty"
+&gt;&gt;&gt; t.render(Context({"person": p}))
+"My name is Ron."
+
+&gt;&gt;&gt; t = Template("The first stooge in the list is {{ stooges.0 }}.")
+&gt;&gt;&gt; c = Context({"stooges": ["Larry", "Curly", "Moe"]})
+&gt;&gt;&gt; t.render(c)
+"The first stooge in the list is Larry."
+</pre> <p>If any part of the variable is callable, the template system will try calling it. Example:</p> <pre data-language="python">&gt;&gt;&gt; class PersonClass2:
+...     def name(self):
+...         return "Samantha"
+&gt;&gt;&gt; t = Template("My name is {{ person.name }}.")
+&gt;&gt;&gt; t.render(Context({"person": PersonClass2}))
+"My name is Samantha."
+</pre> <p>Callable variables are slightly more complex than variables which only require straight lookups. Here are some things to keep in mind:</p> <ul> <li>
+<p class="first">If the variable raises an exception when called, the exception will be propagated, unless the exception has an attribute <code>silent_variable_failure</code> whose value is <code>True</code>. If the exception <em>does</em> have a <code>silent_variable_failure</code> attribute whose value is <code>True</code>, the variable will render as the value of the engine’s <code>string_if_invalid</code> configuration option (an empty string, by default). Example:</p> <pre data-language="python">&gt;&gt;&gt; t = Template("My name is {{ person.first_name }}.")
+&gt;&gt;&gt; class PersonClass3:
+...     def first_name(self):
+...         raise AssertionError("foo")
+&gt;&gt;&gt; p = PersonClass3()
+&gt;&gt;&gt; t.render(Context({"person": p}))
+Traceback (most recent call last):
+...
+AssertionError: foo
+
+&gt;&gt;&gt; class SilentAssertionError(Exception):
+...     silent_variable_failure = True
+&gt;&gt;&gt; class PersonClass4:
+...     def first_name(self):
+...         raise SilentAssertionError
+&gt;&gt;&gt; p = PersonClass4()
+&gt;&gt;&gt; t.render(Context({"person": p}))
+"My name is ."
+</pre> <p>Note that <a class="reference internal" href="../exceptions#django.core.exceptions.ObjectDoesNotExist" title="django.core.exceptions.ObjectDoesNotExist"><code>django.core.exceptions.ObjectDoesNotExist</code></a>, which is the base class for all Django database API <code>DoesNotExist</code> exceptions, has <code>silent_variable_failure = True</code>. So if you’re using Django templates with Django model objects, any <code>DoesNotExist</code> exception will fail silently.</p> </li> <li>A variable can only be called if it has no required arguments. Otherwise, the system will return the value of the engine’s <code>string_if_invalid</code> option. </li> </ul> <ul id="alters-data-description"> <li>
+<p class="first">There can be side effects when calling some variables, and it’d be either foolish or a security hole to allow the template system to access them.</p> <p>A good example is the <a class="reference internal" href="../models/instances#django.db.models.Model.delete" title="django.db.models.Model.delete"><code>delete()</code></a> method on each Django model object. The template system shouldn’t be allowed to do something like this:</p> <pre data-language="python">I will now delete this valuable data. {{ data.delete }}
+</pre> <p>To prevent this, set an <code>alters_data</code> attribute on the callable variable. The template system won’t call a variable if it has <code>alters_data=True</code> set, and will instead replace the variable with <code>string_if_invalid</code>, unconditionally. The dynamically-generated <a class="reference internal" href="../models/instances#django.db.models.Model.delete" title="django.db.models.Model.delete"><code>delete()</code></a> and <a class="reference internal" href="../models/instances#django.db.models.Model.save" title="django.db.models.Model.save"><code>save()</code></a> methods on Django model objects get <code>alters_data=True</code> automatically. Example:</p> <pre data-language="python">def sensitive_function(self):
+    self.database_record.delete()
+sensitive_function.alters_data = True
+</pre> </li> <li>Occasionally you may want to turn off this feature for other reasons, and tell the template system to leave a variable uncalled no matter what. To do so, set a <code>do_not_call_in_templates</code> attribute on the callable with the value <code>True</code>. The template system then will act as if your variable is not callable (allowing you to access attributes of the callable, for example). </li> </ul>   <h3 id="invalid-template-variables">How invalid variables are handled</h3> <p id="s-how-invalid-variables-are-handled">Generally, if a variable doesn’t exist, the template system inserts the value of the engine’s <code>string_if_invalid</code> configuration option, which is set to <code>''</code> (the empty string) by default.</p> <p>Filters that are applied to an invalid variable will only be applied if <code>string_if_invalid</code> is set to <code>''</code> (the empty string). If <code>string_if_invalid</code> is set to any other value, variable filters will be ignored.</p> <p>This behavior is slightly different for the <code>if</code>, <code>for</code> and <code>regroup</code> template tags. If an invalid variable is provided to one of these template tags, the variable will be interpreted as <code>None</code>. Filters are always applied to invalid variables within these template tags.</p> <p>If <code>string_if_invalid</code> contains a <code>'%s'</code>, the format marker will be replaced with the name of the invalid variable.</p> <div class="admonition-for-debug-purposes-only admonition"> <p class="first admonition-title">For debug purposes only!</p> <p>While <code>string_if_invalid</code> can be a useful debugging tool, it is a bad idea to turn it on as a ‘development default’.</p> <p>Many templates, including some of Django’s, rely upon the silence of the template system when a nonexistent variable is encountered. If you assign a value other than <code>''</code> to <code>string_if_invalid</code>, you will experience rendering problems with these templates and sites.</p> <p class="last">Generally, <code>string_if_invalid</code> should only be enabled in order to debug a specific template problem, then cleared once debugging is complete.</p> </div>   <h3 id="built-in-variables">Built-in variables</h3> <p id="s-built-in-variables">Every context contains <code>True</code>, <code>False</code> and <code>None</code>. As you would expect, these variables resolve to the corresponding Python objects.</p>   <h3 id="limitations-with-string-literals">Limitations with string literals</h3> <p id="s-limitations-with-string-literals">Django’s template language has no way to escape the characters used for its own syntax. For example, the <a class="reference internal" href="builtins#std:templatetag-templatetag"><code>templatetag</code></a> tag is required if you need to output character sequences like <code>{%</code> and <code>%}</code>.</p> <p>A similar issue exists if you want to include these sequences in template filter or tag arguments. For example, when parsing a block tag, Django’s template parser looks for the first occurrence of <code>%}</code> after a <code>{%</code>. This prevents the use of <code>"%}"</code> as a string literal. For example, a <code>TemplateSyntaxError</code> will be raised for the following expressions:</p> <pre data-language="python">{% include "template.html" tvar="Some string literal with %} in it." %}
+
+{% with tvar="Some string literal with %} in it." %}{% endwith %}
+</pre> <p>The same issue can be triggered by using a reserved sequence in filter arguments:</p> <pre data-language="python">{{ some.variable|default:"}}" }}
+</pre> <p>If you need to use strings with these sequences, store them in template variables or use a custom template tag or filter to workaround the limitation.</p>    <h2 id="playing-with-context">Playing with <code>Context</code> objects</h2> <p id="s-playing-with-context-objects">Most of the time, you’ll instantiate <a class="reference internal" href="#django.template.Context" title="django.template.Context"><code>Context</code></a> objects by passing in a fully-populated dictionary to <code>Context()</code>. But you can add and delete items from a <code>Context</code> object once it’s been instantiated, too, using standard dictionary syntax:</p> <pre data-language="python">&gt;&gt;&gt; from django.template import Context
+&gt;&gt;&gt; c = Context({"foo": "bar"})
+&gt;&gt;&gt; c['foo']
+'bar'
+&gt;&gt;&gt; del c['foo']
+&gt;&gt;&gt; c['foo']
+Traceback (most recent call last):
+...
+KeyError: 'foo'
+&gt;&gt;&gt; c['newvariable'] = 'hello'
+&gt;&gt;&gt; c['newvariable']
+'hello'
+</pre> <dl class="method"> <dt id="django.template.Context.get">
+<code>Context.get(key, otherwise=None)</code> </dt> <dd>
+<p>Returns the value for <code>key</code> if <code>key</code> is in the context, else returns <code>otherwise</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Context.setdefault">
+<code>Context.setdefault(key, default=None)</code> </dt> <dd>
+<p>If <code>key</code> is in the context, returns its value. Otherwise inserts <code>key</code> with a value of <code>default</code> and returns <code>default</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.Context.pop">
+<code>Context.pop()</code> </dt> 
+</dl> <dl class="method"> <dt id="django.template.Context.push">
+<code>Context.push()</code> </dt> 
+</dl> <dl class="exception"> <dt id="django.template.ContextPopException">
+<code>exception ContextPopException</code> </dt> 
+</dl> <p>A <code>Context</code> object is a stack. That is, you can <code>push()</code> and <code>pop()</code> it. If you <code>pop()</code> too much, it’ll raise <code>django.template.ContextPopException</code>:</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; c.push()
+{}
+&gt;&gt;&gt; c['foo'] = 'second level'
+&gt;&gt;&gt; c['foo']
+'second level'
+&gt;&gt;&gt; c.pop()
+{'foo': 'second level'}
+&gt;&gt;&gt; c['foo']
+'first level'
+&gt;&gt;&gt; c['foo'] = 'overwritten'
+&gt;&gt;&gt; c['foo']
+'overwritten'
+&gt;&gt;&gt; c.pop()
+Traceback (most recent call last):
+...
+ContextPopException
+</pre> <p>You can also use <code>push()</code> as a context manager to ensure a matching <code>pop()</code> is called.</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; with c.push():
+...     c['foo'] = 'second level'
+...     c['foo']
+'second level'
+&gt;&gt;&gt; c['foo']
+'first level'
+</pre> <p>All arguments passed to <code>push()</code> will be passed to the <code>dict</code> constructor used to build the new context level.</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; with c.push(foo='second level'):
+...     c['foo']
+'second level'
+&gt;&gt;&gt; c['foo']
+'first level'
+</pre> <dl class="method"> <dt id="django.template.Context.update">
+<code>Context.update(other_dict)</code> </dt> 
+</dl> <p>In addition to <code>push()</code> and <code>pop()</code>, the <code>Context</code> object also defines an <code>update()</code> method. This works like <code>push()</code> but takes a dictionary as an argument and pushes that dictionary onto the stack instead of an empty one.</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; c.update({'foo': 'updated'})
+{'foo': 'updated'}
+&gt;&gt;&gt; c['foo']
+'updated'
+&gt;&gt;&gt; c.pop()
+{'foo': 'updated'}
+&gt;&gt;&gt; c['foo']
+'first level'
+</pre> <p>Like <code>push()</code>, you can use <code>update()</code> as a context manager to ensure a matching <code>pop()</code> is called.</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; with c.update({'foo': 'second level'}):
+...     c['foo']
+'second level'
+&gt;&gt;&gt; c['foo']
+'first level'
+</pre> <p>Using a <code>Context</code> as a stack comes in handy in <a class="reference internal" href="../../howto/custom-template-tags#howto-writing-custom-template-tags"><span class="std std-ref">some custom template tags</span></a>.</p> <dl class="method"> <dt id="django.template.Context.flatten">
+<code>Context.flatten()</code> </dt> 
+</dl> <p>Using <code>flatten()</code> method you can get whole <code>Context</code> stack as one dictionary including builtin variables.</p> <pre data-language="python">&gt;&gt;&gt; c = Context()
+&gt;&gt;&gt; c['foo'] = 'first level'
+&gt;&gt;&gt; c.update({'bar': 'second level'})
+{'bar': 'second level'}
+&gt;&gt;&gt; c.flatten()
+{'True': True, 'None': None, 'foo': 'first level', 'False': False, 'bar': 'second level'}
+</pre> <p>A <code>flatten()</code> method is also internally used to make <code>Context</code> objects comparable.</p> <pre data-language="python">&gt;&gt;&gt; c1 = Context()
+&gt;&gt;&gt; c1['foo'] = 'first level'
+&gt;&gt;&gt; c1['bar'] = 'second level'
+&gt;&gt;&gt; c2 = Context()
+&gt;&gt;&gt; c2.update({'bar': 'second level', 'foo': 'first level'})
+{'foo': 'first level', 'bar': 'second level'}
+&gt;&gt;&gt; c1 == c2
+True
+</pre> <p>Result from <code>flatten()</code> can be useful in unit tests to compare <code>Context</code> against <code>dict</code>:</p> <pre data-language="python">class ContextTest(unittest.TestCase):
+    def test_against_dictionary(self):
+        c1 = Context()
+        c1['update'] = 'value'
+        self.assertEqual(c1.flatten(), {
+            'True': True,
+            'None': None,
+            'False': False,
+            'update': 'value',
+        })
+</pre>  <h3 id="subclassing-context-requestcontext">Using <code>RequestContext</code>
+</h3> <dl class="class" id="s-using-requestcontext"> <dt id="django.template.RequestContext">
+<code>class RequestContext(request, dict_=None, processors=None)</code> </dt> 
+</dl> <p>Django comes with a special <code>Context</code> class, <code>django.template.RequestContext</code>, that acts slightly differently from the normal <code>django.template.Context</code>. The first difference is that it takes an <a class="reference internal" href="../request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> as its first argument. For example:</p> <pre data-language="python">c = RequestContext(request, {
+    'foo': 'bar',
+})
+</pre> <p>The second difference is that it automatically populates the context with a few variables, according to the engine’s <code>context_processors</code> configuration option.</p> <p>The <code>context_processors</code> option is a list of callables – called <strong>context processors</strong> – that take a request object as their argument and return a dictionary of items to be merged into the context. In the default generated settings file, the default template engine contains the following context processors:</p> <pre data-language="python">[
+    'django.template.context_processors.debug',
+    'django.template.context_processors.request',
+    'django.contrib.auth.context_processors.auth',
+    'django.contrib.messages.context_processors.messages',
+]
+</pre> <p>In addition to these, <a class="reference internal" href="#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> always enables <code>'django.template.context_processors.csrf'</code>. This is a security related context processor required by the admin and other contrib apps, and, in case of accidental misconfiguration, it is deliberately hardcoded in and cannot be turned off in the <code>context_processors</code> option.</p> <p>Each processor is applied in order. That means, if one processor adds a variable to the context and a second processor adds a variable with the same name, the second will override the first. The default processors are explained below.</p> <div class="admonition-when-context-processors-are-applied admonition"> <p class="first admonition-title">When context processors are applied</p> <p>Context processors are applied on top of context data. This means that a context processor may overwrite variables you’ve supplied to your <a class="reference internal" href="#django.template.Context" title="django.template.Context"><code>Context</code></a> or <a class="reference internal" href="#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a>, so take care to avoid variable names that overlap with those supplied by your context processors.</p> <p>If you want context data to take priority over context processors, use the following pattern:</p> <pre data-language="python">from django.template import RequestContext
+
+request_context = RequestContext(request)
+request_context.push({"my_name": "Adrian"})
+</pre> <p class="last">Django does this to allow context data to override context processors in APIs such as <a class="reference internal" href="../../topics/http/shortcuts#django.shortcuts.render" title="django.shortcuts.render"><code>render()</code></a> and <a class="reference internal" href="../template-response#django.template.response.TemplateResponse" title="django.template.response.TemplateResponse"><code>TemplateResponse</code></a>.</p> </div> <p>Also, you can give <a class="reference internal" href="#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> a list of additional processors, using the optional, third positional argument, <code>processors</code>. In this example, the <a class="reference internal" href="#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> instance gets an <code>ip_address</code> variable:</p> <pre data-language="python">from django.http import HttpResponse
+from django.template import RequestContext, Template
+
+def ip_address_processor(request):
+    return {'ip_address': request.META['REMOTE_ADDR']}
+
+def client_ip_view(request):
+    template = Template('{{ title }}: {{ ip_address }}')
+    context = RequestContext(request, {
+        'title': 'Your IP Address',
+    }, [ip_address_processor])
+    return HttpResponse(template.render(context))
+</pre>   <h3 id="context-processors">Built-in template context processors</h3> <p id="s-built-in-template-context-processors">Here’s what each of the built-in processors does:</p>  <h4 id="django-contrib-auth-context-processors-auth"><code>django.contrib.auth.context_processors.auth</code></h4> <dl class="function" id="s-django-contrib-auth-context-processors-auth"> <dt id="django.contrib.auth.context_processors.auth">
+<code>auth()</code> </dt> 
+</dl> <p>If this processor is enabled, every <code>RequestContext</code> will contain these variables:</p> <ul class="simple"> <li>
+<code>user</code> – An <code>auth.User</code> instance representing the currently logged-in user (or an <code>AnonymousUser</code> instance, if the client isn’t logged in).</li> <li>
+<code>perms</code> – An instance of <code>django.contrib.auth.context_processors.PermWrapper</code>, representing the permissions that the currently logged-in user has.</li> </ul>   <h4 id="django-template-context-processors-debug"><code>django.template.context_processors.debug</code></h4> <dl class="function" id="s-django-template-context-processors-debug"> <dt id="django.template.context_processors.debug">
+<code>debug()</code> </dt> 
+</dl> <p>If this processor is enabled, every <code>RequestContext</code> will contain these two variables – but only if your <a class="reference internal" href="../settings#std:setting-DEBUG"><code>DEBUG</code></a> setting is set to <code>True</code> and the request’s IP address (<code>request.META['REMOTE_ADDR']</code>) is in the <a class="reference internal" href="../settings#std:setting-INTERNAL_IPS"><code>INTERNAL_IPS</code></a> setting:</p> <ul class="simple"> <li>
+<code>debug</code> – <code>True</code>. You can use this in templates to test whether you’re in <a class="reference internal" href="../settings#std:setting-DEBUG"><code>DEBUG</code></a> mode.</li> <li>
+<code>sql_queries</code> – A list of <code>{'sql': ..., 'time': ...}</code> dictionaries, representing every SQL query that has happened so far during the request and how long it took. The list is in order by database alias and then by query. It’s lazily generated on access.</li> </ul>   <h4 id="django-template-context-processors-i18n"><code>django.template.context_processors.i18n</code></h4> <dl class="function" id="s-django-template-context-processors-i18n"> <dt id="django.template.context_processors.i18n">
+<code>i18n()</code> </dt> 
+</dl> <p>If this processor is enabled, every <code>RequestContext</code> will contain these variables:</p> <ul class="simple"> <li>
+<code>LANGUAGES</code> – The value of the <a class="reference internal" href="../settings#std:setting-LANGUAGES"><code>LANGUAGES</code></a> setting.</li> <li>
+<code>LANGUAGE_BIDI</code> – <code>True</code> if the current language is a right-to-left language, e.g. Hebrew, Arabic. <code>False</code> if it’s a left-to-right language, e.g. English, French, German.</li> <li>
+<code>LANGUAGE_CODE</code> – <code>request.LANGUAGE_CODE</code>, if it exists. Otherwise, the value of the <a class="reference internal" href="../settings#std:setting-LANGUAGE_CODE"><code>LANGUAGE_CODE</code></a> setting.</li> </ul> <p>See <a class="reference internal" href="../../topics/i18n/translation#i18n-template-tags"><span class="std std-ref">i18n template tags</span></a> for template tags that generate the same values.</p>   <h4 id="django-template-context-processors-media"><code>django.template.context_processors.media</code></h4> <p id="s-django-template-context-processors-media">If this processor is enabled, every <code>RequestContext</code> will contain a variable <code>MEDIA_URL</code>, providing the value of the <a class="reference internal" href="../settings#std:setting-MEDIA_URL"><code>MEDIA_URL</code></a> setting.</p>   <h4 id="django-template-context-processors-static"><code>django.template.context_processors.static</code></h4> <dl class="function" id="s-django-template-context-processors-static"> <dt id="django.template.context_processors.static">
+<code>static()</code> </dt> 
+</dl> <p>If this processor is enabled, every <code>RequestContext</code> will contain a variable <code>STATIC_URL</code>, providing the value of the <a class="reference internal" href="../settings#std:setting-STATIC_URL"><code>STATIC_URL</code></a> setting.</p>   <h4 id="django-template-context-processors-csrf"><code>django.template.context_processors.csrf</code></h4> <p id="s-django-template-context-processors-csrf">This processor adds a token that is needed by the <a class="reference internal" href="builtins#std:templatetag-csrf_token"><code>csrf_token</code></a> template tag for protection against <a class="reference internal" href="../csrf"><span class="doc">Cross Site Request Forgeries</span></a>.</p>   <h4 id="django-template-context-processors-request"><code>django.template.context_processors.request</code></h4> <p id="s-django-template-context-processors-request">If this processor is enabled, every <code>RequestContext</code> will contain a variable <code>request</code>, which is the current <a class="reference internal" href="../request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a>.</p>   <h4 id="django-template-context-processors-tz"><code>django.template.context_processors.tz</code></h4> <dl class="function" id="s-django-template-context-processors-tz"> <dt id="django.template.context_processors.tz">
+<code>tz()</code> </dt> 
+</dl> <p>If this processor is enabled, every <code>RequestContext</code> will contain a variable <code>TIME_ZONE</code>, providing the name of the currently active time zone.</p>   <h4 id="django-contrib-messages-context-processors-messages"><code>django.contrib.messages.context_processors.messages</code></h4> <p id="s-django-contrib-messages-context-processors-messages">If this processor is enabled, every <code>RequestContext</code> will contain these two variables:</p> <ul class="simple"> <li>
+<code>messages</code> – A list of messages (as strings) that have been set via the <a class="reference internal" href="../contrib/messages"><span class="doc">messages framework</span></a>.</li> <li>
+<code>DEFAULT_MESSAGE_LEVELS</code> – A mapping of the message level names to <a class="reference internal" href="../contrib/messages#message-level-constants"><span class="std std-ref">their numeric value</span></a>.</li> </ul>    <h3 id="writing-your-own-context-processors">Writing your own context processors</h3> <p id="s-writing-your-own-context-processors">A context processor has a simple interface: It’s a Python function that takes one argument, an <a class="reference internal" href="../request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> object, and returns a dictionary that gets added to the template context.</p> <p>For example, to add the <a class="reference internal" href="../settings#std:setting-DEFAULT_FROM_EMAIL"><code>DEFAULT_FROM_EMAIL</code></a> setting to every context:</p> <pre data-language="python">from django.conf import settings
+
+def from_email(request):
+    return {
+        "DEFAULT_FROM_EMAIL": settings.DEFAULT_FROM_EMAIL,
+    }
+</pre> <p>Custom context processors can live anywhere in your code base. All Django cares about is that your custom context processors are pointed to by the <code>'context_processors'</code> option in your <a class="reference internal" href="../settings#std:setting-TEMPLATES"><code>TEMPLATES</code></a> setting — or the <code>context_processors</code> argument of <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a> if you’re using it directly.</p>    <h2 id="loading-templates">Loading templates</h2> <p id="s-loading-templates">Generally, you’ll store templates in files on your filesystem rather than using the low-level <a class="reference internal" href="#django.template.Template" title="django.template.Template"><code>Template</code></a> API yourself. Save templates in a directory specified as a <strong>template directory</strong>.</p> <p>Django searches for template directories in a number of places, depending on your template loading settings (see “Loader types” below), but the most basic way of specifying template directories is by using the <a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a> option.</p>  <h3 id="the-dirs-option">The <a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a> option</h3> <p id="s-the-dirs-option">Tell Django what your template directories are by using the <a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a> option in the <a class="reference internal" href="../settings#std:setting-TEMPLATES"><code>TEMPLATES</code></a> setting in your settings file — or the <code>dirs</code> argument of <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a>. This should be set to a list of strings that contain full paths to your template directories:</p> <pre data-language="python">TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [
+            '/home/html/templates/lawrence.com',
+            '/home/html/templates/default',
+        ],
+    },
+]
+</pre> <p>Your templates can go anywhere you want, as long as the directories and templates are readable by the web server. They can have any extension you want, such as <code>.html</code> or <code>.txt</code>, or they can have no extension at all.</p> <p>Note that these paths should use Unix-style forward slashes, even on Windows.</p>   <h3 id="template-loaders">Loader types</h3> <p id="s-loader-types">By default, Django uses a filesystem-based template loader, but Django comes with a few other template loaders, which know how to load templates from other sources.</p> <p>Some of these other loaders are disabled by default, but you can activate them by adding a <code>'loaders'</code> option to your <code>DjangoTemplates</code> backend in the <a class="reference internal" href="../settings#std:setting-TEMPLATES"><code>TEMPLATES</code></a> setting or passing a <code>loaders</code> argument to <a class="reference internal" href="#django.template.Engine" title="django.template.Engine"><code>Engine</code></a>. <code>loaders</code> should be a list of strings or tuples, where each represents a template loader class. Here are the template loaders that come with Django:</p> <p><code>django.template.loaders.filesystem.Loader</code></p> <dl class="class"> <dt id="django.template.loaders.filesystem.Loader">
+<code>class filesystem.Loader</code> </dt> <dd>
+<p>Loads templates from the filesystem, according to <a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a>.</p> <p>This loader is enabled by default. However it won’t find any templates until you set <a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a> to a non-empty list:</p> <pre data-language="python">TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'DIRS': [BASE_DIR / 'templates'],
+}]
+</pre> <p>You can also override <code>'DIRS'</code> and specify specific directories for a particular filesystem loader:</p> <pre data-language="python">TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'OPTIONS': {
+        'loaders': [
+            (
+                'django.template.loaders.filesystem.Loader',
+                [BASE_DIR / 'templates'],
+            ),
+        ],
+    },
+}]
+</pre> </dd>
+</dl> <p><code>django.template.loaders.app_directories.Loader</code></p> <dl class="class"> <dt id="django.template.loaders.app_directories.Loader">
+<code>class app_directories.Loader</code> </dt> <dd>
+<p>Loads templates from Django apps on the filesystem. For each app in <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>, the loader looks for a <code>templates</code> subdirectory. If the directory exists, Django looks for templates in there.</p> <p>This means you can store templates with your individual apps. This also helps to distribute Django apps with default templates.</p> <p>For example, for this setting:</p> <pre data-language="python">INSTALLED_APPS = ['myproject.polls', 'myproject.music']
+</pre> <p>…then <code>get_template('foo.html')</code> will look for <code>foo.html</code> in these directories, in this order:</p> <ul class="simple"> <li><code>/path/to/myproject/polls/templates/</code></li> <li><code>/path/to/myproject/music/templates/</code></li> </ul> <p>… and will use the one it finds first.</p> <p>The order of <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> is significant! For example, if you want to customize the Django admin, you might choose to override the standard <code>admin/base_site.html</code> template, from <code>django.contrib.admin</code>, with your own <code>admin/base_site.html</code> in <code>myproject.polls</code>. You must then make sure that your <code>myproject.polls</code> comes <em>before</em> <code>django.contrib.admin</code> in <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>, otherwise <code>django.contrib.admin</code>’s will be loaded first and yours will be ignored.</p> <p>Note that the loader performs an optimization when it first runs: it caches a list of which <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> packages have a <code>templates</code> subdirectory.</p> <p>You can enable this loader by setting <a class="reference internal" href="../settings#std:setting-TEMPLATES-APP_DIRS"><code>APP_DIRS</code></a> to <code>True</code>:</p> <pre data-language="python">TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'APP_DIRS': True,
+}]
+</pre> </dd>
+</dl> <p><code>django.template.loaders.cached.Loader</code></p> <dl class="class"> <dt id="django.template.loaders.cached.Loader">
+<code>class cached.Loader</code> </dt> <dd>
+<p>By default (when <a class="reference internal" href="../settings#std:setting-DEBUG"><code>DEBUG</code></a> is <code>True</code>), the template system reads and compiles your templates every time they’re rendered. While the Django template system is quite fast, the overhead from reading and compiling templates can add up.</p> <p>You configure the cached template loader with a list of other loaders that it should wrap. The wrapped loaders are used to locate unknown templates when they’re first encountered. The cached loader then stores the compiled <code>Template</code> in memory. The cached <code>Template</code> instance is returned for subsequent requests to load the same template.</p> <p>This loader is automatically enabled if <a class="reference internal" href="../settings#std:setting-TEMPLATES-OPTIONS"><code>OPTIONS['loaders']</code></a> isn’t specified and <a class="reference internal" href="../settings#std:setting-TEMPLATES-OPTIONS"><code>OPTIONS['debug']</code></a> is <code>False</code> (the latter option defaults to the value of <a class="reference internal" href="../settings#std:setting-DEBUG"><code>DEBUG</code></a>).</p> <p>You can also enable template caching with some custom template loaders using settings like this:</p> <pre data-language="python">TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'DIRS': [BASE_DIR / 'templates'],
+    'OPTIONS': {
+        'loaders': [
+            ('django.template.loaders.cached.Loader', [
+                'django.template.loaders.filesystem.Loader',
+                'django.template.loaders.app_directories.Loader',
+                'path.to.custom.Loader',
+            ]),
+        ],
+    },
+}]
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">All of the built-in Django template tags are safe to use with the cached loader, but if you’re using custom template tags that come from third party packages, or that you wrote yourself, you should ensure that the <code>Node</code> implementation for each tag is thread-safe. For more information, see <a class="reference internal" href="../../howto/custom-template-tags#template-tag-thread-safety"><span class="std std-ref">template tag thread safety considerations</span></a>.</p> </div> </dd>
+</dl> <p><code>django.template.loaders.locmem.Loader</code></p> <dl class="class"> <dt id="django.template.loaders.locmem.Loader">
+<code>class locmem.Loader</code> </dt> <dd>
+<p>Loads templates from a Python dictionary. This is useful for testing.</p> <p>This loader takes a dictionary of templates as its first argument:</p> <pre data-language="python">TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'OPTIONS': {
+        'loaders': [
+            ('django.template.loaders.locmem.Loader', {
+                'index.html': 'content here',
+            }),
+        ],
+    },
+}]
+</pre> <p>This loader is disabled by default.</p> </dd>
+</dl> <p>Django uses the template loaders in order according to the <code>'loaders'</code> option. It uses each loader until a loader finds a match.</p>    <h2 id="custom-template-loaders">Custom loaders</h2> <p id="s-custom-loaders">It’s possible to load templates from additional sources using custom template loaders. Custom <code>Loader</code> classes should inherit from <code>django.template.loaders.base.Loader</code> and define the <code>get_contents()</code> and <code>get_template_sources()</code> methods.</p>  <h3 id="loader-methods">Loader methods</h3> <dl class="class" id="s-loader-methods"> <dt id="django.template.loaders.base.Loader">
+<code>class Loader</code> </dt> <dd>
+<p>Loads templates from a given source, such as the filesystem or a database.</p> <dl class="method"> <dt id="django.template.loaders.base.Loader.get_template_sources">
+<code>get_template_sources(template_name)</code> </dt> <dd>
+<p>A method that takes a <code>template_name</code> and yields <a class="reference internal" href="#django.template.base.Origin" title="django.template.base.Origin"><code>Origin</code></a> instances for each possible source.</p> <p>For example, the filesystem loader may receive <code>'index.html'</code> as a <code>template_name</code> argument. This method would yield origins for the full path of <code>index.html</code> as it appears in each template directory the loader looks at.</p> <p>The method doesn’t need to verify that the template exists at a given path, but it should ensure the path is valid. For instance, the filesystem loader makes sure the path lies under a valid template directory.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.loaders.base.Loader.get_contents">
+<code>get_contents(origin)</code> </dt> <dd>
+<p>Returns the contents for a template given a <a class="reference internal" href="#django.template.base.Origin" title="django.template.base.Origin"><code>Origin</code></a> instance.</p> <p>This is where a filesystem loader would read contents from the filesystem, or a database loader would read from the database. If a matching template doesn’t exist, this should raise a <a class="reference internal" href="../../topics/templates#django.template.TemplateDoesNotExist" title="django.template.TemplateDoesNotExist"><code>TemplateDoesNotExist</code></a> error.</p> </dd>
+</dl> <dl class="method"> <dt id="django.template.loaders.base.Loader.get_template">
+<code>get_template(template_name, skip=None)</code> </dt> <dd>
+<p>Returns a <code>Template</code> object for a given <code>template_name</code> by looping through results from <a class="reference internal" href="#django.template.loaders.base.Loader.get_template_sources" title="django.template.loaders.base.Loader.get_template_sources"><code>get_template_sources()</code></a> and calling <a class="reference internal" href="#django.template.loaders.base.Loader.get_contents" title="django.template.loaders.base.Loader.get_contents"><code>get_contents()</code></a>. This returns the first matching template. If no template is found, <a class="reference internal" href="../../topics/templates#django.template.TemplateDoesNotExist" title="django.template.TemplateDoesNotExist"><code>TemplateDoesNotExist</code></a> is raised.</p> <p>The optional <code>skip</code> argument is a list of origins to ignore when extending templates. This allow templates to extend other templates of the same name. It also used to avoid recursion errors.</p> <p>In general, it is enough to define <a class="reference internal" href="#django.template.loaders.base.Loader.get_template_sources" title="django.template.loaders.base.Loader.get_template_sources"><code>get_template_sources()</code></a> and <a class="reference internal" href="#django.template.loaders.base.Loader.get_contents" title="django.template.loaders.base.Loader.get_contents"><code>get_contents()</code></a> for custom template loaders. <code>get_template()</code> will usually not need to be overridden.</p> </dd>
+</dl> </dd>
+</dl> <div class="admonition-building-your-own admonition"> <p class="first admonition-title">Building your own</p> <p class="last">For examples, read the <a class="reference external" href="https://github.com/django/django/blob/main/django/template/loaders">source code for Django’s built-in loaders</a>.</p> </div>    <h2 id="template-origin">Template origin</h2> <p id="s-template-origin">Templates have an <code>origin</code> containing attributes depending on the source they are loaded from.</p> <dl class="class"> <dt id="django.template.base.Origin">
+<code>class Origin(name, template_name=None, loader=None)</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.template.base.Origin.name">
+<code>name</code> </dt> <dd>
+<p>The path to the template as returned by the template loader. For loaders that read from the file system, this is the full path to the template.</p> <p>If the template is instantiated directly rather than through a template loader, this is a string value of <code>&lt;unknown_source&gt;</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.template.base.Origin.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The relative path to the template as passed into the template loader.</p> <p>If the template is instantiated directly rather than through a template loader, this is <code>None</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.template.base.Origin.loader">
+<code>loader</code> </dt> <dd>
+<p>The template loader instance that constructed this <code>Origin</code>.</p> <p>If the template is instantiated directly rather than through a template loader, this is <code>None</code>.</p> <p><a class="reference internal" href="#django.template.loaders.cached.Loader" title="django.template.loaders.cached.Loader"><code>django.template.loaders.cached.Loader</code></a> requires all of its wrapped loaders to set this attribute, typically by instantiating the <code>Origin</code> with <code>loader=self</code>.</p> </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/templates/api/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/templates/api/</a>
+  </p>
+</div>

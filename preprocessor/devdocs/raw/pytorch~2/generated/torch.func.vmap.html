@@ -1,0 +1,74 @@
+<h1 id="torch-func-vmap">torch.func.vmap</h1> <dl class="py function"> <dt class="sig sig-object py" id="torch.func.vmap">
+<code>torch.func.vmap(func, in_dims=0, out_dims=0, randomness='error', *, chunk_size=None)</code> </dt> <dd>
+<p>vmap is the vectorizing map; <code>vmap(func)</code> returns a new function that maps <code>func</code> over some dimension of the inputs. Semantically, vmap pushes the map into PyTorch operations called by <code>func</code>, effectively vectorizing those operations.</p> <p>vmap is useful for handling batch dimensions: one can write a function <code>func</code> that runs on examples and then lift it to a function that can take batches of examples with <code>vmap(func)</code>. vmap can also be used to compute batched gradients when composed with autograd.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p><a class="reference internal" href="torch.vmap#torch.vmap" title="torch.vmap"><code>torch.vmap()</code></a> is aliased to <a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>torch.func.vmap()</code></a> for convenience. Use whichever one you’d like.</p> </div> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>func</strong> (<em>function</em>) – A Python function that takes one or more arguments. Must return one or more Tensors.</li> <li>
+<strong>in_dims</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em> or </em><em>nested structure</em>) – Specifies which dimension of the inputs should be mapped over. <code>in_dims</code> should have a structure like the inputs. If the <code>in_dim</code> for a particular input is None, then that indicates there is no map dimension. Default: 0.</li> <li>
+<strong>out_dims</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em> or </em><em>Tuple</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>]</em>) – Specifies where the mapped dimension should appear in the outputs. If <code>out_dims</code> is a Tuple, then it should have one element per output. Default: 0.</li> <li>
+<strong>randomness</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – Specifies whether the randomness in this vmap should be the same or different across batches. If ‘different’, the randomness for each batch will be different. If ‘same’, the randomness will be the same across batches. If ‘error’, any calls to random functions will error. Default: ‘error’. WARNING: this flag only applies to random PyTorch operations and does not apply to Python’s random module or numpy randomness.</li> <li>
+<strong>chunk_size</strong> (<em>None</em><em> or </em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – If None (default), apply a single vmap over inputs. If not None, then compute the vmap <code>chunk_size</code> samples at a time. Note that <code>chunk_size=1</code> is equivalent to computing the vmap with a for-loop. If you run into memory issues computing the vmap, please try a non-None chunk_size.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>Returns a new “batched” function. It takes the same inputs as <code>func</code>, except each input has an extra dimension at the index specified by <code>in_dims</code>. It takes returns the same outputs as <code>func</code>, except each output has an extra dimension at the index specified by <code>out_dims</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a></p> </dd> </dl> <p>One example of using <a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> is to compute batched dot products. PyTorch doesn’t provide a batched <code>torch.dot</code> API; instead of unsuccessfully rummaging through docs, use <a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> to construct a new function.</p> <pre data-language="python">&gt;&gt;&gt; torch.dot                            # [D], [D] -&gt; []
+&gt;&gt;&gt; batched_dot = torch.func.vmap(torch.dot)  # [N, D], [N, D] -&gt; [N]
+&gt;&gt;&gt; x, y = torch.randn(2, 5), torch.randn(2, 5)
+&gt;&gt;&gt; batched_dot(x, y)
+</pre> <p><a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> can be helpful in hiding batch dimensions, leading to a simpler model authoring experience.</p> <pre data-language="python">&gt;&gt;&gt; batch_size, feature_size = 3, 5
+&gt;&gt;&gt; weights = torch.randn(feature_size, requires_grad=True)
+&gt;&gt;&gt;
+&gt;&gt;&gt; def model(feature_vec):
+&gt;&gt;&gt;     # Very simple linear model with activation
+&gt;&gt;&gt;     return feature_vec.dot(weights).relu()
+&gt;&gt;&gt;
+&gt;&gt;&gt; examples = torch.randn(batch_size, feature_size)
+&gt;&gt;&gt; result = torch.vmap(model)(examples)
+</pre> <p><a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> can also help vectorize computations that were previously difficult or impossible to batch. One example is higher-order gradient computation. The PyTorch autograd engine computes vjps (vector-Jacobian products). Computing a full Jacobian matrix for some function f: R^N -&gt; R^N usually requires N calls to <code>autograd.grad</code>, one per Jacobian row. Using <a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a>, we can vectorize the whole computation, computing the Jacobian in a single call to <code>autograd.grad</code>.</p> <pre data-language="python">&gt;&gt;&gt; # Setup
+&gt;&gt;&gt; N = 5
+&gt;&gt;&gt; f = lambda x: x ** 2
+&gt;&gt;&gt; x = torch.randn(N, requires_grad=True)
+&gt;&gt;&gt; y = f(x)
+&gt;&gt;&gt; I_N = torch.eye(N)
+&gt;&gt;&gt;
+&gt;&gt;&gt; # Sequential approach
+&gt;&gt;&gt; jacobian_rows = [torch.autograd.grad(y, x, v, retain_graph=True)[0]
+&gt;&gt;&gt;                  for v in I_N.unbind()]
+&gt;&gt;&gt; jacobian = torch.stack(jacobian_rows)
+&gt;&gt;&gt;
+&gt;&gt;&gt; # vectorized gradient computation
+&gt;&gt;&gt; def get_vjp(v):
+&gt;&gt;&gt;     return torch.autograd.grad(y, x, v)
+&gt;&gt;&gt; jacobian = torch.vmap(get_vjp)(I_N)
+</pre> <p><a class="reference internal" href="#torch.func.vmap" title="torch.func.vmap"><code>vmap()</code></a> can also be nested, producing an output with multiple batched dimensions</p> <pre data-language="python">&gt;&gt;&gt; torch.dot                            # [D], [D] -&gt; []
+&gt;&gt;&gt; batched_dot = torch.vmap(torch.vmap(torch.dot))  # [N1, N0, D], [N1, N0, D] -&gt; [N1, N0]
+&gt;&gt;&gt; x, y = torch.randn(2, 3, 5), torch.randn(2, 3, 5)
+&gt;&gt;&gt; batched_dot(x, y) # tensor of size [2, 3]
+</pre> <p>If the inputs are not batched along the first dimension, <code>in_dims</code> specifies the dimension that each inputs are batched along as</p> <pre data-language="python">&gt;&gt;&gt; torch.dot                            # [N], [N] -&gt; []
+&gt;&gt;&gt; batched_dot = torch.vmap(torch.dot, in_dims=1)  # [N, D], [N, D] -&gt; [D]
+&gt;&gt;&gt; x, y = torch.randn(2, 5), torch.randn(2, 5)
+&gt;&gt;&gt; batched_dot(x, y)   # output is [5] instead of [2] if batched along the 0th dimension
+</pre> <p>If there are multiple inputs each of which is batched along different dimensions, <code>in_dims</code> must be a tuple with the batch dimension for each input as</p> <pre data-language="python">&gt;&gt;&gt; torch.dot                            # [D], [D] -&gt; []
+&gt;&gt;&gt; batched_dot = torch.vmap(torch.dot, in_dims=(0, None))  # [N, D], [D] -&gt; [N]
+&gt;&gt;&gt; x, y = torch.randn(2, 5), torch.randn(5)
+&gt;&gt;&gt; batched_dot(x, y) # second arg doesn't have a batch dim because in_dim[1] was None
+</pre> <p>If the input is a Python struct, <code>in_dims</code> must be a tuple containing a struct matching the shape of the input:</p> <pre data-language="python">&gt;&gt;&gt; f = lambda dict: torch.dot(dict['x'], dict['y'])
+&gt;&gt;&gt; x, y = torch.randn(2, 5), torch.randn(5)
+&gt;&gt;&gt; input = {'x': x, 'y': y}
+&gt;&gt;&gt; batched_dot = torch.vmap(f, in_dims=({'x': 0, 'y': None},))
+&gt;&gt;&gt; batched_dot(input)
+</pre> <p>By default, the output is batched along the first dimension. However, it can be batched along any dimension by using <code>out_dims</code></p> <pre data-language="python">&gt;&gt;&gt; f = lambda x: x ** 2
+&gt;&gt;&gt; x = torch.randn(2, 5)
+&gt;&gt;&gt; batched_pow = torch.vmap(f, out_dims=1)
+&gt;&gt;&gt; batched_pow(x) # [5, 2]
+</pre> <p>For any function that uses kwargs, the returned function will not batch the kwargs but will accept kwargs</p> <pre data-language="python">&gt;&gt;&gt; x = torch.randn([2, 5])
+&gt;&gt;&gt; def fn(x, scale=4.):
+&gt;&gt;&gt;   return x * scale
+&gt;&gt;&gt;
+&gt;&gt;&gt; batched_pow = torch.vmap(fn)
+&gt;&gt;&gt; assert torch.allclose(batched_pow(x), x * 4)
+&gt;&gt;&gt; batched_pow(x, scale=x) # scale is not batched, output has shape [2, 2, 5]
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p>vmap does not provide general autobatching or handle variable-length sequences out of the box.</p> </div> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/generated/torch.func.vmap.html" class="_attribution-link">https://pytorch.org/docs/2.1/generated/torch.func.vmap.html</a>
+  </p>
+</div>

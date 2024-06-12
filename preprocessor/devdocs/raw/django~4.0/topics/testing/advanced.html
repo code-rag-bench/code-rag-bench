@@ -1,0 +1,262 @@
+<h1 id="advanced-testing-topics">Advanced testing topics</h1>  <h2 id="the-request-factory">The request factory</h2> <dl class="class" id="s-advanced-testing-topics"> <dt id="django.test.RequestFactory">
+<code>class RequestFactory</code> </dt> 
+</dl> <p>The <a class="reference internal" href="#django.test.RequestFactory" title="django.test.RequestFactory"><code>RequestFactory</code></a> shares the same API as the test client. However, instead of behaving like a browser, the RequestFactory provides a way to generate a request instance that can be used as the first argument to any view. This means you can test a view function the same way as you would test any other function – as a black box, with exactly known inputs, testing for specific outputs.</p> <p>The API for the <a class="reference internal" href="#django.test.RequestFactory" title="django.test.RequestFactory"><code>RequestFactory</code></a> is a slightly restricted subset of the test client API:</p> <ul class="simple"> <li>It only has access to the HTTP methods <a class="reference internal" href="tools#django.test.Client.get" title="django.test.Client.get"><code>get()</code></a>, <a class="reference internal" href="tools#django.test.Client.post" title="django.test.Client.post"><code>post()</code></a>, <a class="reference internal" href="tools#django.test.Client.put" title="django.test.Client.put"><code>put()</code></a>, <a class="reference internal" href="tools#django.test.Client.delete" title="django.test.Client.delete"><code>delete()</code></a>, <a class="reference internal" href="tools#django.test.Client.head" title="django.test.Client.head"><code>head()</code></a>, <a class="reference internal" href="tools#django.test.Client.options" title="django.test.Client.options"><code>options()</code></a>, and <a class="reference internal" href="tools#django.test.Client.trace" title="django.test.Client.trace"><code>trace()</code></a>.</li> <li>These methods accept all the same arguments <em>except</em> for <code>follow</code>. Since this is just a factory for producing requests, it’s up to you to handle the response.</li> <li>It does not support middleware. Session and authentication attributes must be supplied by the test itself if required for the view to function properly.</li> </ul>  <h3 id="example">Example</h3> <p id="s-example">The following is a unit test using the request factory:</p> <pre data-language="python">from django.contrib.auth.models import AnonymousUser, User
+from django.test import RequestFactory, TestCase
+
+from .views import MyView, my_view
+
+class SimpleTest(TestCase):
+    def setUp(self):
+        # Every test needs access to the request factory.
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(
+            username='jacob', email='jacob@…', password='top_secret')
+
+    def test_details(self):
+        # Create an instance of a GET request.
+        request = self.factory.get('/customer/details')
+
+        # Recall that middleware are not supported. You can simulate a
+        # logged-in user by setting request.user manually.
+        request.user = self.user
+
+        # Or you can simulate an anonymous user by setting request.user to
+        # an AnonymousUser instance.
+        request.user = AnonymousUser()
+
+        # Test my_view() as if it were deployed at /customer/details
+        response = my_view(request)
+        # Use this syntax for class-based views.
+        response = MyView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+</pre>   <h3 id="asyncrequestfactory">AsyncRequestFactory</h3> <p id="s-asyncrequestfactory"><code>RequestFactory</code> creates WSGI-like requests. If you want to create ASGI-like requests, including having a correct ASGI <code>scope</code>, you can instead use <code>django.test.AsyncRequestFactory</code>.</p> <p>This class is directly API-compatible with <code>RequestFactory</code>, with the only difference being that it returns <code>ASGIRequest</code> instances rather than <code>WSGIRequest</code> instances. All of its methods are still synchronous callables.</p>    <h2 id="testing-class-based-views">Testing class-based views</h2> <p id="s-testing-class-based-views">In order to test class-based views outside of the request/response cycle you must ensure that they are configured correctly, by calling <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.setup" title="django.views.generic.base.View.setup"><code>setup()</code></a> after instantiation.</p> <p>For example, assuming the following class-based view:</p> <div class="literal-block-wrapper docutils container" id="id1"> <div class="code-block-caption"><span class="caption-text">views.py</span></div> <pre data-language="python">from django.views.generic import TemplateView
+
+
+class HomeView(TemplateView):
+    template_name = 'myapp/home.html'
+
+    def get_context_data(self, **kwargs):
+        kwargs['environment'] = 'Production'
+        return super().get_context_data(**kwargs)
+</pre> </div> <p>You may directly test the <code>get_context_data()</code> method by first instantiating the view, then passing a <code>request</code> to <code>setup()</code>, before proceeding with your test’s code:</p> <div class="literal-block-wrapper docutils container" id="id2"> <div class="code-block-caption"><span class="caption-text">tests.py</span></div> <pre data-language="python">from django.test import RequestFactory, TestCase
+from .views import HomeView
+
+
+class HomePageTest(TestCase):
+    def test_environment_set_in_context(self):
+        request = RequestFactory().get('/')
+        view = HomeView()
+        view.setup(request)
+
+        context = view.get_context_data()
+        self.assertIn('environment', context)
+</pre> </div>   <h2 id="topics-testing-advanced-multiple-hosts">Tests and multiple host names</h2> <p id="s-tests-and-multiple-host-names">The <a class="reference internal" href="../../ref/settings#std:setting-ALLOWED_HOSTS"><code>ALLOWED_HOSTS</code></a> setting is validated when running tests. This allows the test client to differentiate between internal and external URLs.</p> <p>Projects that support multitenancy or otherwise alter business logic based on the request’s host and use custom host names in tests must include those hosts in <a class="reference internal" href="../../ref/settings#std:setting-ALLOWED_HOSTS"><code>ALLOWED_HOSTS</code></a>.</p> <p>The first option to do so is to add the hosts to your settings file. For example, the test suite for docs.djangoproject.com includes the following:</p> <pre data-language="python">from django.test import TestCase
+
+class SearchFormTestCase(TestCase):
+    def test_empty_get(self):
+        response = self.client.get('/en/dev/search/', HTTP_HOST='docs.djangoproject.dev:8000')
+        self.assertEqual(response.status_code, 200)
+</pre> <p>and the settings file includes a list of the domains supported by the project:</p> <pre data-language="python">ALLOWED_HOSTS = [
+    'www.djangoproject.dev',
+    'docs.djangoproject.dev',
+    ...
+]
+</pre> <p>Another option is to add the required hosts to <a class="reference internal" href="../../ref/settings#std:setting-ALLOWED_HOSTS"><code>ALLOWED_HOSTS</code></a> using <a class="reference internal" href="tools#django.test.override_settings" title="django.test.override_settings"><code>override_settings()</code></a> or <a class="reference internal" href="tools#django.test.SimpleTestCase.modify_settings" title="django.test.SimpleTestCase.modify_settings"><code>modify_settings()</code></a>. This option may be preferable in standalone apps that can’t package their own settings file or for projects where the list of domains is not static (e.g., subdomains for multitenancy). For example, you could write a test for the domain <code>http://otherserver/</code> as follows:</p> <pre data-language="python">from django.test import TestCase, override_settings
+
+class MultiDomainTestCase(TestCase):
+    @override_settings(ALLOWED_HOSTS=['otherserver'])
+    def test_other_domain(self):
+        response = self.client.get('http://otherserver/foo/bar/')
+</pre> <p>Disabling <a class="reference internal" href="../../ref/settings#std:setting-ALLOWED_HOSTS"><code>ALLOWED_HOSTS</code></a> checking (<code>ALLOWED_HOSTS = ['*']</code>) when running tests prevents the test client from raising a helpful error message if you follow a redirect to an external URL.</p>   <h2 id="topics-testing-advanced-multidb">Tests and multiple databases</h2>  <h3 id="topics-testing-primaryreplica">Testing primary/replica configurations</h3> <p id="s-tests-and-multiple-databases">If you’re testing a multiple database configuration with primary/replica (referred to as master/slave by some databases) replication, this strategy of creating test databases poses a problem. When the test databases are created, there won’t be any replication, and as a result, data created on the primary won’t be seen on the replica.</p> <p>To compensate for this, Django allows you to define that a database is a <em>test mirror</em>. Consider the following (simplified) example database configuration:</p> <pre data-language="python">DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'myproject',
+        'HOST': 'dbprimary',
+         # ... plus some other settings
+    },
+    'replica': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'myproject',
+        'HOST': 'dbreplica',
+        'TEST': {
+            'MIRROR': 'default',
+        },
+        # ... plus some other settings
+    }
+}
+</pre> <p>In this setup, we have two database servers: <code>dbprimary</code>, described by the database alias <code>default</code>, and <code>dbreplica</code> described by the alias <code>replica</code>. As you might expect, <code>dbreplica</code> has been configured by the database administrator as a read replica of <code>dbprimary</code>, so in normal activity, any write to <code>default</code> will appear on <code>replica</code>.</p> <p>If Django created two independent test databases, this would break any tests that expected replication to occur. However, the <code>replica</code> database has been configured as a test mirror (using the <a class="reference internal" href="../../ref/settings#std:setting-TEST_MIRROR"><code>MIRROR</code></a> test setting), indicating that under testing, <code>replica</code> should be treated as a mirror of <code>default</code>.</p> <p>When the test environment is configured, a test version of <code>replica</code> will <em>not</em> be created. Instead the connection to <code>replica</code> will be redirected to point at <code>default</code>. As a result, writes to <code>default</code> will appear on <code>replica</code> – but because they are actually the same database, not because there is data replication between the two databases.</p>   <h3 id="topics-testing-creation-dependencies">Controlling creation order for test databases</h3> <p id="s-controlling-creation-order-for-test-databases">By default, Django will assume all databases depend on the <code>default</code> database and therefore always create the <code>default</code> database first. However, no guarantees are made on the creation order of any other databases in your test setup.</p> <p>If your database configuration requires a specific creation order, you can specify the dependencies that exist using the <a class="reference internal" href="../../ref/settings#std:setting-TEST_DEPENDENCIES"><code>DEPENDENCIES</code></a> test setting. Consider the following (simplified) example database configuration:</p> <pre data-language="python">DATABASES = {
+    'default': {
+        # ... db settings
+        'TEST': {
+            'DEPENDENCIES': ['diamonds'],
+        },
+    },
+    'diamonds': {
+        # ... db settings
+        'TEST': {
+            'DEPENDENCIES': [],
+        },
+    },
+    'clubs': {
+        # ... db settings
+        'TEST': {
+            'DEPENDENCIES': ['diamonds'],
+        },
+    },
+    'spades': {
+        # ... db settings
+        'TEST': {
+            'DEPENDENCIES': ['diamonds', 'hearts'],
+        },
+    },
+    'hearts': {
+        # ... db settings
+        'TEST': {
+            'DEPENDENCIES': ['diamonds', 'clubs'],
+        },
+    }
+}
+</pre> <p>Under this configuration, the <code>diamonds</code> database will be created first, as it is the only database alias without dependencies. The <code>default</code> and <code>clubs</code> alias will be created next (although the order of creation of this pair is not guaranteed), then <code>hearts</code>, and finally <code>spades</code>.</p> <p>If there are any circular dependencies in the <a class="reference internal" href="../../ref/settings#std:setting-TEST_DEPENDENCIES"><code>DEPENDENCIES</code></a> definition, an <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.ImproperlyConfigured" title="django.core.exceptions.ImproperlyConfigured"><code>ImproperlyConfigured</code></a> exception will be raised.</p>    <h2 id="advanced-features-of-transactiontestcase">Advanced features of <code>TransactionTestCase</code>
+</h2> <dl class="attribute" id="s-advanced-features-of-transactiontestcase"> <dt id="django.test.TransactionTestCase.available_apps">
+<code>TransactionTestCase.available_apps</code> </dt> <dd>
+<div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>This attribute is a private API. It may be changed or removed without a deprecation period in the future, for instance to accommodate changes in application loading.</p> <p class="last">It’s used to optimize Django’s own test suite, which contains hundreds of models but no relations between models in different applications.</p> </div> <p>By default, <code>available_apps</code> is set to <code>None</code>. After each test, Django calls <a class="reference internal" href="../../ref/django-admin#django-admin-flush"><code>flush</code></a> to reset the database state. This empties all tables and emits the <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> signal, which recreates one content type and four permissions for each model. This operation gets expensive proportionally to the number of models.</p> <p>Setting <code>available_apps</code> to a list of applications instructs Django to behave as if only the models from these applications were available. The behavior of <code>TransactionTestCase</code> changes as follows:</p> <ul class="simple"> <li>
+<a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> is fired before each test to create the content types and permissions for each model in available apps, in case they’re missing.</li> <li>After each test, Django empties only tables corresponding to models in available apps. However, at the database level, truncation may cascade to related models in unavailable apps. Furthermore <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> isn’t fired; it will be fired by the next <code>TransactionTestCase</code>, after the correct set of applications is selected.</li> </ul> <p>Since the database isn’t fully flushed, if a test creates instances of models not included in <code>available_apps</code>, they will leak and they may cause unrelated tests to fail. Be careful with tests that use sessions; the default session engine stores them in the database.</p> <p>Since <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> isn’t emitted after flushing the database, its state after a <code>TransactionTestCase</code> isn’t the same as after a <code>TestCase</code>: it’s missing the rows created by listeners to <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a>. Considering the <a class="reference internal" href="overview#order-of-tests"><span class="std std-ref">order in which tests are executed</span></a>, this isn’t an issue, provided either all <code>TransactionTestCase</code> in a given test suite declare <code>available_apps</code>, or none of them.</p> <p><code>available_apps</code> is mandatory in Django’s own test suite.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.test.TransactionTestCase.reset_sequences">
+<code>TransactionTestCase.reset_sequences</code> </dt> <dd>
+<p>Setting <code>reset_sequences = True</code> on a <code>TransactionTestCase</code> will make sure sequences are always reset before the test run:</p> <pre data-language="python">class TestsThatDependsOnPrimaryKeySequences(TransactionTestCase):
+    reset_sequences = True
+
+    def test_animal_pk(self):
+        lion = Animal.objects.create(name="lion", sound="roar")
+        # lion.pk is guaranteed to always be 1
+        self.assertEqual(lion.pk, 1)
+</pre> <p>Unless you are explicitly testing primary keys sequence numbers, it is recommended that you do not hard code primary key values in tests.</p> <p>Using <code>reset_sequences = True</code> will slow down the test, since the primary key reset is a relatively expensive database operation.</p> </dd>
+</dl>   <h2 id="topics-testing-enforce-run-sequentially">Enforce running test classes sequentially</h2> <p id="s-enforce-running-test-classes-sequentially">If you have test classes that cannot be run in parallel (e.g. because they share a common resource), you can use <code>django.test.testcases.SerializeMixin</code> to run them sequentially. This mixin uses a filesystem <code>lockfile</code>.</p> <p>For example, you can use <code>__file__</code> to determine that all test classes in the same file that inherit from <code>SerializeMixin</code> will run sequentially:</p> <pre data-language="python">import os
+
+from django.test import TestCase
+from django.test.testcases import SerializeMixin
+
+class ImageTestCaseMixin(SerializeMixin):
+    lockfile = __file__
+
+    def setUp(self):
+        self.filename = os.path.join(temp_storage_dir, 'my_file.png')
+        self.file = create_file(self.filename)
+
+class RemoveImageTests(ImageTestCaseMixin, TestCase):
+    def test_remove_image(self):
+        os.remove(self.filename)
+        self.assertFalse(os.path.exists(self.filename))
+
+class ResizeImageTests(ImageTestCaseMixin, TestCase):
+    def test_resize_image(self):
+        resize_image(self.file, (48, 48))
+        self.assertEqual(get_image_size(self.file), (48, 48))
+</pre>   <h2 id="testing-reusable-applications">Using the Django test runner to test reusable applications</h2> <p id="s-using-the-django-test-runner-to-test-reusable-applications">If you are writing a <a class="reference internal" href="../../intro/reusable-apps"><span class="doc">reusable application</span></a> you may want to use the Django test runner to run your own test suite and thus benefit from the Django testing infrastructure.</p> <p>A common practice is a <em>tests</em> directory next to the application code, with the following structure:</p> <pre data-language="python">runtests.py
+polls/
+    __init__.py
+    models.py
+    ...
+tests/
+    __init__.py
+    models.py
+    test_settings.py
+    tests.py
+</pre> <p>Let’s take a look inside a couple of those files:</p> <div class="literal-block-wrapper docutils container" id="id3"> <div class="code-block-caption"><span class="caption-text">runtests.py</span></div> <pre data-language="python">#!/usr/bin/env python
+import os
+import sys
+
+import django
+from django.conf import settings
+from django.test.utils import get_runner
+
+if __name__ == "__main__":
+    os.environ['DJANGO_SETTINGS_MODULE'] = 'tests.test_settings'
+    django.setup()
+    TestRunner = get_runner(settings)
+    test_runner = TestRunner()
+    failures = test_runner.run_tests(["tests"])
+    sys.exit(bool(failures))
+</pre> </div> <p>This is the script that you invoke to run the test suite. It sets up the Django environment, creates the test database and runs the tests.</p> <p>For the sake of clarity, this example contains only the bare minimum necessary to use the Django test runner. You may want to add command-line options for controlling verbosity, passing in specific test labels to run, etc.</p> <div class="literal-block-wrapper docutils container" id="id4"> <div class="code-block-caption"><span class="caption-text">tests/test_settings.py</span></div> <pre data-language="python">SECRET_KEY = 'fake-key'
+INSTALLED_APPS = [
+    "tests",
+]
+</pre> </div> <p>This file contains the <a class="reference internal" href="../settings"><span class="doc">Django settings</span></a> required to run your app’s tests.</p> <p>Again, this is a minimal example; your tests may require additional settings to run.</p> <p>Since the <em>tests</em> package is included in <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> when running your tests, you can define test-only models in its <code>models.py</code> file.</p>   <h2 id="other-testing-frameworks">Using different testing frameworks</h2> <p id="s-using-different-testing-frameworks">Clearly, <a class="reference external" href="https://docs.python.org/3/library/unittest.html#module-unittest" title="(in Python v3.10)"><code>unittest</code></a> is not the only Python testing framework. While Django doesn’t provide explicit support for alternative frameworks, it does provide a way to invoke tests constructed for an alternative framework as if they were normal Django tests.</p> <p>When you run <code>./manage.py test</code>, Django looks at the <a class="reference internal" href="../../ref/settings#std:setting-TEST_RUNNER"><code>TEST_RUNNER</code></a> setting to determine what to do. By default, <a class="reference internal" href="../../ref/settings#std:setting-TEST_RUNNER"><code>TEST_RUNNER</code></a> points to <code>'django.test.runner.DiscoverRunner'</code>. This class defines the default Django testing behavior. This behavior involves:</p> <ol class="arabic simple"> <li>Performing global pre-test setup.</li> <li>Looking for tests in any file below the current directory whose name matches the pattern <code>test*.py</code>.</li> <li>Creating the test databases.</li> <li>Running <code>migrate</code> to install models and initial data into the test databases.</li> <li>Running the <a class="reference internal" href="../checks"><span class="doc">system checks</span></a>.</li> <li>Running the tests that were found.</li> <li>Destroying the test databases.</li> <li>Performing global post-test teardown.</li> </ol> <p>If you define your own test runner class and point <a class="reference internal" href="../../ref/settings#std:setting-TEST_RUNNER"><code>TEST_RUNNER</code></a> at that class, Django will execute your test runner whenever you run <code>./manage.py test</code>. In this way, it is possible to use any test framework that can be executed from Python code, or to modify the Django test execution process to satisfy whatever testing requirements you may have.</p>  <h3 id="topics-testing-test-runner">Defining a test runner</h3> <p id="s-defining-a-test-runner">A test runner is a class defining a <code>run_tests()</code> method. Django ships with a <code>DiscoverRunner</code> class that defines the default Django testing behavior. This class defines the <code>run_tests()</code> entry point, plus a selection of other methods that are used by <code>run_tests()</code> to set up, execute and tear down the test suite.</p> <dl class="class"> <dt id="django.test.runner.DiscoverRunner">
+<code>class DiscoverRunner(pattern='test*.py', top_level=None, verbosity=1, interactive=True, failfast=False, keepdb=False, reverse=False, debug_mode=False, debug_sql=False, parallel=0, tags=None, exclude_tags=None, test_name_patterns=None, pdb=False, buffer=False, enable_faulthandler=True, timing=True, shuffle=False, logger=None, **kwargs)</code> </dt> <dd>
+<p><code>DiscoverRunner</code> will search for tests in any file matching <code>pattern</code>.</p> <p><code>top_level</code> can be used to specify the directory containing your top-level Python modules. Usually Django can figure this out automatically, so it’s not necessary to specify this option. If specified, it should generally be the directory containing your <code>manage.py</code> file.</p> <p><code>verbosity</code> determines the amount of notification and debug information that will be printed to the console; <code>0</code> is no output, <code>1</code> is normal output, and <code>2</code> is verbose output.</p> <p>If <code>interactive</code> is <code>True</code>, the test suite has permission to ask the user for instructions when the test suite is executed. An example of this behavior would be asking for permission to delete an existing test database. If <code>interactive</code> is <code>False</code>, the test suite must be able to run without any manual intervention.</p> <p>If <code>failfast</code> is <code>True</code>, the test suite will stop running after the first test failure is detected.</p> <p>If <code>keepdb</code> is <code>True</code>, the test suite will use the existing database, or create one if necessary. If <code>False</code>, a new database will be created, prompting the user to remove the existing one, if present.</p> <p>If <code>reverse</code> is <code>True</code>, test cases will be executed in the opposite order. This could be useful to debug tests that aren’t properly isolated and have side effects. <a class="reference internal" href="overview#order-of-tests"><span class="std std-ref">Grouping by test class</span></a> is preserved when using this option. This option can be used in conjunction with <code>--shuffle</code> to reverse the order for a particular random seed.</p> <p><code>debug_mode</code> specifies what the <a class="reference internal" href="../../ref/settings#std:setting-DEBUG"><code>DEBUG</code></a> setting should be set to prior to running tests.</p> <p><code>parallel</code> specifies the number of processes. If <code>parallel</code> is greater than <code>1</code>, the test suite will run in <code>parallel</code> processes. If there are fewer test cases than configured processes, Django will reduce the number of processes accordingly. Each process gets its own database. This option requires the third-party <code>tblib</code> package to display tracebacks correctly.</p> <p><code>tags</code> can be used to specify a set of <a class="reference internal" href="tools#topics-tagging-tests"><span class="std std-ref">tags for filtering tests</span></a>. May be combined with <code>exclude_tags</code>.</p> <p><code>exclude_tags</code> can be used to specify a set of <a class="reference internal" href="tools#topics-tagging-tests"><span class="std std-ref">tags for excluding tests</span></a>. May be combined with <code>tags</code>.</p> <p>If <code>debug_sql</code> is <code>True</code>, failing test cases will output SQL queries logged to the <a class="reference internal" href="../../ref/logging#django-db-logger"><span class="std std-ref">django.db.backends logger</span></a> as well as the traceback. If <code>verbosity</code> is <code>2</code>, then queries in all tests are output.</p> <p><code>test_name_patterns</code> can be used to specify a set of patterns for filtering test methods and classes by their names.</p> <p>If <code>pdb</code> is <code>True</code>, a debugger (<code>pdb</code> or <code>ipdb</code>) will be spawned at each test error or failure.</p> <p>If <code>buffer</code> is <code>True</code>, outputs from passing tests will be discarded.</p> <p>If <code>enable_faulthandler</code> is <code>True</code>, <a class="reference external" href="https://docs.python.org/3/library/faulthandler.html#module-faulthandler" title="(in Python v3.10)"><code>faulthandler</code></a> will be enabled.</p> <p>If <code>timing</code> is <code>True</code>, test timings, including database setup and total run time, will be shown.</p> <p>If <code>shuffle</code> is an integer, test cases will be shuffled in a random order prior to execution, using the integer as a random seed. If <code>shuffle</code> is <code>None</code>, the seed will be generated randomly. In both cases, the seed will be logged and set to <code>self.shuffle_seed</code> prior to running tests. This option can be used to help detect tests that aren’t properly isolated. <a class="reference internal" href="overview#order-of-tests"><span class="std std-ref">Grouping by test class</span></a> is preserved when using this option.</p> <p><code>logger</code> can be used to pass a Python <a class="reference external" href="https://docs.python.org/3/library/logging.html#logger" title="(in Python v3.10)"><span class="xref std std-ref">Logger object</span></a>. If provided, the logger will be used to log messages instead of printing to the console. The logger object will respect its logging level rather than the <code>verbosity</code>.</p> <p>Django may, from time to time, extend the capabilities of the test runner by adding new arguments. The <code>**kwargs</code> declaration allows for this expansion. If you subclass <code>DiscoverRunner</code> or write your own test runner, ensure it accepts <code>**kwargs</code>.</p> <p>Your test runner may also define additional command-line options. Create or override an <code>add_arguments(cls, parser)</code> class method and add custom arguments by calling <code>parser.add_argument()</code> inside the method, so that the <a class="reference internal" href="../../ref/django-admin#django-admin-test"><code>test</code></a> command will be able to use those arguments.</p> <div class="versionadded"> <span class="title">New in Django 3.2:</span> <p>The <code>enable_faulthandler</code> and <code>timing</code> arguments were added.</p> </div> <div class="versionadded"> <span class="title">New in Django 4.0:</span> <p>The <code>logger</code> and <code>shuffle</code> arguments were added.</p> </div> </dd>
+</dl>  <h4 id="attributes">Attributes</h4> <dl class="attribute" id="s-attributes"> <dt id="django.test.runner.DiscoverRunner.test_suite">
+<code>DiscoverRunner.test_suite</code> </dt> <dd>
+<p>The class used to build the test suite. By default it is set to <code>unittest.TestSuite</code>. This can be overridden if you wish to implement different logic for collecting tests.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.test.runner.DiscoverRunner.test_runner">
+<code>DiscoverRunner.test_runner</code> </dt> <dd>
+<p>This is the class of the low-level test runner which is used to execute the individual tests and format the results. By default it is set to <code>unittest.TextTestRunner</code>. Despite the unfortunate similarity in naming conventions, this is not the same type of class as <code>DiscoverRunner</code>, which covers a broader set of responsibilities. You can override this attribute to modify the way tests are run and reported.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.test.runner.DiscoverRunner.test_loader">
+<code>DiscoverRunner.test_loader</code> </dt> <dd>
+<p>This is the class that loads tests, whether from TestCases or modules or otherwise and bundles them into test suites for the runner to execute. By default it is set to <code>unittest.defaultTestLoader</code>. You can override this attribute if your tests are going to be loaded in unusual ways.</p> </dd>
+</dl>   <h4 id="methods">Methods</h4> <dl class="method" id="s-methods"> <dt id="django.test.runner.DiscoverRunner.run_tests">
+<code>DiscoverRunner.run_tests(test_labels, **kwargs)</code> </dt> <dd>
+<p>Run the test suite.</p> <p><code>test_labels</code> allows you to specify which tests to run and supports several formats (see <a class="reference internal" href="#django.test.runner.DiscoverRunner.build_suite" title="django.test.runner.DiscoverRunner.build_suite"><code>DiscoverRunner.build_suite()</code></a> for a list of supported formats).</p> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span><code>extra_tests</code> is a list of extra <code>TestCase</code> instances to add to the suite that is executed by the test runner. These extra tests are run in addition to those discovered in the modules listed in <code>test_labels</code>.</p> </div> <p>This method should return the number of tests that failed.</p> </dd>
+</dl> <dl class="classmethod"> <dt id="django.test.runner.DiscoverRunner.add_arguments">
+<code>classmethod DiscoverRunner.add_arguments(parser)</code> </dt> <dd>
+<p>Override this class method to add custom arguments accepted by the <a class="reference internal" href="../../ref/django-admin#django-admin-test"><code>test</code></a> management command. See <a class="reference external" href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser.add_argument" title="(in Python v3.10)"><code>argparse.ArgumentParser.add_argument()</code></a> for details about adding arguments to a parser.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.setup_test_environment">
+<code>DiscoverRunner.setup_test_environment(**kwargs)</code> </dt> <dd>
+<p>Sets up the test environment by calling <a class="reference internal" href="#django.test.utils.setup_test_environment" title="django.test.utils.setup_test_environment"><code>setup_test_environment()</code></a> and setting <a class="reference internal" href="../../ref/settings#std:setting-DEBUG"><code>DEBUG</code></a> to <code>self.debug_mode</code> (defaults to <code>False</code>).</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.build_suite">
+<code>DiscoverRunner.build_suite(test_labels=None, **kwargs)</code> </dt> <dd>
+<p>Constructs a test suite that matches the test labels provided.</p> <p><code>test_labels</code> is a list of strings describing the tests to be run. A test label can take one of four forms:</p> <ul class="simple"> <li>
+<code>path.to.test_module.TestCase.test_method</code> – Run a single test method in a test case.</li> <li>
+<code>path.to.test_module.TestCase</code> – Run all the test methods in a test case.</li> <li>
+<code>path.to.module</code> – Search for and run all tests in the named Python package or module.</li> <li>
+<code>path/to/directory</code> – Search for and run all tests below the named directory.</li> </ul> <p>If <code>test_labels</code> has a value of <code>None</code>, the test runner will search for tests in all files below the current directory whose names match its <code>pattern</code> (see above).</p> <div class="deprecated"> <p><span class="versionmodified">Deprecated since version 4.0: </span><code>extra_tests</code> is a list of extra <code>TestCase</code> instances to add to the suite that is executed by the test runner. These extra tests are run in addition to those discovered in the modules listed in <code>test_labels</code>.</p> </div> <p>Returns a <code>TestSuite</code> instance ready to be run.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.setup_databases">
+<code>DiscoverRunner.setup_databases(**kwargs)</code> </dt> <dd>
+<p>Creates the test databases by calling <a class="reference internal" href="#django.test.utils.setup_databases" title="django.test.utils.setup_databases"><code>setup_databases()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.run_checks">
+<code>DiscoverRunner.run_checks(databases)</code> </dt> <dd>
+<p>Runs the <a class="reference internal" href="../checks"><span class="doc">system checks</span></a> on the test <code>databases</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.run_suite">
+<code>DiscoverRunner.run_suite(suite, **kwargs)</code> </dt> <dd>
+<p>Runs the test suite.</p> <p>Returns the result produced by the running the test suite.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.get_test_runner_kwargs">
+<code>DiscoverRunner.get_test_runner_kwargs()</code> </dt> <dd>
+<p>Returns the keyword arguments to instantiate the <code>DiscoverRunner.test_runner</code> with.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.teardown_databases">
+<code>DiscoverRunner.teardown_databases(old_config, **kwargs)</code> </dt> <dd>
+<p>Destroys the test databases, restoring pre-test conditions by calling <a class="reference internal" href="#django.test.utils.teardown_databases" title="django.test.utils.teardown_databases"><code>teardown_databases()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.teardown_test_environment">
+<code>DiscoverRunner.teardown_test_environment(**kwargs)</code> </dt> <dd>
+<p>Restores the pre-test environment.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.suite_result">
+<code>DiscoverRunner.suite_result(suite, result, **kwargs)</code> </dt> <dd>
+<p>Computes and returns a return code based on a test suite, and the result from that test suite.</p> </dd>
+</dl> <dl class="method"> <dt id="django.test.runner.DiscoverRunner.log">
+<code>DiscoverRunner.log(msg, level=None)</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 4.0.</span> </div> <p>If a <code>logger</code> is set, logs the message at the given integer <a class="reference external" href="https://docs.python.org/3/library/logging.html#levels">logging level</a> (e.g. <code>logging.DEBUG</code>, <code>logging.INFO</code>, or <code>logging.WARNING</code>). Otherwise, the message is printed to the console, respecting the current <code>verbosity</code>. For example, no message will be printed if the <code>verbosity</code> is 0, <code>INFO</code> and above will be printed if the <code>verbosity</code> is at least 1, and <code>DEBUG</code> will be printed if it is at least 2. The <code>level</code> defaults to <code>logging.INFO</code>.</p> </dd>
+</dl>    <h3 id="testing-utilities">Testing utilities</h3>  <h4 id="django-test-utils"><code>django.test.utils</code></h4> <p id="s-testing-utilities">To assist in the creation of your own test runner, Django provides a number of utility methods in the <code>django.test.utils</code> module.</p> <dl class="function"> <dt id="django.test.utils.setup_test_environment">
+<code>setup_test_environment(debug=None)</code> </dt> <dd>
+<p>Performs global pre-test setup, such as installing instrumentation for the template rendering system and setting up the dummy email outbox.</p> <p>If <code>debug</code> isn’t <code>None</code>, the <a class="reference internal" href="../../ref/settings#std:setting-DEBUG"><code>DEBUG</code></a> setting is updated to its value.</p> </dd>
+</dl> <dl class="function"> <dt id="django.test.utils.teardown_test_environment">
+<code>teardown_test_environment()</code> </dt> <dd>
+<p>Performs global post-test teardown, such as removing instrumentation from the template system and restoring normal email services.</p> </dd>
+</dl> <dl class="function"> <dt id="django.test.utils.setup_databases">
+<code>setup_databases(verbosity, interactive, *, time_keeper=None, keepdb=False, debug_sql=False, parallel=0, aliases=None, serialized_aliases=None, **kwargs)</code> </dt> <dd>
+<p>Creates the test databases.</p> <p>Returns a data structure that provides enough detail to undo the changes that have been made. This data will be provided to the <a class="reference internal" href="#django.test.utils.teardown_databases" title="django.test.utils.teardown_databases"><code>teardown_databases()</code></a> function at the conclusion of testing.</p> <p>The <code>aliases</code> argument determines which <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> aliases test databases should be set up for. If it’s not provided, it defaults to all of <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> aliases.</p> <p>The <code>serialized_aliases</code> argument determines what subset of <code>aliases</code> test databases should have their state serialized to allow usage of the <a class="reference internal" href="overview#test-case-serialized-rollback"><span class="std std-ref">serialized_rollback</span></a> feature. If it’s not provided, it defaults to <code>aliases</code>.</p> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>The <code>time_keeper</code> kwarg was added, and all kwargs were made keyword-only.</p> </div> <div class="versionchanged"> <span class="title">Changed in Django 4.0:</span> <p>The <code>serialized_aliases</code> kwarg was added.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="django.test.utils.teardown_databases">
+<code>teardown_databases(old_config, parallel=0, keepdb=False)</code> </dt> <dd>
+<p>Destroys the test databases, restoring pre-test conditions.</p> <p><code>old_config</code> is a data structure defining the changes in the database configuration that need to be reversed. It’s the return value of the <a class="reference internal" href="#django.test.utils.setup_databases" title="django.test.utils.setup_databases"><code>setup_databases()</code></a> method.</p> </dd>
+</dl>   <h4 id="django-db-connection-creation"><code>django.db.connection.creation</code></h4> <p id="s-django-db-connection-creation">The creation module of the database backend also provides some utilities that can be useful during testing.</p> <dl class="function"> <dt id="django.db.connection.creation.create_test_db">
+<code>create_test_db(verbosity=1, autoclobber=False, serialize=True, keepdb=False)</code> </dt> <dd>
+<p>Creates a new test database and runs <code>migrate</code> against it.</p> <p><code>verbosity</code> has the same behavior as in <code>run_tests()</code>.</p> <p><code>autoclobber</code> describes the behavior that will occur if a database with the same name as the test database is discovered:</p> <ul class="simple"> <li>If <code>autoclobber</code> is <code>False</code>, the user will be asked to approve destroying the existing database. <code>sys.exit</code> is called if the user does not approve.</li> <li>If autoclobber is <code>True</code>, the database will be destroyed without consulting the user.</li> </ul> <p><code>serialize</code> determines if Django serializes the database into an in-memory JSON string before running tests (used to restore the database state between tests if you don’t have transactions). You can set this to <code>False</code> to speed up creation time if you don’t have any test classes with <a class="reference internal" href="overview#test-case-serialized-rollback"><span class="std std-ref">serialized_rollback=True</span></a>.</p> <p>If you are using the default test runner, you can control this with the the <a class="reference internal" href="../../ref/settings#std:setting-TEST_SERIALIZE"><code>SERIALIZE</code></a> entry in the <a class="reference internal" href="../../ref/settings#std:setting-DATABASE-TEST"><code>TEST</code></a> dictionary.</p> <p><code>keepdb</code> determines if the test run should use an existing database, or create a new one. If <code>True</code>, the existing database will be used, or created if not present. If <code>False</code>, a new database will be created, prompting the user to remove the existing one, if present.</p> <p>Returns the name of the test database that it created.</p> <p><code>create_test_db()</code> has the side effect of modifying the value of <a class="reference internal" href="../../ref/settings#std:setting-NAME"><code>NAME</code></a> in <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> to match the name of the test database.</p> </dd>
+</dl> <dl class="function"> <dt id="django.db.connection.creation.destroy_test_db">
+<code>destroy_test_db(old_database_name, verbosity=1, keepdb=False)</code> </dt> <dd>
+<p>Destroys the database whose name is the value of <a class="reference internal" href="../../ref/settings#std:setting-NAME"><code>NAME</code></a> in <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a>, and sets <a class="reference internal" href="../../ref/settings#std:setting-NAME"><code>NAME</code></a> to the value of <code>old_database_name</code>.</p> <p>The <code>verbosity</code> argument has the same behavior as for <a class="reference internal" href="#django.test.runner.DiscoverRunner" title="django.test.runner.DiscoverRunner"><code>DiscoverRunner</code></a>.</p> <p>If the <code>keepdb</code> argument is <code>True</code>, then the connection to the database will be closed, but the database will not be destroyed.</p> </dd>
+</dl>     <h2 id="topics-testing-code-coverage">Integration with <code>coverage.py</code>
+</h2> <p id="s-integration-with-coverage-py">Code coverage describes how much source code has been tested. It shows which parts of your code are being exercised by tests and which are not. It’s an important part of testing applications, so it’s strongly recommended to check the coverage of your tests.</p> <p>Django can be easily integrated with <a class="reference external" href="https://coverage.readthedocs.io/">coverage.py</a>, a tool for measuring code coverage of Python programs. First, <a class="reference external" href="https://pypi.org/project/coverage/">install coverage.py</a>. Next, run the following from your project folder containing <code>manage.py</code>:</p> <pre data-language="python">coverage run --source='.' manage.py test myapp
+</pre> <p>This runs your tests and collects coverage data of the executed files in your project. You can see a report of this data by typing following command:</p> <pre data-language="python">coverage report
+</pre> <p>Note that some Django code was executed while running tests, but it is not listed here because of the <code>source</code> flag passed to the previous command.</p> <p>For more options like annotated HTML listings detailing missed lines, see the <a class="reference external" href="https://coverage.readthedocs.io/">coverage.py</a> docs.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/testing/advanced/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/testing/advanced/</a>
+  </p>
+</div>

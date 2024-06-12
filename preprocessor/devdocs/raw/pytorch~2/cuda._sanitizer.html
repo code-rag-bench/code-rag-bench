@@ -1,0 +1,55 @@
+<h1 id="cuda-stream-sanitizer">CUDA Stream Sanitizer</h1> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This is a prototype feature, which means it is at an early stage for feedback and testing, and its components are subject to change.</p> </div>  <h2 id="overview">Overview</h2> <p id="module-torch.cuda._sanitizer">This module introduces CUDA Sanitizer, a tool for detecting synchronization errors between kernels ran on different streams. It stores information on accesses to tensors to determine if they are synchronized or not. When enabled in a python program and a possible data race is detected, a detailed warning will be printed and the program will exit.</p> <p>It can be enabled either by importing this module and calling <a class="reference internal" href="#torch.cuda._sanitizer.enable_cuda_sanitizer" title="torch.cuda._sanitizer.enable_cuda_sanitizer"><code>enable_cuda_sanitizer()</code></a> or by exporting the <code>TORCH_CUDA_SANITIZER</code> environment variable.</p>   <h2 id="usage">Usage</h2> <p>Here is an example of a simple synchronization error in PyTorch:</p> <pre data-language="python">import torch
+
+a = torch.rand(4, 2, device="cuda")
+
+with torch.cuda.stream(torch.cuda.Stream()):
+    torch.mul(a, 5, out=a)
+</pre> <p>The <code>a</code> tensor is initialized on the default stream and, without any synchronization methods, modified on a new stream. The two kernels will run concurrently on the same tensor, which might cause the second kernel to read uninitialized data before the first one was able to write it, or the first kernel might overwrite part of the result of the second. When this script is run on the commandline with:</p> <pre data-language="python">TORCH_CUDA_SANITIZER=1 python example_error.py
+</pre> <p>the following output is printed by CSAN:</p> <pre data-language="python">============================
+CSAN detected a possible data race on tensor with data pointer 139719969079296
+Access by stream 94646435460352 during kernel:
+aten::mul.out(Tensor self, Tensor other, *, Tensor(a!) out) -&gt; Tensor(a!)
+writing to argument(s) self, out, and to the output
+With stack trace:
+  File "example_error.py", line 6, in &lt;module&gt;
+    torch.mul(a, 5, out=a)
+  ...
+  File "pytorch/torch/cuda/_sanitizer.py", line 364, in _handle_kernel_launch
+    stack_trace = traceback.StackSummary.extract(
+
+Previous access by stream 0 during kernel:
+aten::rand(int[] size, *, int? dtype=None, Device? device=None) -&gt; Tensor
+writing to the output
+With stack trace:
+  File "example_error.py", line 3, in &lt;module&gt;
+    a = torch.rand(10000, device="cuda")
+  ...
+  File "pytorch/torch/cuda/_sanitizer.py", line 364, in _handle_kernel_launch
+    stack_trace = traceback.StackSummary.extract(
+
+Tensor was allocated with stack trace:
+  File "example_error.py", line 3, in &lt;module&gt;
+    a = torch.rand(10000, device="cuda")
+  ...
+  File "pytorch/torch/cuda/_sanitizer.py", line 420, in _handle_memory_allocation
+    traceback.StackSummary.extract(
+</pre> <p>This gives extensive insight into the origin of the error:</p> <ul class="simple"> <li>A tensor was incorrectly accessed from streams with ids: 0 (default stream) and 94646435460352 (new stream)</li> <li>The tensor was allocated by invoking <code>a = torch.rand(10000, device="cuda")</code>
+</li> <li>
+<dl class="simple"> <dt>The faulty accesses were caused by operators</dt>
+<dd>
+<ul> <li>
+<code>a = torch.rand(10000, device="cuda")</code> on stream 0</li> <li>
+<code>torch.mul(a, 5, out=a)</code> on stream 94646435460352</li> </ul> </dd> </dl> </li> <li>
+<p>The error message also displays the schemas of the invoked operators, along with a note showing which arguments of the operators correspond to the affected tensor.</p> <ul> <li>In the example, it can be seen that tensor <code>a</code> corresponds to arguments <code>self</code>, <code>out</code> and the <code>output</code> value of the invoked operator <code>torch.mul</code>.</li> </ul> </li> </ul> <div class="admonition seealso"> <p class="admonition-title">See also</p> <p>The list of supported torch operators and their schemas can be viewed <a class="reference internal" href="torch"><span class="doc">here</span></a>.</p> </div> <p>The bug can be fixed by forcing the new stream to wait for the default stream:</p> <pre data-language="python">with torch.cuda.stream(torch.cuda.Stream()):
+    torch.cuda.current_stream().wait_stream(torch.cuda.default_stream())
+    torch.mul(a, 5, out=a)
+</pre> <p>When the script is run again, there are no errors reported.</p>   <h2 id="api-reference">API Reference</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.cuda._sanitizer.enable_cuda_sanitizer">
+<code>torch.cuda._sanitizer.enable_cuda_sanitizer()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/cuda/_sanitizer.html#enable_cuda_sanitizer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Enables CUDA Sanitizer.</p> <p>The sanitizer will begin to analyze low-level CUDA calls invoked by torch functions for synchronization errors. All data races found will be printed to the standard error output along with stack traces of suspected causes. For best results, the sanitizer should be enabled at the very beginning of the program.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/cuda._sanitizer.html" class="_attribution-link">https://pytorch.org/docs/2.1/cuda._sanitizer.html</a>
+  </p>
+</div>

@@ -1,0 +1,267 @@
+<h1 id="multiple-databases">Multiple databases</h1> <p id="s-multiple-databases">This topic guide describes Django’s support for interacting with multiple databases. Most of the rest of Django’s documentation assumes you are interacting with a single database. If you want to interact with multiple databases, you’ll need to take some additional steps.</p> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p class="last">See <a class="reference internal" href="../testing/tools#testing-multi-db"><span class="std std-ref">Multi-database support</span></a> for information about testing with multiple databases.</p> </div>  <h2 id="defining-your-databases">Defining your databases</h2> <p id="s-defining-your-databases">The first step to using more than one database with Django is to tell Django about the database servers you’ll be using. This is done using the <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> setting. This setting maps database aliases, which are a way to refer to a specific database throughout Django, to a dictionary of settings for that specific connection. The settings in the inner dictionaries are described fully in the <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> documentation.</p> <p>Databases can have any alias you choose. However, the alias <code>default</code> has special significance. Django uses the database with the alias of <code>default</code> when no other database has been selected.</p> <p>The following is an example <code>settings.py</code> snippet defining two databases – a default PostgreSQL database and a MySQL database called <code>users</code>:</p> <pre data-language="python">DATABASES = {
+    'default': {
+        'NAME': 'app_data',
+        'ENGINE': 'django.db.backends.postgresql',
+        'USER': 'postgres_user',
+        'PASSWORD': 's3krit'
+    },
+    'users': {
+        'NAME': 'user_data',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'priv4te'
+    }
+}
+</pre> <p>If the concept of a <code>default</code> database doesn’t make sense in the context of your project, you need to be careful to always specify the database that you want to use. Django requires that a <code>default</code> database entry be defined, but the parameters dictionary can be left blank if it will not be used. To do this, you must set up <a class="reference internal" href="../../ref/settings#std:setting-DATABASE_ROUTERS"><code>DATABASE_ROUTERS</code></a> for all of your apps’ models, including those in any contrib and third-party apps you’re using, so that no queries are routed to the default database. The following is an example <code>settings.py</code> snippet defining two non-default databases, with the <code>default</code> entry intentionally left empty:</p> <pre data-language="python">DATABASES = {
+    'default': {},
+    'users': {
+        'NAME': 'user_data',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'superS3cret'
+    },
+    'customers': {
+        'NAME': 'customer_data',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_cust',
+        'PASSWORD': 'veryPriv@ate'
+    }
+}
+</pre> <p>If you attempt to access a database that you haven’t defined in your <a class="reference internal" href="../../ref/settings#std:setting-DATABASES"><code>DATABASES</code></a> setting, Django will raise a <code>django.utils.connection.ConnectionDoesNotExist</code> exception.</p>   <h2 id="synchronizing-multiple-databases">Synchronizing your databases</h2> <p id="s-synchronizing-your-databases">The <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>migrate</code></a> management command operates on one database at a time. By default, it operates on the <code>default</code> database, but by providing the <a class="reference internal" href="../../ref/django-admin#cmdoption-migrate-database"><code>--database</code></a> option, you can tell it to synchronize a different database. So, to synchronize all models onto all databases in the first example above, you would need to call:</p> <pre data-language="python">$ ./manage.py migrate
+$ ./manage.py migrate --database=users
+</pre> <p>If you don’t want every application to be synchronized onto a particular database, you can define a <a class="reference internal" href="#topics-db-multi-db-routing"><span class="std std-ref">database router</span></a> that implements a policy constraining the availability of particular models.</p> <p>If, as in the second example above, you’ve left the <code>default</code> database empty, you must provide a database name each time you run <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>migrate</code></a>. Omitting the database name would raise an error. For the second example:</p> <pre data-language="python">$ ./manage.py migrate --database=users
+$ ./manage.py migrate --database=customers
+</pre>  <h3 id="using-other-management-commands">Using other management commands</h3> <p id="s-using-other-management-commands">Most other <code>django-admin</code> commands that interact with the database operate in the same way as <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>migrate</code></a> – they only ever operate on one database at a time, using <code>--database</code> to control the database used.</p> <p>An exception to this rule is the <a class="reference internal" href="../../ref/django-admin#django-admin-makemigrations"><code>makemigrations</code></a> command. It validates the migration history in the databases to catch problems with the existing migration files (which could be caused by editing them) before creating new migrations. By default, it checks only the <code>default</code> database, but it consults the <a class="reference internal" href="#allow_migrate" title="allow_migrate"><code>allow_migrate()</code></a> method of <a class="reference internal" href="#topics-db-multi-db-routing"><span class="std std-ref">routers</span></a> if any are installed.</p>    <h2 id="topics-db-multi-db-routing">Automatic database routing</h2> <p id="s-automatic-database-routing">The easiest way to use multiple databases is to set up a database routing scheme. The default routing scheme ensures that objects remain ‘sticky’ to their original database (i.e., an object retrieved from the <code>foo</code> database will be saved on the same database). The default routing scheme ensures that if a database isn’t specified, all queries fall back to the <code>default</code> database.</p> <p>You don’t have to do anything to activate the default routing scheme – it is provided ‘out of the box’ on every Django project. However, if you want to implement more interesting database allocation behaviors, you can define and install your own database routers.</p>  <h3 id="database-routers">Database routers</h3> <p id="s-database-routers">A database Router is a class that provides up to four methods:</p> <dl class="method"> <dt id="db_for_read">
+<code>db_for_read(model, **hints)</code> </dt> <dd>
+<p>Suggest the database that should be used for read operations for objects of type <code>model</code>.</p> <p>If a database operation is able to provide any additional information that might assist in selecting a database, it will be provided in the <code>hints</code> dictionary. Details on valid hints are provided <a class="reference internal" href="#topics-db-multi-db-hints"><span class="std std-ref">below</span></a>.</p> <p>Returns <code>None</code> if there is no suggestion.</p> </dd>
+</dl> <dl class="method"> <dt id="db_for_write">
+<code>db_for_write(model, **hints)</code> </dt> <dd>
+<p>Suggest the database that should be used for writes of objects of type Model.</p> <p>If a database operation is able to provide any additional information that might assist in selecting a database, it will be provided in the <code>hints</code> dictionary. Details on valid hints are provided <a class="reference internal" href="#topics-db-multi-db-hints"><span class="std std-ref">below</span></a>.</p> <p>Returns <code>None</code> if there is no suggestion.</p> </dd>
+</dl> <dl class="method"> <dt id="allow_relation">
+<code>allow_relation(obj1, obj2, **hints)</code> </dt> <dd>
+<p>Return <code>True</code> if a relation between <code>obj1</code> and <code>obj2</code> should be allowed, <code>False</code> if the relation should be prevented, or <code>None</code> if the router has no opinion. This is purely a validation operation, used by foreign key and many to many operations to determine if a relation should be allowed between two objects.</p> <p>If no router has an opinion (i.e. all routers return <code>None</code>), only relations within the same database are allowed.</p> </dd>
+</dl> <dl class="method"> <dt id="allow_migrate">
+<code>allow_migrate(db, app_label, model_name=None, **hints)</code> </dt> <dd>
+<p>Determine if the migration operation is allowed to run on the database with alias <code>db</code>. Return <code>True</code> if the operation should run, <code>False</code> if it shouldn’t run, or <code>None</code> if the router has no opinion.</p> <p>The <code>app_label</code> positional argument is the label of the application being migrated.</p> <p><code>model_name</code> is set by most migration operations to the value of <code>model._meta.model_name</code> (the lowercased version of the model <code>__name__</code>) of the model being migrated. Its value is <code>None</code> for the <a class="reference internal" href="../../ref/migration-operations#django.db.migrations.operations.RunPython" title="django.db.migrations.operations.RunPython"><code>RunPython</code></a> and <a class="reference internal" href="../../ref/migration-operations#django.db.migrations.operations.RunSQL" title="django.db.migrations.operations.RunSQL"><code>RunSQL</code></a> operations unless they provide it using hints.</p> <p><code>hints</code> are used by certain operations to communicate additional information to the router.</p> <p>When <code>model_name</code> is set, <code>hints</code> normally contains the model class under the key <code>'model'</code>. Note that it may be a <a class="reference internal" href="../migrations#historical-models"><span class="std std-ref">historical model</span></a>, and thus not have any custom attributes, methods, or managers. You should only rely on <code>_meta</code>.</p> <p>This method can also be used to determine the availability of a model on a given database.</p> <p><a class="reference internal" href="../../ref/django-admin#django-admin-makemigrations"><code>makemigrations</code></a> always creates migrations for model changes, but if <code>allow_migrate()</code> returns <code>False</code>, any migration operations for the <code>model_name</code> will be silently skipped when running <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>migrate</code></a> on the <code>db</code>. Changing the behavior of <code>allow_migrate()</code> for models that already have migrations may result in broken foreign keys, extra tables, or missing tables. When <a class="reference internal" href="../../ref/django-admin#django-admin-makemigrations"><code>makemigrations</code></a> verifies the migration history, it skips databases where no app is allowed to migrate.</p> </dd>
+</dl> <p>A router doesn’t have to provide <em>all</em> these methods – it may omit one or more of them. If one of the methods is omitted, Django will skip that router when performing the relevant check.</p>  <h4 id="topics-db-multi-db-hints">Hints</h4> <p id="s-hints">The hints received by the database router can be used to decide which database should receive a given request.</p> <p>At present, the only hint that will be provided is <code>instance</code>, an object instance that is related to the read or write operation that is underway. This might be the instance that is being saved, or it might be an instance that is being added in a many-to-many relation. In some cases, no instance hint will be provided at all. The router checks for the existence of an instance hint, and determine if that hint should be used to alter routing behavior.</p>    <h3 id="using-routers">Using routers</h3> <p id="s-using-routers">Database routers are installed using the <a class="reference internal" href="../../ref/settings#std:setting-DATABASE_ROUTERS"><code>DATABASE_ROUTERS</code></a> setting. This setting defines a list of class names, each specifying a router that should be used by the master router (<code>django.db.router</code>).</p> <p>The master router is used by Django’s database operations to allocate database usage. Whenever a query needs to know which database to use, it calls the master router, providing a model and a hint (if available). Django then tries each router in turn until a database suggestion can be found. If no suggestion can be found, it tries the current <a class="reference internal" href="../../ref/models/instances#django.db.models.Model._state" title="django.db.models.Model._state"><code>instance._state.db</code></a> of the hint instance. If a hint instance wasn’t provided, or <a class="reference internal" href="../../ref/models/instances#django.db.models.Model._state" title="django.db.models.Model._state"><code>instance._state.db</code></a> is <code>None</code>, the master router will allocate the <code>default</code> database.</p>   <h3 id="an-example">An example</h3> <div class="admonition-example-purposes-only admonition" id="s-an-example"> <p class="first admonition-title">Example purposes only!</p> <p>This example is intended as a demonstration of how the router infrastructure can be used to alter database usage. It intentionally ignores some complex issues in order to demonstrate how routers are used.</p> <p>This example won’t work if any of the models in <code>myapp</code> contain relationships to models outside of the <code>other</code> database. <a class="reference internal" href="#no-cross-database-relations"><span class="std std-ref">Cross-database relationships</span></a> introduce referential integrity problems that Django can’t currently handle.</p> <p class="last">The primary/replica (referred to as master/slave by some databases) configuration described is also flawed – it doesn’t provide any solution for handling replication lag (i.e., query inconsistencies introduced because of the time taken for a write to propagate to the replicas). It also doesn’t consider the interaction of transactions with the database utilization strategy.</p> </div> <p>So - what does this mean in practice? Let’s consider another sample configuration. This one will have several databases: one for the <code>auth</code> application, and all other apps using a primary/replica setup with two read replicas. Here are the settings specifying these databases:</p> <pre data-language="python">DATABASES = {
+    'default': {},
+    'auth_db': {
+        'NAME': 'auth_db_name',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'swordfish',
+    },
+    'primary': {
+        'NAME': 'primary_name',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'spam',
+    },
+    'replica1': {
+        'NAME': 'replica1_name',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'eggs',
+    },
+    'replica2': {
+        'NAME': 'replica2_name',
+        'ENGINE': 'django.db.backends.mysql',
+        'USER': 'mysql_user',
+        'PASSWORD': 'bacon',
+    },
+}
+</pre> <p>Now we’ll need to handle routing. First we want a router that knows to send queries for the <code>auth</code> and <code>contenttypes</code> apps to <code>auth_db</code> (<code>auth</code> models are linked to <code>ContentType</code>, so they must be stored in the same database):</p> <pre data-language="python">class AuthRouter:
+    """
+    A router to control all database operations on models in the
+    auth and contenttypes applications.
+    """
+    route_app_labels = {'auth', 'contenttypes'}
+
+    def db_for_read(self, model, **hints):
+        """
+        Attempts to read auth and contenttypes models go to auth_db.
+        """
+        if model._meta.app_label in self.route_app_labels:
+            return 'auth_db'
+        return None
+
+    def db_for_write(self, model, **hints):
+        """
+        Attempts to write auth and contenttypes models go to auth_db.
+        """
+        if model._meta.app_label in self.route_app_labels:
+            return 'auth_db'
+        return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        """
+        Allow relations if a model in the auth or contenttypes apps is
+        involved.
+        """
+        if (
+            obj1._meta.app_label in self.route_app_labels or
+            obj2._meta.app_label in self.route_app_labels
+        ):
+           return True
+        return None
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        """
+        Make sure the auth and contenttypes apps only appear in the
+        'auth_db' database.
+        """
+        if app_label in self.route_app_labels:
+            return db == 'auth_db'
+        return None
+</pre> <p>And we also want a router that sends all other apps to the primary/replica configuration, and randomly chooses a replica to read from:</p> <pre data-language="python">import random
+
+class PrimaryReplicaRouter:
+    def db_for_read(self, model, **hints):
+        """
+        Reads go to a randomly-chosen replica.
+        """
+        return random.choice(['replica1', 'replica2'])
+
+    def db_for_write(self, model, **hints):
+        """
+        Writes always go to primary.
+        """
+        return 'primary'
+
+    def allow_relation(self, obj1, obj2, **hints):
+        """
+        Relations between objects are allowed if both objects are
+        in the primary/replica pool.
+        """
+        db_set = {'primary', 'replica1', 'replica2'}
+        if obj1._state.db in db_set and obj2._state.db in db_set:
+            return True
+        return None
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        """
+        All non-auth models end up in this pool.
+        """
+        return True
+</pre> <p>Finally, in the settings file, we add the following (substituting <code>path.to.</code> with the actual Python path to the module(s) where the routers are defined):</p> <pre data-language="python">DATABASE_ROUTERS = ['path.to.AuthRouter', 'path.to.PrimaryReplicaRouter']
+</pre> <p>The order in which routers are processed is significant. Routers will be queried in the order they are listed in the <a class="reference internal" href="../../ref/settings#std:setting-DATABASE_ROUTERS"><code>DATABASE_ROUTERS</code></a> setting. In this example, the <code>AuthRouter</code> is processed before the <code>PrimaryReplicaRouter</code>, and as a result, decisions concerning the models in <code>auth</code> are processed before any other decision is made. If the <a class="reference internal" href="../../ref/settings#std:setting-DATABASE_ROUTERS"><code>DATABASE_ROUTERS</code></a> setting listed the two routers in the other order, <code>PrimaryReplicaRouter.allow_migrate()</code> would be processed first. The catch-all nature of the PrimaryReplicaRouter implementation would mean that all models would be available on all databases.</p> <p>With this setup installed, and all databases migrated as per <a class="reference internal" href="#synchronizing-multiple-databases"><span class="std std-ref">Synchronizing your databases</span></a>, lets run some Django code:</p> <pre data-language="python">&gt;&gt;&gt; # This retrieval will be performed on the 'auth_db' database
+&gt;&gt;&gt; fred = User.objects.get(username='fred')
+&gt;&gt;&gt; fred.first_name = 'Frederick'
+
+&gt;&gt;&gt; # This save will also be directed to 'auth_db'
+&gt;&gt;&gt; fred.save()
+
+&gt;&gt;&gt; # These retrieval will be randomly allocated to a replica database
+&gt;&gt;&gt; dna = Person.objects.get(name='Douglas Adams')
+
+&gt;&gt;&gt; # A new object has no database allocation when created
+&gt;&gt;&gt; mh = Book(title='Mostly Harmless')
+
+&gt;&gt;&gt; # This assignment will consult the router, and set mh onto
+&gt;&gt;&gt; # the same database as the author object
+&gt;&gt;&gt; mh.author = dna
+
+&gt;&gt;&gt; # This save will force the 'mh' instance onto the primary database...
+&gt;&gt;&gt; mh.save()
+
+&gt;&gt;&gt; # ... but if we re-retrieve the object, it will come back on a replica
+&gt;&gt;&gt; mh = Book.objects.get(title='Mostly Harmless')
+</pre> <p>This example defined a router to handle interaction with models from the <code>auth</code> app, and other routers to handle interaction with all other apps. If you left your <code>default</code> database empty and don’t want to define a catch-all database router to handle all apps not otherwise specified, your routers must handle the names of all apps in <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> before you migrate. See <a class="reference internal" href="#contrib-app-multiple-databases"><span class="std std-ref">Behavior of contrib apps</span></a> for information about contrib apps that must be together in one database.</p>    <h2 id="manually-selecting-a-database">Manually selecting a database</h2> <p id="s-manually-selecting-a-database">Django also provides an API that allows you to maintain complete control over database usage in your code. A manually specified database allocation will take priority over a database allocated by a router.</p>  <h3 id="manually-selecting-a-database-for-a-queryset">Manually selecting a database for a <code>QuerySet</code>
+</h3> <p id="s-manually-selecting-a-database-for-a-queryset">You can select the database for a <code>QuerySet</code> at any point in the <code>QuerySet</code> “chain.” Call <code>using()</code> on the <code>QuerySet</code> to get another <code>QuerySet</code> that uses the specified database.</p> <p><code>using()</code> takes a single argument: the alias of the database on which you want to run the query. For example:</p> <pre data-language="python">&gt;&gt;&gt; # This will run on the 'default' database.
+&gt;&gt;&gt; Author.objects.all()
+
+&gt;&gt;&gt; # So will this.
+&gt;&gt;&gt; Author.objects.using('default').all()
+
+&gt;&gt;&gt; # This will run on the 'other' database.
+&gt;&gt;&gt; Author.objects.using('other').all()
+</pre>   <h3 id="selecting-a-database-for-save">Selecting a database for <code>save()</code>
+</h3> <p id="s-selecting-a-database-for-save">Use the <code>using</code> keyword to <code>Model.save()</code> to specify to which database the data should be saved.</p> <p>For example, to save an object to the <code>legacy_users</code> database, you’d use this:</p> <pre data-language="python">&gt;&gt;&gt; my_object.save(using='legacy_users')
+</pre> <p>If you don’t specify <code>using</code>, the <code>save()</code> method will save into the default database allocated by the routers.</p>  <h4 id="moving-an-object-from-one-database-to-another">Moving an object from one database to another</h4> <p id="s-moving-an-object-from-one-database-to-another">If you’ve saved an instance to one database, it might be tempting to use <code>save(using=...)</code> as a way to migrate the instance to a new database. However, if you don’t take appropriate steps, this could have some unexpected consequences.</p> <p>Consider the following example:</p> <pre data-language="python">&gt;&gt;&gt; p = Person(name='Fred')
+&gt;&gt;&gt; p.save(using='first')  # (statement 1)
+&gt;&gt;&gt; p.save(using='second') # (statement 2)
+</pre> <p>In statement 1, a new <code>Person</code> object is saved to the <code>first</code> database. At this time, <code>p</code> doesn’t have a primary key, so Django issues an SQL <code>INSERT</code> statement. This creates a primary key, and Django assigns that primary key to <code>p</code>.</p> <p>When the save occurs in statement 2, <code>p</code> already has a primary key value, and Django will attempt to use that primary key on the new database. If the primary key value isn’t in use in the <code>second</code> database, then you won’t have any problems – the object will be copied to the new database.</p> <p>However, if the primary key of <code>p</code> is already in use on the <code>second</code> database, the existing object in the <code>second</code> database will be overridden when <code>p</code> is saved.</p> <p>You can avoid this in two ways. First, you can clear the primary key of the instance. If an object has no primary key, Django will treat it as a new object, avoiding any loss of data on the <code>second</code> database:</p> <pre data-language="python">&gt;&gt;&gt; p = Person(name='Fred')
+&gt;&gt;&gt; p.save(using='first')
+&gt;&gt;&gt; p.pk = None # Clear the primary key.
+&gt;&gt;&gt; p.save(using='second') # Write a completely new object.
+</pre> <p>The second option is to use the <code>force_insert</code> option to <code>save()</code> to ensure that Django does an SQL <code>INSERT</code>:</p> <pre data-language="python">&gt;&gt;&gt; p = Person(name='Fred')
+&gt;&gt;&gt; p.save(using='first')
+&gt;&gt;&gt; p.save(using='second', force_insert=True)
+</pre> <p>This will ensure that the person named <code>Fred</code> will have the same primary key on both databases. If that primary key is already in use when you try to save onto the <code>second</code> database, an error will be raised.</p>    <h3 id="selecting-a-database-to-delete-from">Selecting a database to delete from</h3> <p id="s-selecting-a-database-to-delete-from">By default, a call to delete an existing object will be executed on the same database that was used to retrieve the object in the first place:</p> <pre data-language="python">&gt;&gt;&gt; u = User.objects.using('legacy_users').get(username='fred')
+&gt;&gt;&gt; u.delete() # will delete from the `legacy_users` database
+</pre> <p>To specify the database from which a model will be deleted, pass a <code>using</code> keyword argument to the <code>Model.delete()</code> method. This argument works just like the <code>using</code> keyword argument to <code>save()</code>.</p> <p>For example, if you’re migrating a user from the <code>legacy_users</code> database to the <code>new_users</code> database, you might use these commands:</p> <pre data-language="python">&gt;&gt;&gt; user_obj.save(using='new_users')
+&gt;&gt;&gt; user_obj.delete(using='legacy_users')
+</pre>   <h3 id="using-managers-with-multiple-databases">Using managers with multiple databases</h3> <p id="s-using-managers-with-multiple-databases">Use the <code>db_manager()</code> method on managers to give managers access to a non-default database.</p> <p>For example, say you have a custom manager method that touches the database – <code>User.objects.create_user()</code>. Because <code>create_user()</code> is a manager method, not a <code>QuerySet</code> method, you can’t do <code>User.objects.using('new_users').create_user()</code>. (The <code>create_user()</code> method is only available on <code>User.objects</code>, the manager, not on <code>QuerySet</code> objects derived from the manager.) The solution is to use <code>db_manager()</code>, like this:</p> <pre data-language="python">User.objects.db_manager('new_users').create_user(...)
+</pre> <p><code>db_manager()</code> returns a copy of the manager bound to the database you specify.</p>  <h4 id="using-get-queryset-with-multiple-databases">Using <code>get_queryset()</code> with multiple databases</h4> <p id="s-using-get-queryset-with-multiple-databases">If you’re overriding <code>get_queryset()</code> on your manager, be sure to either call the method on the parent (using <code>super()</code>) or do the appropriate handling of the <code>_db</code> attribute on the manager (a string containing the name of the database to use).</p> <p>For example, if you want to return a custom <code>QuerySet</code> class from the <code>get_queryset</code> method, you could do this:</p> <pre data-language="python">class MyManager(models.Manager):
+    def get_queryset(self):
+        qs = CustomQuerySet(self.model)
+        if self._db is not None:
+            qs = qs.using(self._db)
+        return qs
+</pre>     <h2 id="exposing-multiple-databases-in-django-s-admin-interface">Exposing multiple databases in Django’s admin interface</h2> <p id="s-exposing-multiple-databases-in-django-s-admin-interface">Django’s admin doesn’t have any explicit support for multiple databases. If you want to provide an admin interface for a model on a database other than that specified by your router chain, you’ll need to write custom <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin" title="django.contrib.admin.ModelAdmin"><code>ModelAdmin</code></a> classes that will direct the admin to use a specific database for content.</p> <p><code>ModelAdmin</code> objects have five methods that require customization for multiple-database support:</p> <pre data-language="python">class MultiDBModelAdmin(admin.ModelAdmin):
+    # A handy constant for the name of the alternate database.
+    using = 'other'
+
+    def save_model(self, request, obj, form, change):
+        # Tell Django to save objects to the 'other' database.
+        obj.save(using=self.using)
+
+    def delete_model(self, request, obj):
+        # Tell Django to delete objects from the 'other' database
+        obj.delete(using=self.using)
+
+    def get_queryset(self, request):
+        # Tell Django to look for objects on the 'other' database.
+        return super().get_queryset(request).using(self.using)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # Tell Django to populate ForeignKey widgets using a query
+        # on the 'other' database.
+        return super().formfield_for_foreignkey(db_field, request, using=self.using, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        # Tell Django to populate ManyToMany widgets using a query
+        # on the 'other' database.
+        return super().formfield_for_manytomany(db_field, request, using=self.using, **kwargs)
+</pre> <p>The implementation provided here implements a multi-database strategy where all objects of a given type are stored on a specific database (e.g., all <code>User</code> objects are in the <code>other</code> database). If your usage of multiple databases is more complex, your <code>ModelAdmin</code> will need to reflect that strategy.</p> <p><a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.InlineModelAdmin" title="django.contrib.admin.InlineModelAdmin"><code>InlineModelAdmin</code></a> objects can be handled in a similar fashion. They require three customized methods:</p> <pre data-language="python">class MultiDBTabularInline(admin.TabularInline):
+    using = 'other'
+
+    def get_queryset(self, request):
+        # Tell Django to look for inline objects on the 'other' database.
+        return super().get_queryset(request).using(self.using)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        # Tell Django to populate ForeignKey widgets using a query
+        # on the 'other' database.
+        return super().formfield_for_foreignkey(db_field, request, using=self.using, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        # Tell Django to populate ManyToMany widgets using a query
+        # on the 'other' database.
+        return super().formfield_for_manytomany(db_field, request, using=self.using, **kwargs)
+</pre> <p>Once you’ve written your model admin definitions, they can be registered with any <code>Admin</code> instance:</p> <pre data-language="python">from django.contrib import admin
+
+# Specialize the multi-db admin objects for use with specific models.
+class BookInline(MultiDBTabularInline):
+    model = Book
+
+class PublisherAdmin(MultiDBModelAdmin):
+    inlines = [BookInline]
+
+admin.site.register(Author, MultiDBModelAdmin)
+admin.site.register(Publisher, PublisherAdmin)
+
+othersite = admin.AdminSite('othersite')
+othersite.register(Publisher, MultiDBModelAdmin)
+</pre> <p>This example sets up two admin sites. On the first site, the <code>Author</code> and <code>Publisher</code> objects are exposed; <code>Publisher</code> objects have a tabular inline showing books published by that publisher. The second site exposes just publishers, without the inlines.</p>   <h2 id="using-raw-cursors-with-multiple-databases">Using raw cursors with multiple databases</h2> <p id="s-using-raw-cursors-with-multiple-databases">If you are using more than one database you can use <code>django.db.connections</code> to obtain the connection (and cursor) for a specific database. <code>django.db.connections</code> is a dictionary-like object that allows you to retrieve a specific connection using its alias:</p> <pre data-language="python">from django.db import connections
+with connections['my_db_alias'].cursor() as cursor:
+    ...
+</pre>   <h2 id="limitations-of-multiple-databases">Limitations of multiple databases</h2>  <h3 id="no-cross-database-relations">Cross-database relations</h3> <p id="s-limitations-of-multiple-databases">Django doesn’t currently provide any support for foreign key or many-to-many relationships spanning multiple databases. If you have used a router to partition models to different databases, any foreign key and many-to-many relationships defined by those models must be internal to a single database.</p> <p>This is because of referential integrity. In order to maintain a relationship between two objects, Django needs to know that the primary key of the related object is valid. If the primary key is stored on a separate database, it’s not possible to easily evaluate the validity of a primary key.</p> <p>If you’re using Postgres, Oracle, or MySQL with InnoDB, this is enforced at the database integrity level – database level key constraints prevent the creation of relations that can’t be validated.</p> <p>However, if you’re using SQLite or MySQL with MyISAM tables, there is no enforced referential integrity; as a result, you may be able to ‘fake’ cross database foreign keys. However, this configuration is not officially supported by Django.</p>   <h3 id="contrib-app-multiple-databases">Behavior of contrib apps</h3> <p id="s-behavior-of-contrib-apps">Several contrib apps include models, and some apps depend on others. Since cross-database relationships are impossible, this creates some restrictions on how you can split these models across databases:</p> <ul class="simple"> <li>each one of <code>contenttypes.ContentType</code>, <code>sessions.Session</code> and <code>sites.Site</code> can be stored in any database, given a suitable router.</li> <li>
+<code>auth</code> models — <code>User</code>, <code>Group</code> and <code>Permission</code> — are linked together and linked to <code>ContentType</code>, so they must be stored in the same database as <code>ContentType</code>.</li> <li>
+<code>admin</code> depends on <code>auth</code>, so its models must be in the same database as <code>auth</code>.</li> <li>
+<code>flatpages</code> and <code>redirects</code> depend on <code>sites</code>, so their models must be in the same database as <code>sites</code>.</li> </ul> <p>In addition, some objects are automatically created just after <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>migrate</code></a> creates a table to hold them in a database:</p> <ul class="simple"> <li>a default <code>Site</code>,</li> <li>a <code>ContentType</code> for each model (including those not stored in that database),</li> <li>the <code>Permission</code>s for each model (including those not stored in that database).</li> </ul> <p>For common setups with multiple databases, it isn’t useful to have these objects in more than one database. Common setups include primary/replica and connecting to external databases. Therefore, it’s recommended to write a <a class="reference internal" href="#topics-db-multi-db-routing"><span class="std std-ref">database router</span></a> that allows synchronizing these three models to only one database. Use the same approach for contrib and third-party apps that don’t need their tables in multiple databases.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">If you’re synchronizing content types to more than one database, be aware that their primary keys may not match across databases. This may result in data corruption or data loss.</p> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/db/multi-db/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/db/multi-db/</a>
+  </p>
+</div>

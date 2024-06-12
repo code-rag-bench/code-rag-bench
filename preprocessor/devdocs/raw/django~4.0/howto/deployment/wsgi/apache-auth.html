@@ -1,0 +1,45 @@
+<h1 id="how-to-authenticate-against-django-s-user-database-from-apache">How to authenticate against Django’s user database from Apache</h1> <p id="s-how-to-authenticate-against-django-s-user-database-from-apache">Since keeping multiple authentication databases in sync is a common problem when dealing with Apache, you can configure Apache to authenticate against Django’s <a class="reference internal" href="../../../topics/auth/index"><span class="doc">authentication system</span></a> directly. This requires Apache version &gt;= 2.2 and mod_wsgi &gt;= 2.0. For example, you could:</p> <ul class="simple"> <li>Serve static/media files directly from Apache only to authenticated users.</li> <li>Authenticate access to a <a class="reference external" href="https://subversion.apache.org/">Subversion</a> repository against Django users with a certain permission.</li> <li>Allow certain users to connect to a WebDAV share created with <a class="reference external" href="https://httpd.apache.org/docs/2.2/mod/mod_dav.html">mod_dav</a>.</li> </ul> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">If you have installed a <a class="reference internal" href="../../../topics/auth/customizing#auth-custom-user"><span class="std std-ref">custom user model</span></a> and want to use this default auth handler, it must support an <code>is_active</code> attribute. If you want to use group based authorization, your custom user must have a relation named ‘groups’, referring to a related object that has a ‘name’ field. You can also specify your own custom mod_wsgi auth handler if your custom cannot conform to these requirements.</p> </div>  <h2 id="authentication-with-mod-wsgi">Authentication with <code>mod_wsgi</code>
+</h2> <div class="admonition note" id="s-authentication-with-mod-wsgi"> <p class="first admonition-title">Note</p> <p class="last">The use of <code>WSGIApplicationGroup %{GLOBAL}</code> in the configurations below presumes that your Apache instance is running only one Django application. If you are running more than one Django application, please refer to the <a class="reference external" href="https://modwsgi.readthedocs.io/en/develop/user-guides/configuration-guidelines.html#defining-application-groups">Defining Application Groups</a> section of the mod_wsgi docs for more information about this setting.</p> </div> <p>Make sure that mod_wsgi is installed and activated and that you have followed the steps to set up <a class="reference internal" href="modwsgi"><span class="doc">Apache with mod_wsgi</span></a>.</p> <p>Next, edit your Apache configuration to add a location that you want only authenticated users to be able to view:</p> <pre data-language="apache">WSGIScriptAlias / /path/to/mysite.com/mysite/wsgi.py
+WSGIPythonPath /path/to/mysite.com
+
+WSGIProcessGroup %{GLOBAL}
+WSGIApplicationGroup %{GLOBAL}
+
+&lt;Location "/secret"&gt;
+    AuthType Basic
+    AuthName "Top Secret"
+    Require valid-user
+    AuthBasicProvider wsgi
+    WSGIAuthUserScript /path/to/mysite.com/mysite/wsgi.py
+&lt;/Location&gt;
+</pre> <p>The <code>WSGIAuthUserScript</code> directive tells mod_wsgi to execute the <code>check_password</code> function in specified wsgi script, passing the user name and password that it receives from the prompt. In this example, the <code>WSGIAuthUserScript</code> is the same as the <code>WSGIScriptAlias</code> that defines your application <a class="reference internal" href="index"><span class="doc">that is created by django-admin startproject</span></a>.</p> <div class="admonition-using-apache-2-2-with-authentication admonition"> <p class="first admonition-title">Using Apache 2.2 with authentication</p> <p>Make sure that <code>mod_auth_basic</code> and <code>mod_authz_user</code> are loaded.</p> <p>These might be compiled statically into Apache, or you might need to use LoadModule to load them dynamically in your <code>httpd.conf</code>:</p> <pre data-language="apache">LoadModule auth_basic_module modules/mod_auth_basic.so
+LoadModule authz_user_module modules/mod_authz_user.so
+</pre> </div> <p>Finally, edit your WSGI script <code>mysite.wsgi</code> to tie Apache’s authentication to your site’s authentication mechanisms by importing the <code>check_password</code> function:</p> <pre data-language="python">import os
+
+os.environ['DJANGO_SETTINGS_MODULE'] = 'mysite.settings'
+
+from django.contrib.auth.handlers.modwsgi import check_password
+
+from django.core.handlers.wsgi import WSGIHandler
+application = WSGIHandler()
+</pre> <p>Requests beginning with <code>/secret/</code> will now require a user to authenticate.</p> <p>The mod_wsgi <a class="reference external" href="https://modwsgi.readthedocs.io/en/develop/user-guides/access-control-mechanisms.html">access control mechanisms documentation</a> provides additional details and information about alternative methods of authentication.</p>  <h3 id="authorization-with-mod-wsgi-and-django-groups">Authorization with <code>mod_wsgi</code> and Django groups</h3> <p id="s-authorization-with-mod-wsgi-and-django-groups">mod_wsgi also provides functionality to restrict a particular location to members of a group.</p> <p>In this case, the Apache configuration should look like this:</p> <pre data-language="apache">WSGIScriptAlias / /path/to/mysite.com/mysite/wsgi.py
+
+WSGIProcessGroup %{GLOBAL}
+WSGIApplicationGroup %{GLOBAL}
+
+&lt;Location "/secret"&gt;
+    AuthType Basic
+    AuthName "Top Secret"
+    AuthBasicProvider wsgi
+    WSGIAuthUserScript /path/to/mysite.com/mysite/wsgi.py
+    WSGIAuthGroupScript /path/to/mysite.com/mysite/wsgi.py
+    Require group secret-agents
+    Require valid-user
+&lt;/Location&gt;
+</pre> <p>To support the <code>WSGIAuthGroupScript</code> directive, the same WSGI script <code>mysite.wsgi</code> must also import the <code>groups_for_user</code> function which returns a list groups the given user belongs to.</p> <pre data-language="python">from django.contrib.auth.handlers.modwsgi import check_password, groups_for_user
+</pre> <p>Requests for <code>/secret/</code> will now also require user to be a member of the “secret-agents” group.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/howto/deployment/wsgi/apache-auth/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/howto/deployment/wsgi/apache-auth/</a>
+  </p>
+</div>

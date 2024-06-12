@@ -1,0 +1,208 @@
+<h1 id="writing-graph-transformations-on-aten-ir">Writing Graph Transformations on ATen IR</h1>  <h2 id="passes">Passes</h2> <p>Since the ATen IR sits at the FX Graph/GraphModule level, any transformations written for FX Graphs can be easily applied onto the ATen IR. If you’re familiar with writing FX graph transformations, then this will be the same.</p> <p>The most direct way of writing transformations is by looping through the given graph and directly manipulating the nodes within the graph.</p> <p>For example, let’s say we want to replace <code>torch.ops.aten.add.Tensor()</code> calls with <code>torch.ops.aten.mul.Tensor()</code> calls:</p> <pre data-language="python">import torch
+
+def replace_add_with_mul(gm: torch.fx.GraphModule) -&gt; torch.fx.GraphModule:
+    for node in gm.graph.nodes:
+        if node.op == "call_function" and node.target == torch.ops.aten.add.Tensor:
+            node.target = torch.ops.aten.mul.Tensor
+</pre> <p>We can also delete and append new nodes through FX utility functions that can be found in the <a class="reference external" href="https://pytorch.org/docs/stable/fx.html#torch.fx.Graph">Graph</a> documentation. For example, if we want to insert a <code>torch.ops.aten.relu.default()</code> after the <code>add</code> call:</p> <pre data-language="python">import torch
+
+def insert_relu_after_add(gm: torch.fx.GraphModule) -&gt; torch.fx.GraphModule:
+    for node in gm.graph.nodes:
+        if node.op == "call_function" and node.target == torch.ops.aten.add.Tensor:
+
+            # Specifies the insertion point. Any nodes added to the graph within
+            # this scope will be inserted after `node`
+            with gm.graph.inserting_after(node):
+                # Insert a new `call_function` node with op `torch.ops.aten.relu.default`
+                new_relu_node = gm.graph.call_function(torch.ops.aten.relu.default, args=(node,))
+                # Replace all the places that use `node` to now use the `new_relu_node`
+                node.replace_all_uses_with(new_relu_node)
+</pre> <p>In general, transformations can be roughly categorized into a couple of axis:</p> <p>Axis A: 1. Creating one-to-X mapping (eg. decomposition) 2. Creating many-to-one mapping (eg. fusion)</p> <p>Axis B: 1. Doing forwards iteration (eg. shape propagation) 2. Doing backwards iteration (eg. dead code elimination)</p> <p>Axis C: 1. Dependent on local node information (eg. out-variant conversion) 2. Dependent on global graph information (eg. memory planning)</p> <p>Our projection on the frequency of these use cases are: 1. A.1, B.1, C.1 2. A.2 3. B.2, C.2</p> <p>Although we can make all graph transformations through directly manipulating the graph, we also provide some helper utilities for some ease of use for the level 1 and 2 use-cases.</p>  <h3 id="transformer">Transformer</h3> <p>For level 1 uses cases (creating one-to-X mappings, doing forwards iterations, and looking at local node information), we can utilize the <a class="reference external" href="https://pytorch.org/docs/stable/fx.html#torch.fx.Transformer">Transformer</a> class to execute each node and recreate a graph, except with the transformations specified.</p>  <h4 id="one-to-one-pass">One-to-One Pass</h4> <p>An example for one-to-one mappings, if we wanted to replace an op A with another op B, we can run the GraphModule, and very time we see op A, return op B.</p> <p>An example is:</p> <pre data-language="python">class ReplaceAddWithMul(torch.fx.Transformer):
+    def call_function(self, target, args, kwargs):
+        if target != torch.ops.aten.add.Tensor:
+            return super().call_function(target, args, kwargs)
+        return super().call_function(torch.ops.aten.mul.Tensor, args, kwargs)
+
+transformed_graph_module = ReplaceAddWithMul(graph_module).transform()
+</pre> <p>The <code>super().call_function(target, args, kwargs, meta)</code> call creates a <code>call_function</code> FX node, and returns the result of running the operator with the given arguments.</p>   <h4 id="one-to-x-pass">One-to-X Pass</h4> <p>If we wanted to do one-to-X mappings, like replacing op A with 2 other ops B and C, we would then make 2 calls to <code>super().call_function</code> to create 2 FX nodes, one with op B and another with op C, and return the result of running op C.</p> <p>For example:</p> <pre data-language="python">class ReplaceAddWithMulSub(torch.fx.Transformer):
+    """
+    Original:
+        def f(x, y):
+            return x + y
+
+    After pass:
+        def f(x, y):
+            z = x * y
+            return z - y
+    """
+    def call_function(self, target, args, kwargs):
+        if target != torch.ops.aten.add.Tensor:
+            return super().call_function(target, args, kwargs)
+
+        x, y = args
+
+        mul_res = super().call_function(torch.ops.aten.mul.Tensor, args, {})
+        return super().call_function(torch.ops.aten.sub.Tensor, (mul_res, y), {})
+
+transformed_graph_module = ReplaceAddWithMulSub(graph_module).transform()
+</pre>   <h4 id="one-to-none-pass">One-to-None Pass</h4> <p>If we wanted to remove an op, we can just return the value passed into the function:</p> <pre data-language="python">class RemoveDetachPass(torch.fx.Transformer):
+    def call_function(self, target, args, kwargs):
+        if target not in (
+            torch.ops.aten.detach.default,
+            torch.ops.aten.detach_copy.default,
+        ):
+            return super().call_function(target, args, kwargs, meta)
+
+        assert len(args) == 1
+        return args[0]
+
+transformed_graph_module = RemoveDetachPass(graph_module).transform()
+</pre>   <h4 id="utilizing-local-information">Utilizing Local Information</h4> <p>An example of utilizing local node information is, if we wanted to convert all the scalars within the graph to tensors, we can run the given <code>fx.GraphModule</code>, and for every argument that contains a scalar, we convert it to a tensor. It might look something like:</p> <pre data-language="python">def args_map(target, fn, args, kwargs):
+    assert isinstance(args, tuple)
+    assert isinstance(kwargs, dict)
+    args = list(args)
+    kwargs = kwargs.copy()
+
+    # Update the argument based on the function passed
+    def update(key, args, schema):
+        args[key] = fn(args[key], schema)
+
+    # Update each argument in the schema
+    for i, schema in enumerate(target._schema.arguments):
+        if schema.name in kwargs:
+            update(schema.name, kwargs, schema)
+        elif not schema.kwarg_only and i &lt; len(args):
+            update(i, args, schema)
+    return tuple(args), kwargs
+
+class ScalarToTensorPass(torch.fx.Transformer):
+    def call_function(self, target, args, kwargs):
+        breakpoint()
+        def try_coerce(value, arg):
+            return (
+                torch.tensor(value)
+                if isinstance(value, (float, int, bool))
+                and type(arg.type) == torch.TensorType
+                else value
+            )
+
+        args, kwargs = args_map(target, try_coerce, args, kwargs)
+        return super().call_function(target, args, kwargs)
+
+transformed_graph_module = ScalarToTensorPass(graph_module).transform()
+</pre>    <h3 id="subgraph-rewriter">Subgraph Rewriter</h3> <p>For creating many-to-one mappings, we can utilize FX’s <a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/subgraph_rewriter.py">subgraph rewriter</a>. Given a <code>pattern</code>, it creates a subgraph of operators matching to the pattern, and then replaces each matched subgraph with the <code>replacement</code>.</p> <p>Note:</p> <pre data-language="python">This is an inplace operation.
+</pre> <p>The <code>pattern</code> and <code>replacement</code> inputs must be callable functions or GraphModules containing the same operators that are used within the graph (ATen ops) so that the subgraph rewriter can find the correct pattern in the graph. Inputs to the pattern/replacement callables will be treated as wildcards when matching.</p> <p>An example:</p> <pre data-language="python">from torch.fx import subgraph_rewriter
+
+def replace_patterns(graph_module):
+    def pattern(x, y):
+        x = torch.ops.aten.add.Tensor(x, y)
+        x = torch.ops.aten.mul.Tensor(x, y)
+        return x
+
+    def replacement(x, y):
+        return torch.ops.aten.sub.Tensor(x, y)
+
+replaced_patterns = subgraph_rewriter.replace_pattern_with_filters(
+    traced_module, pattern, replacement
+)
+</pre> <p>The subgraph rewriter returns a list of <code>ReplacedPatterns</code>:</p> <pre data-language="python">@dataclass
+class ReplacedPatterns:
+    # Node from which the match was found
+    anchor: Node
+    # Maps nodes in the pattern subgraph to nodes in the larger graph
+    nodes_map: Dict[Node, Node]
+    # List of nodes that were added into the graph
+    replacements: List[Node]
+</pre> <p>Note:</p> <pre data-language="python">The nodes created by the subgraph rewriter will not have the metadata that
+is populated in the matched nodes, but you can use
+`ReplacedPatterns.nodes_map` to find the nodes in the original graph that
+were matched, and `ReplacedPatterns.replacements` to find the nodes that
+were replaced in the transformed graph.
+</pre>    <h2 id="pass-manager">Pass Manager</h2> <p>The <code>`PassManager</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/infra/pass_manager.py">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/infra/pass_manager.py</a>&gt;`__ is a class used to run multiple passes on a given graph module. When initializing a <code>PassManager</code> instance, we pass in a list of passes that we want to run and set a couple of flags. To run the collection of passes on a graph module, we can pass the graph module directly to the <code>PassManager</code> instance.</p> <p>An example:</p> <pre data-language="python">from torch.fx.passes.infra.pass_manager import PassManager
+
+pm = PassManager(
+    passes=[replace_add_with_div, replace_div_with_mul],
+    run_checks_after_each_pass=True,
+    suppress_check_failures=False,
+)
+graph_module_out = pm(graph_module)
+</pre> <p>To add a common set of checks that are run after each pass, we can call the function <code>set_checks(check: Callable)</code> which takes in a callable function as input. If the <code>run_checks_after_each_pass</code> flag is set, the <code>check</code> will be called after each pass is run on the graph module.</p> <p>An example:</p> <pre data-language="python">pm = PassManager(passes=[replace_add_with_div, replace_div_with_mul])
+
+def check_div_target(graph_module):
+    for node in graph_module.graph.nodes:
+        if node.op == "call_function" and node.target != torch.div:
+            raise ValueError("Target should be div!")
+
+pm.add_checks(check_div_target)
+
+pm(graph_module)    # raises ValueError after replace_div_with_mul pass
+</pre>   <h2 id="partitioner">Partitioner</h2> <p>There are a couple of common FX graph based partitioners we can use to partition the graph.</p>  <h3 id="subgraph-matcher">Subgraph Matcher</h3> <p>For finding subgraphs within a graph that match a specific pattern, we can utilize FX’s <code>`SubgraphMatcher</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/utils/matcher_utils.py">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/utils/matcher_utils.py</a>&gt;`__.</p> <p>Class Attributes:</p> <ul class="simple"> <li>
+<code>pattern (Graph)</code>: The targeted matching pattern. Placeholder nodes in the graph will be treated as wildcards when matching.</li> <li>
+<code>match_output (bool)</code>: If True, output node in the pattern graph will be treated as a part of the targeted pattern. If False, output node is ignored during match.</li> <li>
+<code>match_placeholder (bool)</code>: If True, placeholder node in the pattern graph will be treated as a part of the targeted pattern. If False, placeholder nodes will be used a wildcard.</li> <li>
+<code>remove_overlapping_matches (bool)</code>: If True, in the case of overlapping matches, only the first match will be returned.</li> <li>
+<code>ignore_literals (bool)</code>: If True, will not check if literals are equal and will instead treat them as wildcards.</li> </ul> <p>An example:</p> <pre data-language="python">from torch.fx.passes.utils.matcher_utils import SubgraphMatcher
+
+class LargeModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self._weight = torch.nn.Parameter(torch.ones(3, 3))
+        self._bias = torch.nn.Parameter(torch.ones(3, 3))
+
+    def forward(self, x):
+        return torch.ops.aten.addmm.default(self._bias, x, self._weight)
+
+large_model_graph = torch.export(LargeModel(), inputs).graph
+
+class PatternModel(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self._weight_1 = torch.nn.Parameter(torch.ones(5, 5))
+        self._bias_1 = torch.nn.Parameter(torch.ones(5, 5))
+
+    def forward(self, x):
+        return torch.ops.aten.addmm.default(self._bias_1, x, self._weight_1)
+
+pattern_graph = torch.export(PatternModel(), inputs).graph
+
+subgraph_matcher = SubgraphMatcher(pattern_graph)
+match_result = subgraph_matcher.match(large_model_graph)
+</pre> <p>The <code>match</code> function returns a list of <code>InternalMatch</code>:</p> <pre data-language="python">@dataclass
+class InternalMatch():
+    # Nodes from which the match was found
+    anchors: List[Node]
+    # Maps nodes in the pattern subgraph to nodes in the larger graph
+    nodes_map: Dict[Node, Node] = field(default_factory=dict)
+    # Nodes in target graph that are matched placeholder in pattern
+    placeholder_nodes: List[Node] = field(default_factory=list)
+    # Nodes in matched subgraph returned by output
+    returning_nodes: List[Node] = field(default_factory=list)
+</pre>   <h3 id="capability-based-partitioner">Capability Based Partitioner</h3> <p>To find the largest subgraphs of nodes that support a specific invariant, we can utilize FX’s <code>`CapabilityBasedPartitioner</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/infra/partitioner.py#L34">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/infra/partitioner.py#L34</a>&gt;`__.</p> <p>Class Attributes</p> <ul class="simple"> <li>
+<code>graph_module (torch.fx.GraphModule)</code>: The graph module we are partitioning on.</li> <li>
+<code>operator_support (OperatorSupportBase)</code>: The object used to determine if a node in the graph is supported in the partition.</li> <li>
+<code>allows_single_node_partition (bool)</code>: If True, allows single node partitions to be formed.</li> <li>
+<code>non_compute_ops (Optional[Sequence[str]])</code>: A set of ops that are considered to be “non-compute” (ex <code>torch.ops.aten.view</code> and <code>_operator.getitem</code>, so that the partitioner will not create graphs that only contain these non-compute ops</li> <li>
+<code>allowed_single_node_partition_ops (Optional[Sequence[str]])</code>: A set of ops that are allowed to be in a single node partition.</li> </ul> <p>The <code>`OperatorSupportBase</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#LL28C1-L28C1">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#LL28C1-L28C1</a>&gt;`__ class is used by the partitioner to determine if a specific node in the graph belongs in the partition. This is done by overriding the <code>is_node_supported</code> function. You can chain multiple <code>OperatorSuppportBase</code> by using <code>`chain</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#L150">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#L150</a>&gt;`__(which returns False if any of the OperatorSupportBase return False) and <code>`any_chain</code> &lt;<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#L164">https://github.com/pytorch/pytorch/blob/main/torch/fx/passes/operator_support.py#L164</a>&gt;`__ (which returns True if any of the OperatorSupportBase returns True).</p> <p>An example:</p> <pre data-language="python">from torch.fx.passes.infra.partitioner import CapabilityBasedPartitioner
+from torch.fx.passes.operator_support import any_chain, OperatorSupportBase
+
+class AddMulOperatorSupport(OperatorSupportBase):
+    def is_node_supported(self, submodules, node: torch.fx.Node) -&gt; bool:
+        return node.op == "call_function" and node.target in [
+            torch.ops.aten.add.Tensor, torch.ops.aten.mul.Tensor,
+        ]
+
+capability_partitioner = CapabilityBasedPartitioner(
+    graph_module,
+    op_support,
+)
+
+# Returns a list of partitions (list of nodes that belong in each partition)
+partition_list = capability_partitioner.propose_partitions()
+# Fuses the partitions into graph modules and inserts `call_module` nodes in the graph
+fused_graph_module = capability_partitioner.fuse_partitions(partition_list)
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/torch.compiler_transformations.html" class="_attribution-link">https://pytorch.org/docs/2.1/torch.compiler_transformations.html</a>
+  </p>
+</div>

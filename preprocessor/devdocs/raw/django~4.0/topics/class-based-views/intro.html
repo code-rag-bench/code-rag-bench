@@ -1,0 +1,108 @@
+<h1 id="introduction-to-class-based-views">Introduction to class-based views</h1> <p id="s-introduction-to-class-based-views">Class-based views provide an alternative way to implement views as Python objects instead of functions. They do not replace function-based views, but have certain differences and advantages when compared to function-based views:</p> <ul class="simple"> <li>Organization of code related to specific HTTP methods (<code>GET</code>, <code>POST</code>, etc.) can be addressed by separate methods instead of conditional branching.</li> <li>Object oriented techniques such as mixins (multiple inheritance) can be used to factor code into reusable components.</li> </ul>  <h2 id="the-relationship-and-history-of-generic-views-class-based-views-and-class-based-generic-views">The relationship and history of generic views, class-based views, and class-based generic views</h2> <p id="s-the-relationship-and-history-of-generic-views-class-based-views-and-class-based-generic-views">In the beginning there was only the view function contract, Django passed your function an <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> and expected back an <a class="reference internal" href="../../ref/request-response#django.http.HttpResponse" title="django.http.HttpResponse"><code>HttpResponse</code></a>. This was the extent of what Django provided.</p> <p>Early on it was recognized that there were common idioms and patterns found in view development. Function-based generic views were introduced to abstract these patterns and ease view development for the common cases.</p> <p>The problem with function-based generic views is that while they covered the simple cases well, there was no way to extend or customize them beyond some configuration options, limiting their usefulness in many real-world applications.</p> <p>Class-based generic views were created with the same objective as function-based generic views, to make view development easier. However, the way the solution is implemented, through the use of mixins, provides a toolkit that results in class-based generic views being more extensible and flexible than their function-based counterparts.</p> <p>If you have tried function based generic views in the past and found them lacking, you should not think of class-based generic views as a class-based equivalent, but rather as a fresh approach to solving the original problems that generic views were meant to solve.</p> <p>The toolkit of base classes and mixins that Django uses to build class-based generic views are built for maximum flexibility, and as such have many hooks in the form of default method implementations and attributes that you are unlikely to be concerned with in the simplest use cases. For example, instead of limiting you to a class-based attribute for <code>form_class</code>, the implementation uses a <code>get_form</code> method, which calls a <code>get_form_class</code> method, which in its default implementation returns the <code>form_class</code> attribute of the class. This gives you several options for specifying what form to use, from an attribute, to a fully dynamic, callable hook. These options seem to add hollow complexity for simple situations, but without them, more advanced designs would be limited.</p>   <h2 id="using-class-based-views">Using class-based views</h2> <p id="s-using-class-based-views">At its core, a class-based view allows you to respond to different HTTP request methods with different class instance methods, instead of with conditionally branching code inside a single view function.</p> <p>So where the code to handle HTTP <code>GET</code> in a view function would look something like:</p> <pre data-language="python">from django.http import HttpResponse
+
+def my_view(request):
+    if request.method == 'GET':
+        # &lt;view logic&gt;
+        return HttpResponse('result')
+</pre> <p>In a class-based view, this would become:</p> <pre data-language="python">from django.http import HttpResponse
+from django.views import View
+
+class MyView(View):
+    def get(self, request):
+        # &lt;view logic&gt;
+        return HttpResponse('result')
+</pre> <p>Because Django’s URL resolver expects to send the request and associated arguments to a callable function, not a class, class-based views have an <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.as_view" title="django.views.generic.base.View.as_view"><code>as_view()</code></a> class method which returns a function that can be called when a request arrives for a URL matching the associated pattern. The function creates an instance of the class, calls <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.setup" title="django.views.generic.base.View.setup"><code>setup()</code></a> to initialize its attributes, and then calls its <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.dispatch" title="django.views.generic.base.View.dispatch"><code>dispatch()</code></a> method. <code>dispatch</code> looks at the request to determine whether it is a <code>GET</code>, <code>POST</code>, etc, and relays the request to a matching method if one is defined, or raises <a class="reference internal" href="../../ref/request-response#django.http.HttpResponseNotAllowed" title="django.http.HttpResponseNotAllowed"><code>HttpResponseNotAllowed</code></a> if not:</p> <pre data-language="python"># urls.py
+from django.urls import path
+from myapp.views import MyView
+
+urlpatterns = [
+    path('about/', MyView.as_view()),
+]
+</pre> <p>It is worth noting that what your method returns is identical to what you return from a function-based view, namely some form of <a class="reference internal" href="../../ref/request-response#django.http.HttpResponse" title="django.http.HttpResponse"><code>HttpResponse</code></a>. This means that <a class="reference internal" href="../http/shortcuts"><span class="doc">http shortcuts</span></a> or <a class="reference internal" href="../../ref/template-response#django.template.response.TemplateResponse" title="django.template.response.TemplateResponse"><code>TemplateResponse</code></a> objects are valid to use inside a class-based view.</p> <p>While a minimal class-based view does not require any class attributes to perform its job, class attributes are useful in many class-based designs, and there are two ways to configure or set class attributes.</p> <p>The first is the standard Python way of subclassing and overriding attributes and methods in the subclass. So that if your parent class had an attribute <code>greeting</code> like this:</p> <pre data-language="python">from django.http import HttpResponse
+from django.views import View
+
+class GreetingView(View):
+    greeting = "Good Day"
+
+    def get(self, request):
+        return HttpResponse(self.greeting)
+</pre> <p>You can override that in a subclass:</p> <pre data-language="python">class MorningGreetingView(GreetingView):
+    greeting = "Morning to ya"
+</pre> <p>Another option is to configure class attributes as keyword arguments to the <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.as_view" title="django.views.generic.base.View.as_view"><code>as_view()</code></a> call in the URLconf:</p> <pre data-language="python">urlpatterns = [
+    path('about/', GreetingView.as_view(greeting="G'day")),
+]
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">While your class is instantiated for each request dispatched to it, class attributes set through the <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.as_view" title="django.views.generic.base.View.as_view"><code>as_view()</code></a> entry point are configured only once at the time your URLs are imported.</p> </div>   <h2 id="using-mixins">Using mixins</h2> <p id="s-using-mixins">Mixins are a form of multiple inheritance where behaviors and attributes of multiple parent classes can be combined.</p> <p>For example, in the generic class-based views there is a mixin called <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin" title="django.views.generic.base.TemplateResponseMixin"><code>TemplateResponseMixin</code></a> whose primary purpose is to define the method <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.render_to_response" title="django.views.generic.base.TemplateResponseMixin.render_to_response"><code>render_to_response()</code></a>. When combined with the behavior of the <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View" title="django.views.generic.base.View"><code>View</code></a> base class, the result is a <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.TemplateView" title="django.views.generic.base.TemplateView"><code>TemplateView</code></a> class that will dispatch requests to the appropriate matching methods (a behavior defined in the <code>View</code> base class), and that has a <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.render_to_response" title="django.views.generic.base.TemplateResponseMixin.render_to_response"><code>render_to_response()</code></a> method that uses a <a class="reference internal" href="../../ref/class-based-views/mixins-simple#django.views.generic.base.TemplateResponseMixin.template_name" title="django.views.generic.base.TemplateResponseMixin.template_name"><code>template_name</code></a> attribute to return a <a class="reference internal" href="../../ref/template-response#django.template.response.TemplateResponse" title="django.template.response.TemplateResponse"><code>TemplateResponse</code></a> object (a behavior defined in the <code>TemplateResponseMixin</code>).</p> <p>Mixins are an excellent way of reusing code across multiple classes, but they come with some cost. The more your code is scattered among mixins, the harder it will be to read a child class and know what exactly it is doing, and the harder it will be to know which methods from which mixins to override if you are subclassing something that has a deep inheritance tree.</p> <p>Note also that you can only inherit from one generic view - that is, only one parent class may inherit from <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View" title="django.views.generic.base.View"><code>View</code></a> and the rest (if any) should be mixins. Trying to inherit from more than one class that inherits from <code>View</code> - for example, trying to use a form at the top of a list and combining <a class="reference internal" href="../../ref/class-based-views/mixins-editing#django.views.generic.edit.ProcessFormView" title="django.views.generic.edit.ProcessFormView"><code>ProcessFormView</code></a> and <a class="reference internal" href="../../ref/class-based-views/generic-display#django.views.generic.list.ListView" title="django.views.generic.list.ListView"><code>ListView</code></a> - won’t work as expected.</p>   <h2 id="handling-forms-with-class-based-views">Handling forms with class-based views</h2> <p id="s-handling-forms-with-class-based-views">A basic function-based view that handles forms may look something like this:</p> <pre data-language="python">from django.http import HttpResponseRedirect
+from django.shortcuts import render
+
+from .forms import MyForm
+
+def myview(request):
+    if request.method == "POST":
+        form = MyForm(request.POST)
+        if form.is_valid():
+            # &lt;process form cleaned data&gt;
+            return HttpResponseRedirect('/success/')
+    else:
+        form = MyForm(initial={'key': 'value'})
+
+    return render(request, 'form_template.html', {'form': form})
+</pre> <p>A similar class-based view might look like:</p> <pre data-language="python">from django.http import HttpResponseRedirect
+from django.shortcuts import render
+from django.views import View
+
+from .forms import MyForm
+
+class MyFormView(View):
+    form_class = MyForm
+    initial = {'key': 'value'}
+    template_name = 'form_template.html'
+
+    def get(self, request, *args, **kwargs):
+        form = self.form_class(initial=self.initial)
+        return render(request, self.template_name, {'form': form})
+
+    def post(self, request, *args, **kwargs):
+        form = self.form_class(request.POST)
+        if form.is_valid():
+            # &lt;process form cleaned data&gt;
+            return HttpResponseRedirect('/success/')
+
+        return render(request, self.template_name, {'form': form})
+</pre> <p>This is a minimal case, but you can see that you would then have the option of customizing this view by overriding any of the class attributes, e.g. <code>form_class</code>, via URLconf configuration, or subclassing and overriding one or more of the methods (or both!).</p>   <h2 id="decorating-class-based-views">Decorating class-based views</h2> <p id="s-decorating-class-based-views">The extension of class-based views isn’t limited to using mixins. You can also use decorators. Since class-based views aren’t functions, decorating them works differently depending on if you’re using <code>as_view()</code> or creating a subclass.</p>  <h3 id="decorating-in-urlconf">Decorating in URLconf</h3> <p id="s-decorating-in-urlconf">You can adjust class-based views by decorating the result of the <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.as_view" title="django.views.generic.base.View.as_view"><code>as_view()</code></a> method. The easiest place to do this is in the URLconf where you deploy your view:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required, permission_required
+from django.views.generic import TemplateView
+
+from .views import VoteView
+
+urlpatterns = [
+    path('about/', login_required(TemplateView.as_view(template_name="secret.html"))),
+    path('vote/', permission_required('polls.can_vote')(VoteView.as_view())),
+]
+</pre> <p>This approach applies the decorator on a per-instance basis. If you want every instance of a view to be decorated, you need to take a different approach.</p>   <h3 id="id1">Decorating the class</h3> <p id="s-decorating-the-class">To decorate every instance of a class-based view, you need to decorate the class definition itself. To do this you apply the decorator to the <a class="reference internal" href="../../ref/class-based-views/base#django.views.generic.base.View.dispatch" title="django.views.generic.base.View.dispatch"><code>dispatch()</code></a> method of the class.</p> <p>A method on a class isn’t quite the same as a standalone function, so you can’t just apply a function decorator to the method – you need to transform it into a method decorator first. The <code>method_decorator</code> decorator transforms a function decorator into a method decorator so that it can be used on an instance method. For example:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required
+from django.utils.decorators import method_decorator
+from django.views.generic import TemplateView
+
+class ProtectedView(TemplateView):
+    template_name = 'secret.html'
+
+    @method_decorator(login_required)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
+</pre> <p>Or, more succinctly, you can decorate the class instead and pass the name of the method to be decorated as the keyword argument <code>name</code>:</p> <pre data-language="python">@method_decorator(login_required, name='dispatch')
+class ProtectedView(TemplateView):
+    template_name = 'secret.html'
+</pre> <p>If you have a set of common decorators used in several places, you can define a list or tuple of decorators and use this instead of invoking <code>method_decorator()</code> multiple times. These two classes are equivalent:</p> <pre data-language="python">decorators = [never_cache, login_required]
+
+@method_decorator(decorators, name='dispatch')
+class ProtectedView(TemplateView):
+    template_name = 'secret.html'
+
+@method_decorator(never_cache, name='dispatch')
+@method_decorator(login_required, name='dispatch')
+class ProtectedView(TemplateView):
+    template_name = 'secret.html'
+</pre> <p>The decorators will process a request in the order they are passed to the decorator. In the example, <code>never_cache()</code> will process the request before <code>login_required()</code>.</p> <p>In this example, every instance of <code>ProtectedView</code> will have login protection. These examples use <code>login_required</code>, however, the same behavior can be obtained by using <a class="reference internal" href="../auth/default#django.contrib.auth.mixins.LoginRequiredMixin" title="django.contrib.auth.mixins.LoginRequiredMixin"><code>LoginRequiredMixin</code></a>.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last"><code>method_decorator</code> passes <code>*args</code> and <code>**kwargs</code> as parameters to the decorated method on the class. If your method does not accept a compatible set of parameters it will raise a <code>TypeError</code> exception.</p> </div><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/class-based-views/intro/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/class-based-views/intro/</a>
+  </p>
+</div>

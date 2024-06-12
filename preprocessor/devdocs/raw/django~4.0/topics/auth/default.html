@@ -1,0 +1,611 @@
+<h1 id="using-the-django-authentication-system">Using the Django authentication system</h1> <p id="s-using-the-django-authentication-system">This document explains the usage of Django’s authentication system in its default configuration. This configuration has evolved to serve the most common project needs, handling a reasonably wide range of tasks, and has a careful implementation of passwords and permissions. For projects where authentication needs differ from the default, Django supports extensive <a class="reference internal" href="customizing"><span class="doc">extension and customization</span></a> of authentication.</p> <p>Django authentication provides both authentication and authorization together and is generally referred to as the authentication system, as these features are somewhat coupled.</p>  <h2 id="id1">
+<code>User</code> objects</h2> <p id="s-user-objects"><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> objects are the core of the authentication system. They typically represent the people interacting with your site and are used to enable things like restricting access, registering user profiles, associating content with creators etc. Only one class of user exists in Django’s authentication framework, i.e., <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_superuser" title="django.contrib.auth.models.User.is_superuser"><code>'superusers'</code></a> or admin <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_staff" title="django.contrib.auth.models.User.is_staff"><code>'staff'</code></a> users are just user objects with special attributes set, not different classes of user objects.</p> <p>The primary attributes of the default user are:</p> <ul class="simple"> <li><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.username" title="django.contrib.auth.models.User.username"><code>username</code></a></li> <li><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.password" title="django.contrib.auth.models.User.password"><code>password</code></a></li> <li><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.email" title="django.contrib.auth.models.User.email"><code>email</code></a></li> <li><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.first_name" title="django.contrib.auth.models.User.first_name"><code>first_name</code></a></li> <li><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.last_name" title="django.contrib.auth.models.User.last_name"><code>last_name</code></a></li> </ul> <p>See the <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>full API documentation</code></a> for full reference, the documentation that follows is more task oriented.</p>  <h3 id="topics-auth-creating-users">Creating users</h3> <p id="s-creating-users">The most direct way to create users is to use the included <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.UserManager.create_user" title="django.contrib.auth.models.UserManager.create_user"><code>create_user()</code></a> helper function:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.auth.models import User
+&gt;&gt;&gt; user = User.objects.create_user('john', 'lennon@thebeatles.com', 'johnpassword')
+
+# At this point, user is a User object that has already been saved
+# to the database. You can continue to change its attributes
+# if you want to change other fields.
+&gt;&gt;&gt; user.last_name = 'Lennon'
+&gt;&gt;&gt; user.save()
+</pre> <p>If you have the Django admin installed, you can also <a class="reference internal" href="#auth-admin"><span class="std std-ref">create users interactively</span></a>.</p>   <h3 id="topics-auth-creating-superusers">Creating superusers</h3> <p id="s-creating-superusers">Create superusers using the <a class="reference internal" href="../../ref/django-admin#django-admin-createsuperuser"><code>createsuperuser</code></a> command:</p> <pre data-language="python">$ python manage.py createsuperuser --username=joe --email=joe@example.com
+</pre> <p>You will be prompted for a password. After you enter one, the user will be created immediately. If you leave off the <a class="reference internal" href="../../ref/django-admin#cmdoption-createsuperuser-username"><code>--username</code></a> or <a class="reference internal" href="../../ref/django-admin#cmdoption-createsuperuser-email"><code>--email</code></a> options, it will prompt you for those values.</p>   <h3 id="changing-passwords">Changing passwords</h3> <p id="s-changing-passwords">Django does not store raw (clear text) passwords on the user model, but only a hash (see <a class="reference internal" href="passwords"><span class="doc">documentation of how passwords are managed</span></a> for full details). Because of this, do not attempt to manipulate the password attribute of the user directly. This is why a helper function is used when creating a user.</p> <p>To change a user’s password, you have several options:</p> <p><a class="reference internal" href="../../ref/django-admin#django-admin-changepassword"><code>manage.py changepassword *username*</code></a> offers a method of changing a user’s password from the command line. It prompts you to change the password of a given user which you must enter twice. If they both match, the new password will be changed immediately. If you do not supply a user, the command will attempt to change the password whose username matches the current system user.</p> <p>You can also change a password programmatically, using <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.set_password" title="django.contrib.auth.models.User.set_password"><code>set_password()</code></a>:</p> <pre data-language="pycon">&gt;&gt;&gt; from django.contrib.auth.models import User
+&gt;&gt;&gt; u = User.objects.get(username='john')
+&gt;&gt;&gt; u.set_password('new password')
+&gt;&gt;&gt; u.save()
+</pre> <p>If you have the Django admin installed, you can also change user’s passwords on the <a class="reference internal" href="#auth-admin"><span class="std std-ref">authentication system’s admin pages</span></a>.</p> <p>Django also provides <a class="reference internal" href="#built-in-auth-views"><span class="std std-ref">views</span></a> and <a class="reference internal" href="#built-in-auth-forms"><span class="std std-ref">forms</span></a> that may be used to allow users to change their own passwords.</p> <p>Changing a user’s password will log out all their sessions. See <a class="reference internal" href="#session-invalidation-on-password-change"><span class="std std-ref">Session invalidation on password change</span></a> for details.</p>   <h3 id="authenticating-users">Authenticating users</h3> <dl class="function" id="s-authenticating-users"> <dt id="django.contrib.auth.authenticate">
+<code>authenticate(request=None, **credentials)</code> </dt> <dd>
+<p>Use <a class="reference internal" href="#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>authenticate()</code></a> to verify a set of credentials. It takes credentials as keyword arguments, <code>username</code> and <code>password</code> for the default case, checks them against each <a class="reference internal" href="customizing#authentication-backends"><span class="std std-ref">authentication backend</span></a>, and returns a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> object if the credentials are valid for a backend. If the credentials aren’t valid for any backend or if a backend raises <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a>, it returns <code>None</code>. For example:</p> <pre data-language="python">from django.contrib.auth import authenticate
+user = authenticate(username='john', password='secret')
+if user is not None:
+    # A backend authenticated the credentials
+else:
+    # No backend authenticated the credentials
+</pre> <p><code>request</code> is an optional <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> which is passed on the <code>authenticate()</code> method of the authentication backends.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">This is a low level way to authenticate a set of credentials; for example, it’s used by the <a class="reference internal" href="../../ref/middleware#django.contrib.auth.middleware.RemoteUserMiddleware" title="django.contrib.auth.middleware.RemoteUserMiddleware"><code>RemoteUserMiddleware</code></a>. Unless you are writing your own authentication system, you probably won’t use this. Rather if you’re looking for a way to login a user, use the <a class="reference internal" href="#django.contrib.auth.views.LoginView" title="django.contrib.auth.views.LoginView"><code>LoginView</code></a>.</p> </div> </dd>
+</dl>    <h2 id="topic-authorization">Permissions and Authorization</h2> <p id="s-permissions-and-authorization">Django comes with a built-in permissions system. It provides a way to assign permissions to specific users and groups of users.</p> <p>It’s used by the Django admin site, but you’re welcome to use it in your own code.</p> <p>The Django admin site uses permissions as follows:</p> <ul class="simple"> <li>Access to view objects is limited to users with the “view” or “change” permission for that type of object.</li> <li>Access to view the “add” form and add an object is limited to users with the “add” permission for that type of object.</li> <li>Access to view the change list, view the “change” form and change an object is limited to users with the “change” permission for that type of object.</li> <li>Access to delete an object is limited to users with the “delete” permission for that type of object.</li> </ul> <p>Permissions can be set not only per type of object, but also per specific object instance. By using the <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin.has_view_permission" title="django.contrib.admin.ModelAdmin.has_view_permission"><code>has_view_permission()</code></a>, <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin.has_add_permission" title="django.contrib.admin.ModelAdmin.has_add_permission"><code>has_add_permission()</code></a>, <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin.has_change_permission" title="django.contrib.admin.ModelAdmin.has_change_permission"><code>has_change_permission()</code></a> and <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin.has_delete_permission" title="django.contrib.admin.ModelAdmin.has_delete_permission"><code>has_delete_permission()</code></a> methods provided by the <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.ModelAdmin" title="django.contrib.admin.ModelAdmin"><code>ModelAdmin</code></a> class, it is possible to customize permissions for different object instances of the same type.</p> <p><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> objects have two many-to-many fields: <code>groups</code> and <code>user_permissions</code>. <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> objects can access their related objects in the same way as any other <a class="reference internal" href="../db/models"><span class="doc">Django model</span></a>:</p> <pre data-language="python">myuser.groups.set([group_list])
+myuser.groups.add(group, group, ...)
+myuser.groups.remove(group, group, ...)
+myuser.groups.clear()
+myuser.user_permissions.set([permission_list])
+myuser.user_permissions.add(permission, permission, ...)
+myuser.user_permissions.remove(permission, permission, ...)
+myuser.user_permissions.clear()
+</pre>  <h3 id="default-permissions">Default permissions</h3> <p id="s-default-permissions">When <code>django.contrib.auth</code> is listed in your <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> setting, it will ensure that four default permissions – add, change, delete, and view – are created for each Django model defined in one of your installed applications.</p> <p>These permissions will be created when you run <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>manage.py migrate</code></a>; the first time you run <code>migrate</code> after adding <code>django.contrib.auth</code> to <a class="reference internal" href="../../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>, the default permissions will be created for all previously-installed models, as well as for any new models being installed at that time. Afterward, it will create default permissions for new models each time you run <a class="reference internal" href="../../ref/django-admin#django-admin-migrate"><code>manage.py migrate</code></a> (the function that creates permissions is connected to the <a class="reference internal" href="../../ref/signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> signal).</p> <p>Assuming you have an application with an <a class="reference internal" href="../../ref/models/options#django.db.models.Options.app_label" title="django.db.models.Options.app_label"><code>app_label</code></a> <code>foo</code> and a model named <code>Bar</code>, to test for basic permissions you should use:</p> <ul class="simple"> <li>add: <code>user.has_perm('foo.add_bar')</code>
+</li> <li>change: <code>user.has_perm('foo.change_bar')</code>
+</li> <li>delete: <code>user.has_perm('foo.delete_bar')</code>
+</li> <li>view: <code>user.has_perm('foo.view_bar')</code>
+</li> </ul> <p>The <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.Permission" title="django.contrib.auth.models.Permission"><code>Permission</code></a> model is rarely accessed directly.</p>   <h3 id="groups">Groups</h3> <p id="s-groups"><a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.Group" title="django.contrib.auth.models.Group"><code>django.contrib.auth.models.Group</code></a> models are a generic way of categorizing users so you can apply permissions, or some other label, to those users. A user can belong to any number of groups.</p> <p>A user in a group automatically has the permissions granted to that group. For example, if the group <code>Site editors</code> has the permission <code>can_edit_home_page</code>, any user in that group will have that permission.</p> <p>Beyond permissions, groups are a convenient way to categorize users to give them some label, or extended functionality. For example, you could create a group <code>'Special users'</code>, and you could write code that could, say, give them access to a members-only portion of your site, or send them members-only email messages.</p>   <h3 id="programmatically-creating-permissions">Programmatically creating permissions</h3> <p id="s-programmatically-creating-permissions">While <a class="reference internal" href="customizing#custom-permissions"><span class="std std-ref">custom permissions</span></a> can be defined within a model’s <code>Meta</code> class, you can also create permissions directly. For example, you can create the <code>can_publish</code> permission for a <code>BlogPost</code> model in <code>myapp</code>:</p> <pre data-language="python">from myapp.models import BlogPost
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
+
+content_type = ContentType.objects.get_for_model(BlogPost)
+permission = Permission.objects.create(
+    codename='can_publish',
+    name='Can Publish Posts',
+    content_type=content_type,
+)
+</pre> <p>The permission can then be assigned to a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> via its <code>user_permissions</code> attribute or to a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.Group" title="django.contrib.auth.models.Group"><code>Group</code></a> via its <code>permissions</code> attribute.</p> <div class="admonition-proxy-models-need-their-own-content-type admonition"> <p class="first admonition-title">Proxy models need their own content type</p> <p>If you want to create <a class="reference internal" href="#proxy-models-permissions-topic"><span class="std std-ref">permissions for a proxy model</span></a>, pass <code>for_concrete_model=False</code> to <a class="reference internal" href="../../ref/contrib/contenttypes#django.contrib.contenttypes.models.ContentTypeManager.get_for_model" title="django.contrib.contenttypes.models.ContentTypeManager.get_for_model"><code>ContentTypeManager.get_for_model()</code></a> to get the appropriate <code>ContentType</code>:</p> <pre data-language="python">content_type = ContentType.objects.get_for_model(BlogPostProxy, for_concrete_model=False)
+</pre> </div>   <h3 id="permission-caching">Permission caching</h3> <p id="s-permission-caching">The <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.ModelBackend" title="django.contrib.auth.backends.ModelBackend"><code>ModelBackend</code></a> caches permissions on the user object after the first time they need to be fetched for a permissions check. This is typically fine for the request-response cycle since permissions aren’t typically checked immediately after they are added (in the admin, for example). If you are adding permissions and checking them immediately afterward, in a test or view for example, the easiest solution is to re-fetch the user from the database. For example:</p> <pre data-language="python">from django.contrib.auth.models import Permission, User
+from django.contrib.contenttypes.models import ContentType
+from django.shortcuts import get_object_or_404
+
+from myapp.models import BlogPost
+
+def user_gains_perms(request, user_id):
+    user = get_object_or_404(User, pk=user_id)
+    # any permission check will cache the current set of permissions
+    user.has_perm('myapp.change_blogpost')
+
+    content_type = ContentType.objects.get_for_model(BlogPost)
+    permission = Permission.objects.get(
+        codename='change_blogpost',
+        content_type=content_type,
+    )
+    user.user_permissions.add(permission)
+
+    # Checking the cached permission set
+    user.has_perm('myapp.change_blogpost')  # False
+
+    # Request new instance of User
+    # Be aware that user.refresh_from_db() won't clear the cache.
+    user = get_object_or_404(User, pk=user_id)
+
+    # Permission cache is repopulated from the database
+    user.has_perm('myapp.change_blogpost')  # True
+
+    ...
+</pre>   <h3 id="proxy-models-permissions-topic">Proxy models</h3> <p id="s-proxy-models">Proxy models work exactly the same way as concrete models. Permissions are created using the own content type of the proxy model. Proxy models don’t inherit the permissions of the concrete model they subclass:</p> <pre data-language="python">class Person(models.Model):
+    class Meta:
+        permissions = [('can_eat_pizzas', 'Can eat pizzas')]
+
+class Student(Person):
+    class Meta:
+        proxy = True
+        permissions = [('can_deliver_pizzas', 'Can deliver pizzas')]
+
+&gt;&gt;&gt; # Fetch the content type for the proxy model.
+&gt;&gt;&gt; content_type = ContentType.objects.get_for_model(Student, for_concrete_model=False)
+&gt;&gt;&gt; student_permissions = Permission.objects.filter(content_type=content_type)
+&gt;&gt;&gt; [p.codename for p in student_permissions]
+['add_student', 'change_student', 'delete_student', 'view_student',
+'can_deliver_pizzas']
+&gt;&gt;&gt; for permission in student_permissions:
+...     user.user_permissions.add(permission)
+&gt;&gt;&gt; user.has_perm('app.add_person')
+False
+&gt;&gt;&gt; user.has_perm('app.can_eat_pizzas')
+False
+&gt;&gt;&gt; user.has_perms(('app.add_student', 'app.can_deliver_pizzas'))
+True
+</pre>    <h2 id="auth-web-requests">Authentication in web requests</h2> <p id="s-authentication-in-web-requests">Django uses <a class="reference internal" href="../http/sessions"><span class="doc">sessions</span></a> and middleware to hook the authentication system into <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>request objects</code></a>.</p> <p>These provide a <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.user" title="django.http.HttpRequest.user"><code>request.user</code></a> attribute on every request which represents the current user. If the current user has not logged in, this attribute will be set to an instance of <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.AnonymousUser" title="django.contrib.auth.models.AnonymousUser"><code>AnonymousUser</code></a>, otherwise it will be an instance of <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a>.</p> <p>You can tell them apart with <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_authenticated" title="django.contrib.auth.models.User.is_authenticated"><code>is_authenticated</code></a>, like so:</p> <pre data-language="python">if request.user.is_authenticated:
+    # Do something for authenticated users.
+    ...
+else:
+    # Do something for anonymous users.
+    ...
+</pre>  <h3 id="id2">How to log a user in</h3> <p id="s-how-to-log-a-user-in">If you have an authenticated user you want to attach to the current session - this is done with a <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>login()</code></a> function.</p> <dl class="function"> <dt id="django.contrib.auth.login">
+<code>login(request, user, backend=None)</code> </dt> <dd>
+<p>To log a user in, from a view, use <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>login()</code></a>. It takes an <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> object and a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> object. <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>login()</code></a> saves the user’s ID in the session, using Django’s session framework.</p> <p>Note that any data set during the anonymous session is retained in the session after a user logs in.</p> <p>This example shows how you might use both <a class="reference internal" href="#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>authenticate()</code></a> and <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>login()</code></a>:</p> <pre data-language="python">from django.contrib.auth import authenticate, login
+
+def my_view(request):
+    username = request.POST['username']
+    password = request.POST['password']
+    user = authenticate(request, username=username, password=password)
+    if user is not None:
+        login(request, user)
+        # Redirect to a success page.
+        ...
+    else:
+        # Return an 'invalid login' error message.
+        ...
+</pre> </dd>
+</dl>  <h4 id="selecting-the-authentication-backend">Selecting the authentication backend</h4> <p id="s-selecting-the-authentication-backend">When a user logs in, the user’s ID and the backend that was used for authentication are saved in the user’s session. This allows the same <a class="reference internal" href="customizing#authentication-backends"><span class="std std-ref">authentication backend</span></a> to fetch the user’s details on a future request. The authentication backend to save in the session is selected as follows:</p> <ol class="arabic simple"> <li>Use the value of the optional <code>backend</code> argument, if provided.</li> <li>Use the value of the <code>user.backend</code> attribute, if present. This allows pairing <a class="reference internal" href="#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>authenticate()</code></a> and <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>login()</code></a>: <a class="reference internal" href="#django.contrib.auth.authenticate" title="django.contrib.auth.authenticate"><code>authenticate()</code></a> sets the <code>user.backend</code> attribute on the user object it returns.</li> <li>Use the <code>backend</code> in <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a>, if there is only one.</li> <li>Otherwise, raise an exception.</li> </ol> <p>In cases 1 and 2, the value of the <code>backend</code> argument or the <code>user.backend</code> attribute should be a dotted import path string (like that found in <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a>), not the actual backend class.</p>    <h3 id="how-to-log-a-user-out">How to log a user out</h3> <dl class="function" id="s-how-to-log-a-user-out"> <dt id="django.contrib.auth.logout">
+<code>logout(request)</code> </dt> <dd>
+<p>To log out a user who has been logged in via <a class="reference internal" href="#django.contrib.auth.login" title="django.contrib.auth.login"><code>django.contrib.auth.login()</code></a>, use <a class="reference internal" href="#django.contrib.auth.logout" title="django.contrib.auth.logout"><code>django.contrib.auth.logout()</code></a> within your view. It takes an <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> object and has no return value. Example:</p> <pre data-language="python">from django.contrib.auth import logout
+
+def logout_view(request):
+    logout(request)
+    # Redirect to a success page.
+</pre> <p>Note that <a class="reference internal" href="#django.contrib.auth.logout" title="django.contrib.auth.logout"><code>logout()</code></a> doesn’t throw any errors if the user wasn’t logged in.</p> <p>When you call <a class="reference internal" href="#django.contrib.auth.logout" title="django.contrib.auth.logout"><code>logout()</code></a>, the session data for the current request is completely cleaned out. All existing data is removed. This is to prevent another person from using the same web browser to log in and have access to the previous user’s session data. If you want to put anything into the session that will be available to the user immediately after logging out, do that <em>after</em> calling <a class="reference internal" href="#django.contrib.auth.logout" title="django.contrib.auth.logout"><code>django.contrib.auth.logout()</code></a>.</p> </dd>
+</dl>   <h3 id="limiting-access-to-logged-in-users">Limiting access to logged-in users</h3>  <h4 id="the-raw-way">The raw way</h4> <p id="s-limiting-access-to-logged-in-users">The raw way to limit access to pages is to check <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.is_authenticated" title="django.contrib.auth.models.User.is_authenticated"><code>request.user.is_authenticated</code></a> and either redirect to a login page:</p> <pre data-language="python">from django.conf import settings
+from django.shortcuts import redirect
+
+def my_view(request):
+    if not request.user.is_authenticated:
+        return redirect('%s?next=%s' % (settings.LOGIN_URL, request.path))
+    # ...
+</pre> <p>…or display an error message:</p> <pre data-language="python">from django.shortcuts import render
+
+def my_view(request):
+    if not request.user.is_authenticated:
+        return render(request, 'myapp/login_error.html')
+    # ...
+</pre>   <h4 id="the-login-required-decorator">The <code>login_required</code> decorator</h4> <dl class="function" id="s-the-login-required-decorator"> <dt id="django.contrib.auth.decorators.login_required">
+<code>login_required(redirect_field_name='next', login_url=None)</code> </dt> <dd>
+<p>As a shortcut, you can use the convenient <a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> decorator:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required
+
+@login_required
+def my_view(request):
+    ...
+</pre> <p><a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> does the following:</p> <ul class="simple"> <li>If the user isn’t logged in, redirect to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a>, passing the current absolute path in the query string. Example: <code>/accounts/login/?next=/polls/3/</code>.</li> <li>If the user is logged in, execute the view normally. The view code is free to assume the user is logged in.</li> </ul> <p>By default, the path that the user should be redirected to upon successful authentication is stored in a query string parameter called <code>"next"</code>. If you would prefer to use a different name for this parameter, <a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> takes an optional <code>redirect_field_name</code> parameter:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required
+
+@login_required(redirect_field_name='my_redirect_field')
+def my_view(request):
+    ...
+</pre> <p>Note that if you provide a value to <code>redirect_field_name</code>, you will most likely need to customize your login template as well, since the template context variable which stores the redirect path will use the value of <code>redirect_field_name</code> as its key rather than <code>"next"</code> (the default).</p> <p><a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> also takes an optional <code>login_url</code> parameter. Example:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required
+
+@login_required(login_url='/accounts/login/')
+def my_view(request):
+    ...
+</pre> <p>Note that if you don’t specify the <code>login_url</code> parameter, you’ll need to ensure that the <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> and your login view are properly associated. For example, using the defaults, add the following lines to your URLconf:</p> <pre data-language="python">from django.contrib.auth import views as auth_views
+
+path('accounts/login/', auth_views.LoginView.as_view()),
+</pre> <p>The <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> also accepts view function names and <a class="reference internal" href="../http/urls#naming-url-patterns"><span class="std std-ref">named URL patterns</span></a>. This allows you to freely remap your login view within your URLconf without having to update the setting.</p> </dd>
+</dl> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">The <code>login_required</code> decorator does NOT check the <code>is_active</code> flag on a user, but the default <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> reject inactive users.</p> </div> <div class="admonition seealso"> <p class="first admonition-title">See also</p> <p class="last">If you are writing custom views for Django’s admin (or need the same authorization check that the built-in views use), you may find the <a class="reference internal" href="../../ref/contrib/admin/index#django.contrib.admin.views.decorators.staff_member_required" title="django.contrib.admin.views.decorators.staff_member_required"><code>django.contrib.admin.views.decorators.staff_member_required()</code></a> decorator a useful alternative to <code>login_required()</code>.</p> </div>   <h4 id="the-loginrequired-mixin">The <code>LoginRequired</code> mixin</h4> <p id="s-the-loginrequired-mixin">When using <a class="reference internal" href="../class-based-views/index"><span class="doc">class-based views</span></a>, you can achieve the same behavior as with <code>login_required</code> by using the <code>LoginRequiredMixin</code>. This mixin should be at the leftmost position in the inheritance list.</p> <dl class="class"> <dt id="django.contrib.auth.mixins.LoginRequiredMixin">
+<code>class LoginRequiredMixin</code> </dt> <dd>
+<p>If a view is using this mixin, all requests by non-authenticated users will be redirected to the login page or shown an HTTP 403 Forbidden error, depending on the <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.raise_exception" title="django.contrib.auth.mixins.AccessMixin.raise_exception"><code>raise_exception</code></a> parameter.</p> <p>You can set any of the parameters of <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin" title="django.contrib.auth.mixins.AccessMixin"><code>AccessMixin</code></a> to customize the handling of unauthorized users:</p> <pre data-language="python">from django.contrib.auth.mixins import LoginRequiredMixin
+
+class MyView(LoginRequiredMixin, View):
+    login_url = '/login/'
+    redirect_field_name = 'redirect_to'
+</pre> </dd>
+</dl> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Just as the <code>login_required</code> decorator, this mixin does NOT check the <code>is_active</code> flag on a user, but the default <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> reject inactive users.</p> </div>   <h4 id="limiting-access-to-logged-in-users-that-pass-a-test">Limiting access to logged-in users that pass a test</h4> <p id="s-limiting-access-to-logged-in-users-that-pass-a-test">To limit access based on certain permissions or some other test, you’d do essentially the same thing as described in the previous section.</p> <p>You can run your test on <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.user" title="django.http.HttpRequest.user"><code>request.user</code></a> in the view directly. For example, this view checks to make sure the user has an email in the desired domain and if not, redirects to the login page:</p> <pre data-language="python">from django.shortcuts import redirect
+
+def my_view(request):
+    if not request.user.email.endswith('@example.com'):
+        return redirect('/login/?next=%s' % request.path)
+    # ...
+</pre> <dl class="function"> <dt id="django.contrib.auth.decorators.user_passes_test">
+<code>user_passes_test(test_func, login_url=None, redirect_field_name='next')</code> </dt> <dd>
+<p>As a shortcut, you can use the convenient <code>user_passes_test</code> decorator which performs a redirect when the callable returns <code>False</code>:</p> <pre data-language="python">from django.contrib.auth.decorators import user_passes_test
+
+def email_check(user):
+    return user.email.endswith('@example.com')
+
+@user_passes_test(email_check)
+def my_view(request):
+    ...
+</pre> <p><a class="reference internal" href="#django.contrib.auth.decorators.user_passes_test" title="django.contrib.auth.decorators.user_passes_test"><code>user_passes_test()</code></a> takes a required argument: a callable that takes a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> object and returns <code>True</code> if the user is allowed to view the page. Note that <a class="reference internal" href="#django.contrib.auth.decorators.user_passes_test" title="django.contrib.auth.decorators.user_passes_test"><code>user_passes_test()</code></a> does not automatically check that the <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> is not anonymous.</p> <p><a class="reference internal" href="#django.contrib.auth.decorators.user_passes_test" title="django.contrib.auth.decorators.user_passes_test"><code>user_passes_test()</code></a> takes two optional arguments:</p> <dl class="docutils"> <dt>
+<code>login_url</code> </dt> <dd>Lets you specify the URL that users who don’t pass the test will be redirected to. It may be a login page and defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> if you don’t specify one.</dd> <dt>
+<code>redirect_field_name</code> </dt> <dd>Same as for <a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a>. Setting it to <code>None</code> removes it from the URL, which you may want to do if you are redirecting users that don’t pass the test to a non-login page where there’s no “next page”.</dd> </dl> <p>For example:</p> <pre data-language="python">@user_passes_test(email_check, login_url='/login/')
+def my_view(request):
+    ...
+</pre> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.mixins.UserPassesTestMixin">
+<code>class UserPassesTestMixin</code> </dt> <dd>
+<p>When using <a class="reference internal" href="../class-based-views/index"><span class="doc">class-based views</span></a>, you can use the <code>UserPassesTestMixin</code> to do this.</p> <dl class="method"> <dt id="django.contrib.auth.mixins.UserPassesTestMixin.test_func">
+<code>test_func()</code> </dt> <dd>
+<p>You have to override the <code>test_func()</code> method of the class to provide the test that is performed. Furthermore, you can set any of the parameters of <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin" title="django.contrib.auth.mixins.AccessMixin"><code>AccessMixin</code></a> to customize the handling of unauthorized users:</p> <pre data-language="python">from django.contrib.auth.mixins import UserPassesTestMixin
+
+class MyView(UserPassesTestMixin, View):
+
+    def test_func(self):
+        return self.request.user.email.endswith('@example.com')
+</pre> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.UserPassesTestMixin.get_test_func">
+<code>get_test_func()</code> </dt> <dd>
+<p>You can also override the <code>get_test_func()</code> method to have the mixin use a differently named function for its checks (instead of <a class="reference internal" href="#django.contrib.auth.mixins.UserPassesTestMixin.test_func" title="django.contrib.auth.mixins.UserPassesTestMixin.test_func"><code>test_func()</code></a>).</p> </dd>
+</dl> <div class="admonition-stacking-userpassestestmixin admonition"> <p class="first admonition-title">Stacking <code>UserPassesTestMixin</code></p> <p>Due to the way <code>UserPassesTestMixin</code> is implemented, you cannot stack them in your inheritance list. The following does NOT work:</p> <pre data-language="python">class TestMixin1(UserPassesTestMixin):
+    def test_func(self):
+        return self.request.user.email.endswith('@example.com')
+
+class TestMixin2(UserPassesTestMixin):
+    def test_func(self):
+        return self.request.user.username.startswith('django')
+
+class MyView(TestMixin1, TestMixin2, View):
+    ...
+</pre> <p class="last">If <code>TestMixin1</code> would call <code>super()</code> and take that result into account, <code>TestMixin1</code> wouldn’t work standalone anymore.</p> </div> </dd>
+</dl>   <h4 id="the-permission-required-decorator">The <code>permission_required</code> decorator</h4> <dl class="function" id="s-the-permission-required-decorator"> <dt id="django.contrib.auth.decorators.permission_required">
+<code>permission_required(perm, login_url=None, raise_exception=False)</code> </dt> <dd>
+<p>It’s a relatively common task to check whether a user has a particular permission. For that reason, Django provides a shortcut for that case: the <a class="reference internal" href="#django.contrib.auth.decorators.permission_required" title="django.contrib.auth.decorators.permission_required"><code>permission_required()</code></a> decorator.:</p> <pre data-language="python">from django.contrib.auth.decorators import permission_required
+
+@permission_required('polls.add_choice')
+def my_view(request):
+    ...
+</pre> <p>Just like the <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_perm" title="django.contrib.auth.models.User.has_perm"><code>has_perm()</code></a> method, permission names take the form <code>"&lt;app label&gt;.&lt;permission codename&gt;"</code> (i.e. <code>polls.add_choice</code> for a permission on a model in the <code>polls</code> application).</p> <p>The decorator may also take an iterable of permissions, in which case the user must have all of the permissions in order to access the view.</p> <p>Note that <a class="reference internal" href="#django.contrib.auth.decorators.permission_required" title="django.contrib.auth.decorators.permission_required"><code>permission_required()</code></a> also takes an optional <code>login_url</code> parameter:</p> <pre data-language="python">from django.contrib.auth.decorators import permission_required
+
+@permission_required('polls.add_choice', login_url='/loginpage/')
+def my_view(request):
+    ...
+</pre> <p>As in the <a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> decorator, <code>login_url</code> defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a>.</p> <p>If the <code>raise_exception</code> parameter is given, the decorator will raise <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a>, prompting <a class="reference internal" href="../../ref/views#http-forbidden-view"><span class="std std-ref">the 403 (HTTP Forbidden) view</span></a> instead of redirecting to the login page.</p> <p>If you want to use <code>raise_exception</code> but also give your users a chance to login first, you can add the <a class="reference internal" href="#django.contrib.auth.decorators.login_required" title="django.contrib.auth.decorators.login_required"><code>login_required()</code></a> decorator:</p> <pre data-language="python">from django.contrib.auth.decorators import login_required, permission_required
+
+@login_required
+@permission_required('polls.add_choice', raise_exception=True)
+def my_view(request):
+    ...
+</pre> <p>This also avoids a redirect loop when <a class="reference internal" href="#django.contrib.auth.views.LoginView" title="django.contrib.auth.views.LoginView"><code>LoginView</code></a>’s <code>redirect_authenticated_user=True</code> and the logged-in user doesn’t have all of the required permissions.</p> </dd>
+</dl>   <h4 id="the-permissionrequiredmixin-mixin">The <code>PermissionRequiredMixin</code> mixin</h4> <p id="s-the-permissionrequiredmixin-mixin">To apply permission checks to <a class="reference internal" href="../../ref/class-based-views/index"><span class="doc">class-based views</span></a>, you can use the <code>PermissionRequiredMixin</code>:</p> <dl class="class"> <dt id="django.contrib.auth.mixins.PermissionRequiredMixin">
+<code>class PermissionRequiredMixin</code> </dt> <dd>
+<p>This mixin, just like the <code>permission_required</code> decorator, checks whether the user accessing a view has all given permissions. You should specify the permission (or an iterable of permissions) using the <code>permission_required</code> parameter:</p> <pre data-language="python">from django.contrib.auth.mixins import PermissionRequiredMixin
+
+class MyView(PermissionRequiredMixin, View):
+    permission_required = 'polls.add_choice'
+    # Or multiple of permissions:
+    permission_required = ('polls.view_choice', 'polls.change_choice')
+</pre> <p>You can set any of the parameters of <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin" title="django.contrib.auth.mixins.AccessMixin"><code>AccessMixin</code></a> to customize the handling of unauthorized users.</p> <p>You may also override these methods:</p> <dl class="method"> <dt id="django.contrib.auth.mixins.PermissionRequiredMixin.get_permission_required">
+<code>get_permission_required()</code> </dt> <dd>
+<p>Returns an iterable of permission names used by the mixin. Defaults to the <code>permission_required</code> attribute, converted to a tuple if necessary.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.PermissionRequiredMixin.has_permission">
+<code>has_permission()</code> </dt> <dd>
+<p>Returns a boolean denoting whether the current user has permission to execute the decorated view. By default, this returns the result of calling <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_perms" title="django.contrib.auth.models.User.has_perms"><code>has_perms()</code></a> with the list of permissions returned by <a class="reference internal" href="#django.contrib.auth.mixins.PermissionRequiredMixin.get_permission_required" title="django.contrib.auth.mixins.PermissionRequiredMixin.get_permission_required"><code>get_permission_required()</code></a>.</p> </dd>
+</dl> </dd>
+</dl>    <h3 id="redirecting-unauthorized-requests-in-class-based-views">Redirecting unauthorized requests in class-based views</h3> <p id="s-redirecting-unauthorized-requests-in-class-based-views">To ease the handling of access restrictions in <a class="reference internal" href="../../ref/class-based-views/index"><span class="doc">class-based views</span></a>, the <code>AccessMixin</code> can be used to configure the behavior of a view when access is denied. Authenticated users are denied access with an HTTP 403 Forbidden response. Anonymous users are redirected to the login page or shown an HTTP 403 Forbidden response, depending on the <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.raise_exception" title="django.contrib.auth.mixins.AccessMixin.raise_exception"><code>raise_exception</code></a> attribute.</p> <dl class="class"> <dt id="django.contrib.auth.mixins.AccessMixin">
+<code>class AccessMixin</code> </dt> <dd>
+<dl class="attribute"> <dt id="django.contrib.auth.mixins.AccessMixin.login_url">
+<code>login_url</code> </dt> <dd>
+<p>Default return value for <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.get_login_url" title="django.contrib.auth.mixins.AccessMixin.get_login_url"><code>get_login_url()</code></a>. Defaults to <code>None</code> in which case <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.get_login_url" title="django.contrib.auth.mixins.AccessMixin.get_login_url"><code>get_login_url()</code></a> falls back to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.mixins.AccessMixin.permission_denied_message">
+<code>permission_denied_message</code> </dt> <dd>
+<p>Default return value for <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.get_permission_denied_message" title="django.contrib.auth.mixins.AccessMixin.get_permission_denied_message"><code>get_permission_denied_message()</code></a>. Defaults to an empty string.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.mixins.AccessMixin.redirect_field_name">
+<code>redirect_field_name</code> </dt> <dd>
+<p>Default return value for <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.get_redirect_field_name" title="django.contrib.auth.mixins.AccessMixin.get_redirect_field_name"><code>get_redirect_field_name()</code></a>. Defaults to <code>"next"</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.mixins.AccessMixin.raise_exception">
+<code>raise_exception</code> </dt> <dd>
+<p>If this attribute is set to <code>True</code>, a <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a> exception is raised when the conditions are not met. When <code>False</code> (the default), anonymous users are redirected to the login page.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.AccessMixin.get_login_url">
+<code>get_login_url()</code> </dt> <dd>
+<p>Returns the URL that users who don’t pass the test will be redirected to. Returns <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.login_url" title="django.contrib.auth.mixins.AccessMixin.login_url"><code>login_url</code></a> if set, or <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> otherwise.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.AccessMixin.get_permission_denied_message">
+<code>get_permission_denied_message()</code> </dt> <dd>
+<p>When <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.raise_exception" title="django.contrib.auth.mixins.AccessMixin.raise_exception"><code>raise_exception</code></a> is <code>True</code>, this method can be used to control the error message passed to the error handler for display to the user. Returns the <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.permission_denied_message" title="django.contrib.auth.mixins.AccessMixin.permission_denied_message"><code>permission_denied_message</code></a> attribute by default.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.AccessMixin.get_redirect_field_name">
+<code>get_redirect_field_name()</code> </dt> <dd>
+<p>Returns the name of the query parameter that will contain the URL the user should be redirected to after a successful login. If you set this to <code>None</code>, a query parameter won’t be added. Returns the <a class="reference internal" href="#django.contrib.auth.mixins.AccessMixin.redirect_field_name" title="django.contrib.auth.mixins.AccessMixin.redirect_field_name"><code>redirect_field_name</code></a> attribute by default.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.mixins.AccessMixin.handle_no_permission">
+<code>handle_no_permission()</code> </dt> <dd>
+<p>Depending on the value of <code>raise_exception</code>, the method either raises a <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.PermissionDenied" title="django.core.exceptions.PermissionDenied"><code>PermissionDenied</code></a> exception or redirects the user to the <code>login_url</code>, optionally including the <code>redirect_field_name</code> if it is set.</p> </dd>
+</dl> </dd>
+</dl>  <h4 id="id3">Session invalidation on password change</h4> <p id="s-session-invalidation-on-password-change">If your <a class="reference internal" href="../../ref/settings#std:setting-AUTH_USER_MODEL"><code>AUTH_USER_MODEL</code></a> inherits from <a class="reference internal" href="customizing#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a> or implements its own <a class="reference internal" href="customizing#django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash" title="django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"><code>get_session_auth_hash()</code></a> method, authenticated sessions will include the hash returned by this function. In the <a class="reference internal" href="customizing#django.contrib.auth.models.AbstractBaseUser" title="django.contrib.auth.models.AbstractBaseUser"><code>AbstractBaseUser</code></a> case, this is an HMAC of the password field. Django verifies that the hash in the session for each request matches the one that’s computed during the request. This allows a user to log out all of their sessions by changing their password.</p> <p>The default password change views included with Django, <a class="reference internal" href="#django.contrib.auth.views.PasswordChangeView" title="django.contrib.auth.views.PasswordChangeView"><code>PasswordChangeView</code></a> and the <code>user_change_password</code> view in the <a class="reference internal" href="index#module-django.contrib.auth" title="django.contrib.auth: Django's authentication framework."><code>django.contrib.auth</code></a> admin, update the session with the new password hash so that a user changing their own password won’t log themselves out. If you have a custom password change view and wish to have similar behavior, use the <a class="reference internal" href="#django.contrib.auth.update_session_auth_hash" title="django.contrib.auth.update_session_auth_hash"><code>update_session_auth_hash()</code></a> function.</p> <dl class="function"> <dt id="django.contrib.auth.update_session_auth_hash">
+<code>update_session_auth_hash(request, user)</code> </dt> <dd>
+<p>This function takes the current request and the updated user object from which the new session hash will be derived and updates the session hash appropriately. It also rotates the session key so that a stolen session cookie will be invalidated.</p> <p>Example usage:</p> <pre data-language="python">from django.contrib.auth import update_session_auth_hash
+
+def password_change(request):
+    if request.method == 'POST':
+        form = PasswordChangeForm(user=request.user, data=request.POST)
+        if form.is_valid():
+            form.save()
+            update_session_auth_hash(request, form.user)
+    else:
+        ...
+</pre> </dd>
+</dl> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Since <a class="reference internal" href="customizing#django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash" title="django.contrib.auth.models.AbstractBaseUser.get_session_auth_hash"><code>get_session_auth_hash()</code></a> is based on <a class="reference internal" href="../../ref/settings#std:setting-SECRET_KEY"><code>SECRET_KEY</code></a>, updating your site to use a new secret will invalidate all existing sessions.</p> </div>    <h3 id="built-in-auth-views">Authentication Views</h3> <p id="s-module-django.contrib.auth.views">Django provides several views that you can use for handling login, logout, and password management. These make use of the <a class="reference internal" href="#built-in-auth-forms"><span class="std std-ref">stock auth forms</span></a> but you can pass in your own forms as well.</p> <p>Django provides no default template for the authentication views. You should create your own templates for the views you want to use. The template context is documented in each view, see <a class="reference internal" href="#all-authentication-views"><span class="std std-ref">All authentication views</span></a>.</p>  <h4 id="id4">Using the views</h4> <p id="s-using-the-views">There are different methods to implement these views in your project. The easiest way is to include the provided URLconf in <code>django.contrib.auth.urls</code> in your own URLconf, for example:</p> <pre data-language="python">urlpatterns = [
+    path('accounts/', include('django.contrib.auth.urls')),
+]
+</pre> <p>This will include the following URL patterns:</p> <pre data-language="python">accounts/login/ [name='login']
+accounts/logout/ [name='logout']
+accounts/password_change/ [name='password_change']
+accounts/password_change/done/ [name='password_change_done']
+accounts/password_reset/ [name='password_reset']
+accounts/password_reset/done/ [name='password_reset_done']
+accounts/reset/&lt;uidb64&gt;/&lt;token&gt;/ [name='password_reset_confirm']
+accounts/reset/done/ [name='password_reset_complete']
+</pre> <p>The views provide a URL name for easier reference. See <a class="reference internal" href="../http/urls"><span class="doc">the URL documentation</span></a> for details on using named URL patterns.</p> <p>If you want more control over your URLs, you can reference a specific view in your URLconf:</p> <pre data-language="python">from django.contrib.auth import views as auth_views
+
+urlpatterns = [
+    path('change-password/', auth_views.PasswordChangeView.as_view()),
+]
+</pre> <p>The views have optional arguments you can use to alter the behavior of the view. For example, if you want to change the template name a view uses, you can provide the <code>template_name</code> argument. A way to do this is to provide keyword arguments in the URLconf, these will be passed on to the view. For example:</p> <pre data-language="python">urlpatterns = [
+    path(
+        'change-password/',
+        auth_views.PasswordChangeView.as_view(template_name='change-password.html'),
+    ),
+]
+</pre> <p>All views are <a class="reference internal" href="../class-based-views/index"><span class="doc">class-based</span></a>, which allows you to easily customize them by subclassing.</p>   <h4 id="id5">All authentication views</h4> <p id="s-all-authentication-views">This is a list with all the views <code>django.contrib.auth</code> provides. For implementation details see <a class="reference internal" href="#using-the-views"><span class="std std-ref">Using the views</span></a>.</p> <dl class="class"> <dt id="django.contrib.auth.views.LoginView">
+<code>class LoginView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>login</code></p> <p>See <a class="reference internal" href="../http/urls"><span class="doc">the URL documentation</span></a> for details on using named URL patterns.</p> <p><strong>Methods and Attributes</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The name of a template to display for the view used to log the user in. Defaults to <code>registration/login.html</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.next_page">
+<code>next_page</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 4.0.</span> </div> <p>The URL to redirect to after login. Defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_REDIRECT_URL"><code>LOGIN_REDIRECT_URL</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.redirect_field_name">
+<code>redirect_field_name</code> </dt> <dd>
+<p>The name of a <code>GET</code> field containing the URL to redirect to after login. Defaults to <code>next</code>. Overrides the <a class="reference internal" href="#django.contrib.auth.views.LoginView.get_default_redirect_url" title="django.contrib.auth.views.LoginView.get_default_redirect_url"><code>get_default_redirect_url()</code></a> URL if the given <code>GET</code> parameter is passed.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.authentication_form">
+<code>authentication_form</code> </dt> <dd>
+<p>A callable (typically a form class) to use for authentication. Defaults to <a class="reference internal" href="#django.contrib.auth.forms.AuthenticationForm" title="django.contrib.auth.forms.AuthenticationForm"><code>AuthenticationForm</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.redirect_authenticated_user">
+<code>redirect_authenticated_user</code> </dt> <dd>
+<p>A boolean that controls whether or not authenticated users accessing the login page will be redirected as if they had just successfully logged in. Defaults to <code>False</code>.</p> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p>If you enable <code>redirect_authenticated_user</code>, other websites will be able to determine if their visitors are authenticated on your site by requesting redirect URLs to image files on your website. To avoid this “<a class="reference external" href="https://robinlinus.github.io/socialmedia-leak/">social media fingerprinting</a>” information leakage, host all images and your favicon on a separate domain.</p> <p class="last">Enabling <code>redirect_authenticated_user</code> can also result in a redirect loop when using the <a class="reference internal" href="#django.contrib.auth.decorators.permission_required" title="django.contrib.auth.decorators.permission_required"><code>permission_required()</code></a> decorator unless the <code>raise_exception</code> parameter is used.</p> </div> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LoginView.success_url_allowed_hosts">
+<code>success_url_allowed_hosts</code> </dt> <dd>
+<p>A <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#set" title="(in Python v3.10)"><code>set</code></a> of hosts, in addition to <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>request.get_host()</code></a>, that are safe for redirecting after login. Defaults to an empty <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#set" title="(in Python v3.10)"><code>set</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.contrib.auth.views.LoginView.get_default_redirect_url">
+<code>get_default_redirect_url()</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 4.0.</span> </div> <p>Returns the URL to redirect to after login. The default implementation resolves and returns <a class="reference internal" href="#django.contrib.auth.views.LoginView.next_page" title="django.contrib.auth.views.LoginView.next_page"><code>next_page</code></a> if set, or <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_REDIRECT_URL"><code>LOGIN_REDIRECT_URL</code></a> otherwise.</p> </dd>
+</dl> <p>Here’s what <code>LoginView</code> does:</p> <ul class="simple"> <li>If called via <code>GET</code>, it displays a login form that POSTs to the same URL. More on this in a bit.</li> <li>If called via <code>POST</code> with user submitted credentials, it tries to log the user in. If login is successful, the view redirects to the URL specified in <code>next</code>. If <code>next</code> isn’t provided, it redirects to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_REDIRECT_URL"><code>settings.LOGIN_REDIRECT_URL</code></a> (which defaults to <code>/accounts/profile/</code>). If login isn’t successful, it redisplays the login form.</li> </ul> <p>It’s your responsibility to provide the html for the login template , called <code>registration/login.html</code> by default. This template gets passed four template context variables:</p> <ul class="simple"> <li>
+<code>form</code>: A <a class="reference internal" href="../../ref/forms/api#django.forms.Form" title="django.forms.Form"><code>Form</code></a> object representing the <a class="reference internal" href="#django.contrib.auth.forms.AuthenticationForm" title="django.contrib.auth.forms.AuthenticationForm"><code>AuthenticationForm</code></a>.</li> <li>
+<code>next</code>: The URL to redirect to after successful login. This may contain a query string, too.</li> <li>
+<code>site</code>: The current <a class="reference internal" href="../../ref/contrib/sites#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>, according to the <a class="reference internal" href="../../ref/settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting. If you don’t have the site framework installed, this will be set to an instance of <a class="reference internal" href="../../ref/contrib/sites#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a>, which derives the site name and domain from the current <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a>.</li> <li>
+<code>site_name</code>: An alias for <code>site.name</code>. If you don’t have the site framework installed, this will be set to the value of <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.META" title="django.http.HttpRequest.META"><code>request.META['SERVER_NAME']</code></a>. For more on sites, see <a class="reference internal" href="../../ref/contrib/sites"><span class="doc">The “sites” framework</span></a>.</li> </ul> <p>If you’d prefer not to call the template <code>registration/login.html</code>, you can pass the <code>template_name</code> parameter via the extra arguments to the <code>as_view</code> method in your URLconf. For example, this URLconf line would use <code>myapp/login.html</code> instead:</p> <pre data-language="python">path('accounts/login/', auth_views.LoginView.as_view(template_name='myapp/login.html')),
+</pre> <p>You can also specify the name of the <code>GET</code> field which contains the URL to redirect to after login using <code>redirect_field_name</code>. By default, the field is called <code>next</code>.</p> <p>Here’s a sample <code>registration/login.html</code> template you can use as a starting point. It assumes you have a <code>base.html</code> template that defines a <code>content</code> block:</p> <pre data-language="markup">{% extends "base.html" %}
+
+{% block content %}
+
+{% if form.errors %}
+&lt;p&gt;Your username and password didn't match. Please try again.&lt;/p&gt;
+{% endif %}
+
+{% if next %}
+    {% if user.is_authenticated %}
+    &lt;p&gt;Your account doesn't have access to this page. To proceed,
+    please login with an account that has access.&lt;/p&gt;
+    {% else %}
+    &lt;p&gt;Please login to see this page.&lt;/p&gt;
+    {% endif %}
+{% endif %}
+
+&lt;form method="post" action="{% url 'login' %}"&gt;
+{% csrf_token %}
+&lt;table&gt;
+&lt;tr&gt;
+    &lt;td&gt;{{ form.username.label_tag }}&lt;/td&gt;
+    &lt;td&gt;{{ form.username }}&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+    &lt;td&gt;{{ form.password.label_tag }}&lt;/td&gt;
+    &lt;td&gt;{{ form.password }}&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/table&gt;
+
+&lt;input type="submit" value="login"&gt;
+&lt;input type="hidden" name="next" value="{{ next }}"&gt;
+&lt;/form&gt;
+
+{# Assumes you set up the password_reset view in your URLconf #}
+&lt;p&gt;&lt;a href="{% url 'password_reset' %}"&gt;Lost password?&lt;/a&gt;&lt;/p&gt;
+
+{% endblock %}
+</pre> <p>If you have customized authentication (see <a class="reference internal" href="customizing"><span class="doc">Customizing Authentication</span></a>) you can use a custom authentication form by setting the <code>authentication_form</code> attribute. This form must accept a <code>request</code> keyword argument in its <code>__init__()</code> method and provide a <code>get_user()</code> method which returns the authenticated user object (this method is only ever called after successful form validation).</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.LogoutView">
+<code>class LogoutView</code> </dt> <dd>
+<p>Logs a user out.</p> <p><strong>URL name:</strong> <code>logout</code></p> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.LogoutView.next_page">
+<code>next_page</code> </dt> <dd>
+<p>The URL to redirect to after logout. Defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGOUT_REDIRECT_URL"><code>LOGOUT_REDIRECT_URL</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LogoutView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to display after logging the user out. Defaults to <code>registration/logged_out.html</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LogoutView.redirect_field_name">
+<code>redirect_field_name</code> </dt> <dd>
+<p>The name of a <code>GET</code> field containing the URL to redirect to after log out. Defaults to <code>'next'</code>. Overrides the <a class="reference internal" href="#django.contrib.auth.views.LogoutView.next_page" title="django.contrib.auth.views.LogoutView.next_page"><code>next_page</code></a> URL if the given <code>GET</code> parameter is passed.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LogoutView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.LogoutView.success_url_allowed_hosts">
+<code>success_url_allowed_hosts</code> </dt> <dd>
+<p>A <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#set" title="(in Python v3.10)"><code>set</code></a> of hosts, in addition to <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>request.get_host()</code></a>, that are safe for redirecting after logout. Defaults to an empty <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#set" title="(in Python v3.10)"><code>set</code></a>.</p> </dd>
+</dl> <p><strong>Template context:</strong></p> <ul class="simple"> <li>
+<code>title</code>: The string “Logged out”, localized.</li> <li>
+<code>site</code>: The current <a class="reference internal" href="../../ref/contrib/sites#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>, according to the <a class="reference internal" href="../../ref/settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting. If you don’t have the site framework installed, this will be set to an instance of <a class="reference internal" href="../../ref/contrib/sites#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a>, which derives the site name and domain from the current <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a>.</li> <li>
+<code>site_name</code>: An alias for <code>site.name</code>. If you don’t have the site framework installed, this will be set to the value of <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.META" title="django.http.HttpRequest.META"><code>request.META['SERVER_NAME']</code></a>. For more on sites, see <a class="reference internal" href="../../ref/contrib/sites"><span class="doc">The “sites” framework</span></a>.</li> </ul> </dd>
+</dl> <dl class="function"> <dt id="django.contrib.auth.views.logout_then_login">
+<code>logout_then_login(request, login_url=None)</code> </dt> <dd>
+<p>Logs a user out, then redirects to the login page.</p> <p><strong>URL name:</strong> No default URL provided</p> <p><strong>Optional arguments:</strong></p> <ul class="simple"> <li>
+<code>login_url</code>: The URL of the login page to redirect to. Defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> if not supplied.</li> </ul> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordChangeView">
+<code>class PasswordChangeView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_change</code></p> <p>Allows a user to change their password.</p> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordChangeView.success_url">
+<code>success_url</code> </dt> <dd>
+<p>The URL to redirect to after a successful password change. Defaults to <code>'password_change_done'</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordChangeView.form_class">
+<code>form_class</code> </dt> <dd>
+<p>A custom “change password” form which must accept a <code>user</code> keyword argument. The form is responsible for actually changing the user’s password. Defaults to <a class="reference internal" href="#django.contrib.auth.forms.PasswordChangeForm" title="django.contrib.auth.forms.PasswordChangeForm"><code>PasswordChangeForm</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordChangeView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> <p><strong>Template context:</strong></p> <ul class="simple"> <li>
+<code>form</code>: The password change form (see <code>form_class</code> above).</li> </ul> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordChangeDoneView">
+<code>class PasswordChangeDoneView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_change_done</code></p> <p>The page shown after a user has changed their password.</p> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordChangeDoneView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to use. Defaults to <code>registration/password_change_done.html</code> if not supplied.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordChangeDoneView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordResetView">
+<code>class PasswordResetView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_reset</code></p> <p>Allows a user to reset their password by generating a one-time use link that can be used to reset the password, and sending that link to the user’s registered email address.</p> <p>If the email address provided does not exist in the system, this view won’t send an email, but the user won’t receive any error message either. This prevents information leaking to potential attackers. If you want to provide an error message in this case, you can subclass <a class="reference internal" href="#django.contrib.auth.forms.PasswordResetForm" title="django.contrib.auth.forms.PasswordResetForm"><code>PasswordResetForm</code></a> and use the <code>form_class</code> attribute.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">Be aware that sending an email costs extra time, hence you may be vulnerable to an email address enumeration timing attack due to a difference between the duration of a reset request for an existing email address and the duration of a reset request for a nonexistent email address. To reduce the overhead, you can use a 3rd party package that allows to send emails asynchronously, e.g. <a class="reference external" href="https://pypi.org/project/django-mailer/">django-mailer</a>.</p> </div> <p>Users flagged with an unusable password (see <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.set_unusable_password" title="django.contrib.auth.models.User.set_unusable_password"><code>set_unusable_password()</code></a> aren’t allowed to request a password reset to prevent misuse when using an external authentication source like LDAP. Note that they won’t receive any error message since this would expose their account’s existence but no mail will be sent either.</p> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to use for displaying the password reset form. Defaults to <code>registration/password_reset_form.html</code> if not supplied.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.form_class">
+<code>form_class</code> </dt> <dd>
+<p>Form that will be used to get the email of the user to reset the password for. Defaults to <a class="reference internal" href="#django.contrib.auth.forms.PasswordResetForm" title="django.contrib.auth.forms.PasswordResetForm"><code>PasswordResetForm</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.email_template_name">
+<code>email_template_name</code> </dt> <dd>
+<p>The full name of a template to use for generating the email with the reset password link. Defaults to <code>registration/password_reset_email.html</code> if not supplied.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.subject_template_name">
+<code>subject_template_name</code> </dt> <dd>
+<p>The full name of a template to use for the subject of the email with the reset password link. Defaults to <code>registration/password_reset_subject.txt</code> if not supplied.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.token_generator">
+<code>token_generator</code> </dt> <dd>
+<p>Instance of the class to check the one time link. This will default to <code>default_token_generator</code>, it’s an instance of <code>django.contrib.auth.tokens.PasswordResetTokenGenerator</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.success_url">
+<code>success_url</code> </dt> <dd>
+<p>The URL to redirect to after a successful password reset request. Defaults to <code>'password_reset_done'</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.from_email">
+<code>from_email</code> </dt> <dd>
+<p>A valid email address. By default Django uses the <a class="reference internal" href="../../ref/settings#std:setting-DEFAULT_FROM_EMAIL"><code>DEFAULT_FROM_EMAIL</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.html_email_template_name">
+<code>html_email_template_name</code> </dt> <dd>
+<p>The full name of a template to use for generating a <em class="mimetype">text/html</em> multipart email with the password reset link. By default, HTML email is not sent.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetView.extra_email_context">
+<code>extra_email_context</code> </dt> <dd>
+<p>A dictionary of context data that will be available in the email template. It can be used to override default template context values listed below e.g. <code>domain</code>.</p> </dd>
+</dl> <p><strong>Template context:</strong></p> <ul class="simple"> <li>
+<code>form</code>: The form (see <code>form_class</code> above) for resetting the user’s password.</li> </ul> <p><strong>Email template context:</strong></p> <ul class="simple"> <li>
+<code>email</code>: An alias for <code>user.email</code>
+</li> <li>
+<code>user</code>: The current <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a>, according to the <code>email</code> form field. Only active users are able to reset their passwords (<code>User.is_active is True</code>).</li> <li>
+<code>site_name</code>: An alias for <code>site.name</code>. If you don’t have the site framework installed, this will be set to the value of <a class="reference internal" href="../../ref/request-response#django.http.HttpRequest.META" title="django.http.HttpRequest.META"><code>request.META['SERVER_NAME']</code></a>. For more on sites, see <a class="reference internal" href="../../ref/contrib/sites"><span class="doc">The “sites” framework</span></a>.</li> <li>
+<code>domain</code>: An alias for <code>site.domain</code>. If you don’t have the site framework installed, this will be set to the value of <code>request.get_host()</code>.</li> <li>
+<code>protocol</code>: http or https</li> <li>
+<code>uid</code>: The user’s primary key encoded in base 64.</li> <li>
+<code>token</code>: Token to check that the reset link is valid.</li> </ul> <p>Sample <code>registration/password_reset_email.html</code> (email body template):</p> <pre data-language="markup">Someone asked for password reset for email {{ email }}. Follow the link below:
+{{ protocol}}://{{ domain }}{% url 'password_reset_confirm' uidb64=uid token=token %}
+</pre> <p>The same template context is used for subject template. Subject must be single line plain text string.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordResetDoneView">
+<code>class PasswordResetDoneView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_reset_done</code></p> <p>The page shown after a user has been emailed a link to reset their password. This view is called by default if the <a class="reference internal" href="#django.contrib.auth.views.PasswordResetView" title="django.contrib.auth.views.PasswordResetView"><code>PasswordResetView</code></a> doesn’t have an explicit <code>success_url</code> URL set.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">If the email address provided does not exist in the system, the user is inactive, or has an unusable password, the user will still be redirected to this view but no email will be sent.</p> </div> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetDoneView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to use. Defaults to <code>registration/password_reset_done.html</code> if not supplied.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetDoneView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordResetConfirmView">
+<code>class PasswordResetConfirmView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_reset_confirm</code></p> <p>Presents a form for entering a new password.</p> <p><strong>Keyword arguments from the URL:</strong></p> <ul class="simple"> <li>
+<code>uidb64</code>: The user’s id encoded in base 64.</li> <li>
+<code>token</code>: Token to check that the password is valid.</li> </ul> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to display the confirm password view. Default value is <code>registration/password_reset_confirm.html</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.token_generator">
+<code>token_generator</code> </dt> <dd>
+<p>Instance of the class to check the password. This will default to <code>default_token_generator</code>, it’s an instance of <code>django.contrib.auth.tokens.PasswordResetTokenGenerator</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.post_reset_login">
+<code>post_reset_login</code> </dt> <dd>
+<p>A boolean indicating if the user should be automatically authenticated after a successful password reset. Defaults to <code>False</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.post_reset_login_backend">
+<code>post_reset_login_backend</code> </dt> <dd>
+<p>A dotted path to the authentication backend to use when authenticating a user if <code>post_reset_login</code> is <code>True</code>. Required only if you have multiple <a class="reference internal" href="../../ref/settings#std:setting-AUTHENTICATION_BACKENDS"><code>AUTHENTICATION_BACKENDS</code></a> configured. Defaults to <code>None</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.form_class">
+<code>form_class</code> </dt> <dd>
+<p>Form that will be used to set the password. Defaults to <a class="reference internal" href="#django.contrib.auth.forms.SetPasswordForm" title="django.contrib.auth.forms.SetPasswordForm"><code>SetPasswordForm</code></a>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.success_url">
+<code>success_url</code> </dt> <dd>
+<p>URL to redirect after the password reset done. Defaults to <code>'password_reset_complete'</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetConfirmView.reset_url_token">
+<code>reset_url_token</code> </dt> <dd>
+<p>Token parameter displayed as a component of password reset URLs. Defaults to <code>'set-password'</code>.</p> </dd>
+</dl> <p><strong>Template context:</strong></p> <ul class="simple"> <li>
+<code>form</code>: The form (see <code>form_class</code> above) for setting the new user’s password.</li> <li>
+<code>validlink</code>: Boolean, True if the link (combination of <code>uidb64</code> and <code>token</code>) is valid or unused yet.</li> </ul> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.views.PasswordResetCompleteView">
+<code>class PasswordResetCompleteView</code> </dt> <dd>
+<p><strong>URL name:</strong> <code>password_reset_complete</code></p> <p>Presents a view which informs the user that the password has been successfully changed.</p> <p><strong>Attributes:</strong></p> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetCompleteView.template_name">
+<code>template_name</code> </dt> <dd>
+<p>The full name of a template to display the view. Defaults to <code>registration/password_reset_complete.html</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.auth.views.PasswordResetCompleteView.extra_context">
+<code>extra_context</code> </dt> <dd>
+<p>A dictionary of context data that will be added to the default context data passed to the template.</p> </dd>
+</dl> </dd>
+</dl>    <h3 id="helper-functions">Helper functions</h3> <dl class="function" id="s-helper-functions"> <dt id="django.contrib.auth.views.redirect_to_login">
+<code>redirect_to_login(next, login_url=None, redirect_field_name='next')</code> </dt> <dd>
+<p>Redirects to the login page, and then back to another URL after a successful login.</p> <p><strong>Required arguments:</strong></p> <ul class="simple"> <li>
+<code>next</code>: The URL to redirect to after a successful login.</li> </ul> <p><strong>Optional arguments:</strong></p> <ul class="simple"> <li>
+<code>login_url</code>: The URL of the login page to redirect to. Defaults to <a class="reference internal" href="../../ref/settings#std:setting-LOGIN_URL"><code>settings.LOGIN_URL</code></a> if not supplied.</li> <li>
+<code>redirect_field_name</code>: The name of a <code>GET</code> field containing the URL to redirect to after log out. Overrides <code>next</code> if the given <code>GET</code> parameter is passed.</li> </ul> </dd>
+</dl>   <h3 id="built-in-auth-forms">Built-in forms</h3> <p id="s-module-django.contrib.auth.forms">If you don’t want to use the built-in views, but want the convenience of not having to write forms for this functionality, the authentication system provides several built-in forms located in <a class="reference internal" href="#module-django.contrib.auth.forms" title="django.contrib.auth.forms"><code>django.contrib.auth.forms</code></a>:</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">The built-in authentication forms make certain assumptions about the user model that they are working with. If you’re using a <a class="reference internal" href="customizing#auth-custom-user"><span class="std std-ref">custom user model</span></a>, it may be necessary to define your own forms for the authentication system. For more information, refer to the documentation about <a class="reference internal" href="customizing#custom-users-and-the-built-in-auth-forms"><span class="std std-ref">using the built-in authentication forms with custom user models</span></a>.</p> </div> <dl class="class"> <dt id="django.contrib.auth.forms.AdminPasswordChangeForm">
+<code>class AdminPasswordChangeForm</code> </dt> <dd>
+<p>A form used in the admin interface to change a user’s password.</p> <p>Takes the <code>user</code> as the first positional argument.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.AuthenticationForm">
+<code>class AuthenticationForm</code> </dt> <dd>
+<p>A form for logging a user in.</p> <p>Takes <code>request</code> as its first positional argument, which is stored on the form instance for use by sub-classes.</p> <dl class="method"> <dt id="django.contrib.auth.forms.AuthenticationForm.confirm_login_allowed">
+<code>confirm_login_allowed(user)</code> </dt> <dd>
+<p>By default, <code>AuthenticationForm</code> rejects users whose <code>is_active</code> flag is set to <code>False</code>. You may override this behavior with a custom policy to determine which users can log in. Do this with a custom form that subclasses <code>AuthenticationForm</code> and overrides the <code>confirm_login_allowed()</code> method. This method should raise a <a class="reference internal" href="../../ref/exceptions#django.core.exceptions.ValidationError" title="django.core.exceptions.ValidationError"><code>ValidationError</code></a> if the given user may not log in.</p> <p>For example, to allow all users to log in regardless of “active” status:</p> <pre data-language="python">from django.contrib.auth.forms import AuthenticationForm
+
+class AuthenticationFormWithInactiveUsersOkay(AuthenticationForm):
+    def confirm_login_allowed(self, user):
+        pass
+</pre> <p>(In this case, you’ll also need to use an authentication backend that allows inactive users, such as <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.backends.AllowAllUsersModelBackend" title="django.contrib.auth.backends.AllowAllUsersModelBackend"><code>AllowAllUsersModelBackend</code></a>.)</p> <p>Or to allow only some active users to log in:</p> <pre data-language="python">class PickyAuthenticationForm(AuthenticationForm):
+    def confirm_login_allowed(self, user):
+        if not user.is_active:
+            raise ValidationError(
+                _("This account is inactive."),
+                code='inactive',
+            )
+        if user.username.startswith('b'):
+            raise ValidationError(
+                _("Sorry, accounts starting with 'b' aren't welcome here."),
+                code='no_b_users',
+            )
+</pre> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.PasswordChangeForm">
+<code>class PasswordChangeForm</code> </dt> <dd>
+<p>A form for allowing a user to change their password.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.PasswordResetForm">
+<code>class PasswordResetForm</code> </dt> <dd>
+<p>A form for generating and emailing a one-time use link to reset a user’s password.</p> <dl class="method"> <dt id="django.contrib.auth.forms.PasswordResetForm.send_mail">
+<code>send_mail(subject_template_name, email_template_name, context, from_email, to_email, html_email_template_name=None)</code> </dt> <dd>
+<p>Uses the arguments to send an <code>EmailMultiAlternatives</code>. Can be overridden to customize how the email is sent to the user.</p> <table class="docutils field-list" frame="void" rules="none"> <col class="field-name"> <col class="field-body">  <tr>
+<th class="field-name">Parameters:</th>
+<td class="field-body">
+<ul class="first last simple"> <li>
+<strong>subject_template_name</strong> – the template for the subject.</li> <li>
+<strong>email_template_name</strong> – the template for the email body.</li> <li>
+<strong>context</strong> – context passed to the <code>subject_template</code>, <code>email_template</code>, and <code>html_email_template</code> (if it is not <code>None</code>).</li> <li>
+<strong>from_email</strong> – the sender’s email.</li> <li>
+<strong>to_email</strong> – the email of the requester.</li> <li>
+<strong>html_email_template_name</strong> – the template for the HTML body; defaults to <code>None</code>, in which case a plain text email is sent.</li> </ul> </td> </tr>  </table> <p>By default, <code>save()</code> populates the <code>context</code> with the same variables that <a class="reference internal" href="#django.contrib.auth.views.PasswordResetView" title="django.contrib.auth.views.PasswordResetView"><code>PasswordResetView</code></a> passes to its email context.</p> </dd>
+</dl> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.SetPasswordForm">
+<code>class SetPasswordForm</code> </dt> <dd>
+<p>A form that lets a user change their password without entering the old password.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.UserChangeForm">
+<code>class UserChangeForm</code> </dt> <dd>
+<p>A form used in the admin interface to change a user’s information and permissions.</p> </dd>
+</dl> <dl class="class"> <dt id="django.contrib.auth.forms.UserCreationForm">
+<code>class UserCreationForm</code> </dt> <dd>
+<p>A <a class="reference internal" href="../forms/modelforms#django.forms.ModelForm" title="django.forms.ModelForm"><code>ModelForm</code></a> for creating a new user.</p> <p>It has three fields: <code>username</code> (from the user model), <code>password1</code>, and <code>password2</code>. It verifies that <code>password1</code> and <code>password2</code> match, validates the password using <a class="reference internal" href="passwords#django.contrib.auth.password_validation.validate_password" title="django.contrib.auth.password_validation.validate_password"><code>validate_password()</code></a>, and sets the user’s password using <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.set_password" title="django.contrib.auth.models.User.set_password"><code>set_password()</code></a>.</p> </dd>
+</dl>   <h3 id="authentication-data-in-templates">Authentication data in templates</h3> <p id="s-authentication-data-in-templates">The currently logged-in user and their permissions are made available in the <a class="reference internal" href="../../ref/templates/api"><span class="doc">template context</span></a> when you use <a class="reference internal" href="../../ref/templates/api#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a>.</p> <div class="admonition-technicality admonition"> <p class="first admonition-title">Technicality</p> <p class="last">Technically, these variables are only made available in the template context if you use <a class="reference internal" href="../../ref/templates/api#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> and the <code>'django.contrib.auth.context_processors.auth'</code> context processor is enabled. It is in the default generated settings file. For more, see the <a class="reference internal" href="../../ref/templates/api#subclassing-context-requestcontext"><span class="std std-ref">RequestContext docs</span></a>.</p> </div>  <h4 id="users">Users</h4> <p id="s-users">When rendering a template <a class="reference internal" href="../../ref/templates/api#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a>, the currently logged-in user, either a <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User" title="django.contrib.auth.models.User"><code>User</code></a> instance or an <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.AnonymousUser" title="django.contrib.auth.models.AnonymousUser"><code>AnonymousUser</code></a> instance, is stored in the template variable <code>{{ user }}</code>:</p> <pre data-language="markup">{% if user.is_authenticated %}
+    &lt;p&gt;Welcome, {{ user.username }}. Thanks for logging in.&lt;/p&gt;
+{% else %}
+    &lt;p&gt;Welcome, new user. Please log in.&lt;/p&gt;
+{% endif %}
+</pre> <p>This template context variable is not available if a <code>RequestContext</code> is not being used.</p>   <h4 id="permissions">Permissions</h4> <p id="s-permissions">The currently logged-in user’s permissions are stored in the template variable <code>{{ perms }}</code>. This is an instance of <code>django.contrib.auth.context_processors.PermWrapper</code>, which is a template-friendly proxy of permissions.</p> <p>Evaluating a single-attribute lookup of <code>{{ perms }}</code> as a boolean is a proxy to <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_module_perms" title="django.contrib.auth.models.User.has_module_perms"><code>User.has_module_perms()</code></a>. For example, to check if the logged-in user has any permissions in the <code>foo</code> app:</p> <pre data-language="python">{% if perms.foo %}
+</pre> <p>Evaluating a two-level-attribute lookup as a boolean is a proxy to <a class="reference internal" href="../../ref/contrib/auth#django.contrib.auth.models.User.has_perm" title="django.contrib.auth.models.User.has_perm"><code>User.has_perm()</code></a>. For example, to check if the logged-in user has the permission <code>foo.add_vote</code>:</p> <pre data-language="python">{% if perms.foo.add_vote %}
+</pre> <p>Here’s a more complete example of checking permissions in a template:</p> <pre data-language="markup">{% if perms.foo %}
+    &lt;p&gt;You have permission to do something in the foo app.&lt;/p&gt;
+    {% if perms.foo.add_vote %}
+        &lt;p&gt;You can vote!&lt;/p&gt;
+    {% endif %}
+    {% if perms.foo.add_driving %}
+        &lt;p&gt;You can drive!&lt;/p&gt;
+    {% endif %}
+{% else %}
+    &lt;p&gt;You don't have permission to do anything in the foo app.&lt;/p&gt;
+{% endif %}
+</pre> <p>It is possible to also look permissions up by <code>{% if in %}</code> statements. For example:</p> <pre data-language="markup">{% if 'foo' in perms %}
+    {% if 'foo.add_vote' in perms %}
+        &lt;p&gt;In lookup works, too.&lt;/p&gt;
+    {% endif %}
+{% endif %}
+</pre>     <h2 id="auth-admin">Managing users in the admin</h2> <p id="s-managing-users-in-the-admin">When you have both <code>django.contrib.admin</code> and <code>django.contrib.auth</code> installed, the admin provides a convenient way to view and manage users, groups, and permissions. Users can be created and deleted like any Django model. Groups can be created, and permissions can be assigned to users or groups. A log of user edits to models made within the admin is also stored and displayed.</p>  <h3 id="id6">Creating users</h3> <p id="s-id6">You should see a link to “Users” in the “Auth” section of the main admin index page. The “Add user” admin page is different than standard admin pages in that it requires you to choose a username and password before allowing you to edit the rest of the user’s fields.</p> <p>Also note: if you want a user account to be able to create users using the Django admin site, you’ll need to give them permission to add users <em>and</em> change users (i.e., the “Add user” and “Change user” permissions). If an account has permission to add users but not to change them, that account won’t be able to add users. Why? Because if you have permission to add users, you have the power to create superusers, which can then, in turn, change other users. So Django requires add <em>and</em> change permissions as a slight security measure.</p> <p>Be thoughtful about how you allow users to manage permissions. If you give a non-superuser the ability to edit users, this is ultimately the same as giving them superuser status because they will be able to elevate permissions of users including themselves!</p>   <h3 id="id7">Changing passwords</h3> <p id="s-id7">User passwords are not displayed in the admin (nor stored in the database), but the <a class="reference internal" href="passwords"><span class="doc">password storage details</span></a> are displayed. Included in the display of this information is a link to a password change form that allows admins to change user passwords.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/auth/default/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/auth/default/</a>
+  </p>
+</div>

@@ -1,0 +1,265 @@
+<h1 class="devsite-page-title">tf.tpu.experimental.embedding.TPUEmbedding</h1>       <p>The TPUEmbedding mid level API.</p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/tpu/experimental/embedding/TPUEmbedding"><code translate="no" dir="ltr">tf.compat.v1.tpu.experimental.embedding.TPUEmbedding</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.tpu.experimental.embedding.TPUEmbedding(
+    feature_config: Any,
+    optimizer: Optional[tpu_embedding_v2_utils._Optimizer],
+    pipeline_execution_with_tensor_core: bool = False
+)
+</pre>  <blockquote class="note">
+<strong>Note:</strong><span> When instantiated under a TPUStrategy, this class can only be created once per call to <a href="../initialize_tpu_system"><code translate="no" dir="ltr">tf.tpu.experimental.initialize_tpu_system</code></a>. If you wish to re-initialize the embedding engine you must re-initialize the tpu as well. Doing this will clear any variables from TPU, so ensure you have checkpointed before you do this. If a further instances of the class are needed, set the <code translate="no" dir="ltr">initialize_tpu_embedding</code> argument to <code translate="no" dir="ltr">False</code>.</span>
+</blockquote> <p>This class can be used to support training large embeddings on TPU. When creating an instance of this class, you must specify the complete set of tables and features you expect to lookup in those tables. See the documentation of <a href="tableconfig"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.TableConfig</code></a> and <a href="featureconfig"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.FeatureConfig</code></a> for more details on the complete set of options. We will cover the basic usage here.</p> <blockquote class="note">
+<strong>Note:</strong><span> multiple <code translate="no" dir="ltr">FeatureConfig</code> objects can use the same <code translate="no" dir="ltr">TableConfig</code> object, allowing different features to share the same table:</span>
+</blockquote>
+<pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">table_config_one = tf.tpu.experimental.embedding.TableConfig(
+    vocabulary_size=...,
+    dim=...)
+table_config_two = tf.tpu.experimental.embedding.TableConfig(
+    vocabulary_size=...,
+    dim=...)
+feature_config = {
+    'feature_one': tf.tpu.experimental.embedding.FeatureConfig(
+        table=table_config_one),
+    'feature_two': tf.tpu.experimental.embedding.FeatureConfig(
+        table=table_config_one),
+    'feature_three': tf.tpu.experimental.embedding.FeatureConfig(
+        table=table_config_two)}
+</pre> <p>There are two modes under which the <code translate="no" dir="ltr">TPUEmbedding</code> class can used. This depends on if the class was created under a <code translate="no" dir="ltr">TPUStrategy</code> scope or not.</p> <p>Under <code translate="no" dir="ltr">TPUStrategy</code>, we allow access to the method <code translate="no" dir="ltr">enqueue</code>, <code translate="no" dir="ltr">dequeue</code> and <code translate="no" dir="ltr">apply_gradients</code>. We will show examples below of how to use these to train and evaluate your model. Under CPU, we only access to the <code translate="no" dir="ltr">embedding_tables</code> property which allow access to the embedding tables so that you can use them to run model evaluation/prediction on CPU.</p> <p>First lets look at the <code translate="no" dir="ltr">TPUStrategy</code> mode. Initial setup looks like:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.TPUStrategy(...)
+with strategy.scope():
+  embedding = tf.tpu.experimental.embedding.TPUEmbedding(
+      feature_config=feature_config,
+      optimizer=tf.tpu.experimental.embedding.SGD(0.1))
+</pre> <p>When creating a distributed dataset that is to be passed to the enqueue operation a special input option must be specified:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">distributed_dataset = (
+    strategy.distribute_datasets_from_function(
+        dataset_fn=...,
+        options=tf.distribute.InputOptions(
+            experimental_prefetch_to_device=False))
+dataset_iterator = iter(distributed_dataset)
+</pre>
+<blockquote class="note">
+<strong>Note:</strong><span> All batches passed to the layer must have the same batch size for each input, more over once you have called the layer with one batch size all subsequent calls must use the same batch_size. In the event that the batch size cannot be automatically determined by the enqueue method, you must call the build method with the batch size to initialize the layer.</span>
+</blockquote> <p>To use this API on TPU you should use a custom training loop. Below is an example of a training and evaluation step:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">@tf.function
+def training_step(dataset_iterator, num_steps):
+  def tpu_step(tpu_features):
+    with tf.GradientTape() as tape:
+      activations = embedding.dequeue()
+      tape.watch(activations)
+      model_output = model(activations)
+      loss = ...  # some function of labels and model_output
+
+    embedding_gradients = tape.gradient(loss, activations)
+    embedding.apply_gradients(embedding_gradients)
+    # Insert your model gradient and optimizer application here
+
+  for _ in tf.range(num_steps):
+    embedding_features, tpu_features = next(dataset_iterator)
+    embedding.enqueue(embedding_features, training=True)
+    strategy.run(tpu_step, args=(embedding_features, ))
+
+@tf.function
+def evalution_step(dataset_iterator, num_steps):
+  def tpu_step(tpu_features):
+    activations = embedding.dequeue()
+    model_output = model(activations)
+    # Insert your evaluation code here.
+
+  for _ in tf.range(num_steps):
+    embedding_features, tpu_features = next(dataset_iterator)
+    embedding.enqueue(embedding_features, training=False)
+    strategy.run(tpu_step, args=(embedding_features, ))
+</pre>
+<blockquote class="note">
+<strong>Note:</strong><span> The calls to <code translate="no" dir="ltr">enqueue</code> have <code translate="no" dir="ltr">training</code> set to <code translate="no" dir="ltr">True</code> when <code translate="no" dir="ltr">embedding.apply_gradients</code> is used and set to <code translate="no" dir="ltr">False</code> when <code translate="no" dir="ltr">embedding.apply_gradients</code> is not present in the function. If you don't follow this pattern you may cause an error to be raised or the tpu may deadlock.</span>
+</blockquote> <p>In the above examples, we assume that the user has a dataset which returns a tuple where the first element of the tuple matches the structure of what was passed as the <code translate="no" dir="ltr">feature_config</code> argument to the object initializer. Also we utilize <a href="../../../range"><code translate="no" dir="ltr">tf.range</code></a> to get a <a href="../../../while_loop"><code translate="no" dir="ltr">tf.while_loop</code></a> in order to increase performance.</p> <p>When checkpointing your model, you should include your <a href="tpuembedding"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.TPUEmbedding</code></a> object in the checkpoint. It is a trackable object and saving it will save the embedding tables and their optimizer slot variables:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">checkpoint = tf.train.Checkpoint(model=model, embedding=embedding)
+checkpoint.save(...)
+</pre> <p>On CPU, only the <code translate="no" dir="ltr">embedding_table</code> property is usable. This will allow you to restore a checkpoint to the object and have access to the table variables:</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">model = model_fn(...)
+embedding = tf.tpu.experimental.embedding.TPUEmbedding(
+    feature_config=feature_config,
+    batch_size=1024,
+    optimizer=tf.tpu.experimental.embedding.SGD(0.1))
+checkpoint = tf.train.Checkpoint(model=model, embedding=embedding)
+checkpoint.restore(...)
+
+tables = embedding.embedding_tables
+</pre> <p>You can now use table in functions like <a href="../../../nn/embedding_lookup"><code translate="no" dir="ltr">tf.nn.embedding_lookup</code></a> to perform your embedding lookup and pass to your model.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">feature_config</code> </td> <td> A nested structure of <a href="featureconfig"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.FeatureConfig</code></a> configs. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">optimizer</code> </td> <td> An instance of one of <a href="sgd"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.SGD</code></a>, <a href="adagrad"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.Adagrad</code></a> or <a href="adam"><code translate="no" dir="ltr">tf.tpu.experimental.embedding.Adam</code></a>. When not created under TPUStrategy may be set to None to avoid the creation of the optimizer slot variables, useful for optimizing memory consumption when exporting the model for serving where slot variables aren't needed. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">pipeline_execution_with_tensor_core</code> </td> <td> If True, the TPU embedding computations will overlap with the TensorCore computations (and hence will be one step old). Set to True for improved performance. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If optimizer is not one of tf.tpu.experimental.embedding.(SGD, Adam or Adagrad) or None when created under a TPUStrategy. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">embedding_tables</code> </td> <td> Returns a dict of embedding tables, keyed by <code translate="no" dir="ltr">TableConfig</code>. <p>This property only works when the <code translate="no" dir="ltr">TPUEmbedding</code> object is created under a non-TPU strategy. This is intended to be used to for CPU based lookup when creating a serving checkpoint. </p>
+</td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="apply_gradients" data-text="apply_gradients"><code translate="no" dir="ltr">apply_gradients</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/tpu/tpu_embedding_v2.py#L571-L664">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+apply_gradients(
+    gradients,
+    name: Text = None
+)
+</pre> <p>Applies the gradient update to the embedding tables.</p> <p>If a gradient of <code translate="no" dir="ltr">None</code> is passed in any position of the nested structure, then an gradient update with a zero gradient is applied for that feature. For optimizers like SGD or Adagrad, this is the same as applying no update at all. For lazy Adam and other sparsely applied optimizers with decay, ensure you understand the effect of applying a zero gradient.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.TPUStrategy(...)
+with strategy.scope():
+  embedding = tf.tpu.experimental.embedding.TPUEmbedding(...)
+
+distributed_dataset = (
+    strategy.distribute_datasets_from_function(
+        dataset_fn=...,
+        options=tf.distribute.InputOptions(
+            experimental_prefetch_to_device=False))
+dataset_iterator = iter(distributed_dataset)
+
+@tf.function
+def training_step():
+  def tpu_step(tpu_features):
+    with tf.GradientTape() as tape:
+      activations = embedding.dequeue()
+      tape.watch(activations)
+
+      loss = ... #  some computation involving activations
+
+    embedding_gradients = tape.gradient(loss, activations)
+    embedding.apply_gradients(embedding_gradients)
+
+  embedding_features, tpu_features = next(dataset_iterator)
+  embedding.enqueue(embedding_features, training=True)
+  strategy.run(tpu_step, args=(embedding_features, ))
+
+training_step()
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">gradients</code> </td> <td> A nested structure of gradients, with structure matching the <code translate="no" dir="ltr">feature_config</code> passed to this object. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> A name for the underlying op. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">RuntimeError</code> </td> <td> If called when object wasn't created under a <code translate="no" dir="ltr">TPUStrategy</code> or if not built (either by manually calling build or calling enqueue). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If a non-<a href="../../../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> non-<code translate="no" dir="ltr">None</code> gradient is passed in, or a <a href="../../../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> of the incorrect shape is passed in. Also if the size of any sequence in <code translate="no" dir="ltr">gradients</code> does not match corresponding sequence in <code translate="no" dir="ltr">feature_config</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">TypeError</code> </td> <td> If the type of any sequence in <code translate="no" dir="ltr">gradients</code> does not match corresponding sequence in <code translate="no" dir="ltr">feature_config</code>. </td> </tr> </table> <h3 id="build" data-text="build"><code translate="no" dir="ltr">build</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/tpu/tpu_embedding_v2.py#L340-L393">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+build(
+    per_replica_batch_size: Optional[int] = None
+)
+</pre> <p>Create the underlying variables and initializes the TPU for embeddings.</p> <p>This method creates the underlying variables (including slot variables). If created under a TPUStrategy, this will also initialize the TPU for embeddings.</p> <p>This function will automatically get called by enqueue, which will try to determine your batch size automatically. If this fails, you must manually call this method before you call enqueue.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">per_replica_batch_size</code> </td> <td> The per replica batch size that you intend to use. Note that is fixed and the same batch size must be used for both training and evaluation. If you want to calculate this from the global batch size, you can use <code translate="no" dir="ltr">num_replicas_in_sync</code> property of your strategy object. May be set to None if not created under a TPUStrategy. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If per_replica_batch_size is None and object was created in a TPUStrategy scope. </td> </tr> </table> <h3 id="dequeue" data-text="dequeue"><code translate="no" dir="ltr">dequeue</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/tpu/tpu_embedding_v2.py#L666-L777">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+dequeue(
+    name: Text = None
+)
+</pre> <p>Get the embedding results.</p> <p>Returns a nested structure of <a href="../../../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a> objects, matching the structure of the <code translate="no" dir="ltr">feature_config</code> argument to the <code translate="no" dir="ltr">TPUEmbedding</code> class. The output shape of the tensors is <code translate="no" dir="ltr">(batch_size, dim)</code>, where <code translate="no" dir="ltr">batch_size</code> is the per core batch size, <code translate="no" dir="ltr">dim</code> is the dimension of the corresponding <code translate="no" dir="ltr">TableConfig</code>. If the feature's corresponding <code translate="no" dir="ltr">FeatureConfig</code> has <code translate="no" dir="ltr">max_sequence_length</code> greater than 0, the output will be a sequence of shape <code translate="no" dir="ltr">(batch_size, max_sequence_length, dim)</code> instead.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.TPUStrategy(...)
+with strategy.scope():
+  embedding = tf.tpu.experimental.embedding.TPUEmbedding(...)
+
+distributed_dataset = (
+    strategy.distribute_datasets_from_function(
+        dataset_fn=...,
+        options=tf.distribute.InputOptions(
+            experimental_prefetch_to_device=False))
+dataset_iterator = iter(distributed_dataset)
+
+@tf.function
+def training_step():
+  def tpu_step(tpu_features):
+    with tf.GradientTape() as tape:
+      activations = embedding.dequeue()
+      tape.watch(activations)
+
+      loss = ... #  some computation involving activations
+
+    embedding_gradients = tape.gradient(loss, activations)
+    embedding.apply_gradients(embedding_gradients)
+
+  embedding_features, tpu_features = next(dataset_iterator)
+  embedding.enqueue(embedding_features, training=True)
+  strategy.run(tpu_step, args=(embedding_features, ))
+
+training_step()
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> A name for the underlying op. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A nested structure of tensors, with the same structure as <code translate="no" dir="ltr">feature_config</code> </td> </tr> 
+</table> <p>passed to this instance of the <code translate="no" dir="ltr">TPUEmbedding</code> object.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">RuntimeError</code> </td> <td> If called when object wasn't created under a <code translate="no" dir="ltr">TPUStrategy</code> or if not built (either by manually calling build or calling enqueue). </td> </tr> </table> <h3 id="enqueue" data-text="enqueue"><code translate="no" dir="ltr">enqueue</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/tpu/tpu_embedding_v2.py#L1115-L1284">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+enqueue(
+    features,
+    weights=None,
+    training: bool = True,
+    name: Optional[Text] = None
+)
+</pre> <p>Enqueues id tensors for embedding lookup.</p> <p>This function enqueues a structure of features to be looked up in the embedding tables. We expect that the batch size of each of the tensors in features matches the per core batch size. This will automatically happen if your input dataset is batched to the global batch size and you use <a href="../../../distribute/tpustrategy"><code translate="no" dir="ltr">tf.distribute.TPUStrategy</code></a>'s <code translate="no" dir="ltr">experimental_distribute_dataset</code> or if you use <code translate="no" dir="ltr">distribute_datasets_from_function</code> and batch to the per core batch size computed by the context passed to your input function.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">strategy = tf.distribute.TPUStrategy(...)
+with strategy.scope():
+  embedding = tf.tpu.experimental.embedding.TPUEmbedding(...)
+
+distributed_dataset = (
+    strategy.distribute_datasets_from_function(
+        dataset_fn=...,
+        options=tf.distribute.InputOptions(
+            experimental_prefetch_to_device=False))
+dataset_iterator = iter(distributed_dataset)
+
+@tf.function
+def training_step():
+  def tpu_step(tpu_features):
+    with tf.GradientTape() as tape:
+      activations = embedding.dequeue()
+      tape.watch(activations)
+
+      loss = ... #  some computation involving activations
+
+    embedding_gradients = tape.gradient(loss, activations)
+    embedding.apply_gradients(embedding_gradients)
+
+  embedding_features, tpu_features = next(dataset_iterator)
+  embedding.enqueue(embedding_features, training=True)
+  strategy.run(tpu_step, args=(embedding_features,))
+
+training_step()
+</pre>
+<blockquote class="note">
+<strong>Note:</strong><span> You should specify <code translate="no" dir="ltr">training=True</code> when using <code translate="no" dir="ltr">embedding.apply_gradients</code> as above and <code translate="no" dir="ltr">training=False</code> when not using <code translate="no" dir="ltr">embedding.apply_gradients</code> (e.g. for frozen embeddings or when doing evaluation).</span>
+</blockquote>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">features</code> </td> <td> A nested structure of <a href="../../../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a>s, <a href="../../../sparse/sparsetensor"><code translate="no" dir="ltr">tf.SparseTensor</code></a>s or <a href="../../../raggedtensor"><code translate="no" dir="ltr">tf.RaggedTensor</code></a>s, with the same structure as <code translate="no" dir="ltr">feature_config</code>. Inputs will be downcast to <a href="../../../../tf#int32"><code translate="no" dir="ltr">tf.int32</code></a>. Only one type out of <a href="../../../sparse/sparsetensor"><code translate="no" dir="ltr">tf.SparseTensor</code></a> or <a href="../../../raggedtensor"><code translate="no" dir="ltr">tf.RaggedTensor</code></a> is supported per call. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">weights</code> </td> <td> If not <code translate="no" dir="ltr">None</code>, a nested structure of <a href="../../../tensor"><code translate="no" dir="ltr">tf.Tensor</code></a>s, <a href="../../../sparse/sparsetensor"><code translate="no" dir="ltr">tf.SparseTensor</code></a>s or <a href="../../../raggedtensor"><code translate="no" dir="ltr">tf.RaggedTensor</code></a>s, matching the above, except that the tensors should be of float type (and they will be downcast to <a href="../../../../tf#float32"><code translate="no" dir="ltr">tf.float32</code></a>). For <a href="../../../sparse/sparsetensor"><code translate="no" dir="ltr">tf.SparseTensor</code></a>s we assume the <code translate="no" dir="ltr">indices</code> are the same for the parallel entries from <code translate="no" dir="ltr">features</code> and similarly for <a href="../../../raggedtensor"><code translate="no" dir="ltr">tf.RaggedTensor</code></a>s we assume the row_splits are the same. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">training</code> </td> <td> Defaults to <code translate="no" dir="ltr">True</code>. If <code translate="no" dir="ltr">False</code>, enqueue the batch as inference batch (forward pass only). Do not call <code translate="no" dir="ltr">apply_gradients</code> when this is <code translate="no" dir="ltr">False</code> as this may lead to a deadlock. name: A name for the underlying op. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> When called inside a strategy.run call and input is not directly taken from the args of the <code translate="no" dir="ltr">strategy.run</code> call. Also if the size of any sequence in <code translate="no" dir="ltr">features</code> does not match corresponding sequence in <code translate="no" dir="ltr">feature_config</code>. Similarly for <code translate="no" dir="ltr">weights</code>, if not <code translate="no" dir="ltr">None</code>. If batch size of features is unequal or different from a previous call. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">RuntimeError</code> </td> <td> When called inside a strategy.run call and inside XLA control flow. If batch_size is not able to be determined and build was not called. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">TypeError</code> </td> <td> If the type of any sequence in <code translate="no" dir="ltr">features</code> does not match corresponding sequence in <code translate="no" dir="ltr">feature_config</code>. Similarly for <code translate="no" dir="ltr">weights</code>, if not <code translate="no" dir="ltr">None</code>. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/tpu/experimental/embedding/TPUEmbedding" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/tpu/experimental/embedding/TPUEmbedding</a>
+  </p>
+</div>

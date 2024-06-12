@@ -1,0 +1,1342 @@
+# Automatic differentiation package - torch.autograd
+
+`torch.autograd` provides classes and functions implementing automatic
+differentiation of arbitrary scalar valued functions. It requires minimal
+changes to the existing code - you only need to declare `Tensor` s for which
+gradients should be computed with the `requires_grad=True` keyword. As of now,
+we only support autograd for floating point `Tensor` types ( half, float,
+double and bfloat16) and complex `Tensor` types (cfloat, cdouble).
+
+`torch.autograd.backward(tensors, grad_tensors=None, retain_graph=None,
+create_graph=False, grad_variables=None, inputs=None)` [source]
+
+    
+Computes the sum of gradients of given tensors w.r.t. graph leaves.
+
+The graph is differentiated using the chain rule. If any of `tensors` are non-
+scalar (i.e. their data has more than one element) and require gradient, then
+the Jacobian-vector product would be computed, in this case the function
+additionally requires specifying `grad_tensors`. It should be a sequence of
+matching length, that contains the “vector” in the Jacobian-vector product,
+usually the gradient of the differentiated function w.r.t. corresponding
+tensors (`None` is an acceptable value for all tensors that don’t need
+gradient tensors).
+
+This function accumulates gradients in the leaves - you might need to zero
+`.grad` attributes or set them to `None` before calling it. See Default
+gradient layouts for details on the memory layout of accumulated gradients.
+
+Note
+
+Using this method with `create_graph=True` will create a reference cycle
+between the parameter and its gradient which can cause a memory leak. We
+recommend using `autograd.grad` when creating the graph to avoid this. If you
+have to use this function, make sure to reset the `.grad` fields of your
+parameters to `None` after use to break the cycle and avoid the leak.
+
+Note
+
+If you run any forward ops, create `grad_tensors`, and/or call `backward` in a
+user-specified CUDA stream context, see Stream semantics of backward passes.
+
+Parameters
+
+    
+  * tensors (sequence of Tensor) – Tensors of which the derivative will be computed.
+  * grad_tensors (sequence of (Tensor or None)) – The “vector” in the Jacobian-vector product, usually gradients w.r.t. each element of corresponding tensors. None values can be specified for scalar Tensors or ones that don’t require grad. If a None value would be acceptable for all grad_tensors, then this argument is optional.
+  * retain_graph (bool, optional) – If `False`, the graph used to compute the grad will be freed. Note that in nearly all cases setting this option to `True` is not needed and often can be worked around in a much more efficient way. Defaults to the value of `create_graph`.
+  * create_graph (bool, optional) – If `True`, graph of the derivative will be constructed, allowing to compute higher order derivative products. Defaults to `False`.
+  * inputs (sequence of Tensor) – Inputs w.r.t. which the gradient will be accumulated into `.grad`. All other Tensors will be ignored. If not provided, the gradient is accumulated into all the leaf Tensors that were used to compute the attr::tensors. All the provided inputs must be leaf Tensors.
+
+`torch.autograd.grad(outputs, inputs, grad_outputs=None, retain_graph=None,
+create_graph=False, only_inputs=True, allow_unused=False)` [source]
+
+    
+Computes and returns the sum of gradients of outputs w.r.t. the inputs.
+
+`grad_outputs` should be a sequence of length matching `output` containing the
+“vector” in Jacobian-vector product, usually the pre-computed gradients w.r.t.
+each of the outputs. If an output doesn’t require_grad, then the gradient can
+be `None`).
+
+If `only_inputs` is `True`, the function will only return a list of gradients
+w.r.t the specified inputs. If it’s `False`, then gradient w.r.t. all
+remaining leaves will still be computed, and will be accumulated into their
+`.grad` attribute.
+
+Note
+
+If you run any forward ops, create `grad_outputs`, and/or call `grad` in a
+user-specified CUDA stream context, see Stream semantics of backward passes.
+
+Parameters
+
+    
+  * outputs (sequence of Tensor) – outputs of the differentiated function.
+  * inputs (sequence of Tensor) – Inputs w.r.t. which the gradient will be returned (and not accumulated into `.grad`).
+  * grad_outputs (sequence of Tensor) – The “vector” in the Jacobian-vector product. Usually gradients w.r.t. each output. None values can be specified for scalar Tensors or ones that don’t require grad. If a None value would be acceptable for all grad_tensors, then this argument is optional. Default: None.
+  * retain_graph (bool, optional) – If `False`, the graph used to compute the grad will be freed. Note that in nearly all cases setting this option to `True` is not needed and often can be worked around in a much more efficient way. Defaults to the value of `create_graph`.
+  * create_graph (bool, optional) – If `True`, graph of the derivative will be constructed, allowing to compute higher order derivative products. Default: `False`.
+  * allow_unused (bool, optional) – If `False`, specifying inputs that were not used when computing outputs (and therefore their grad is always zero) is an error. Defaults to `False`.
+
+## Functional higher level API
+
+Warning
+
+This API is in beta. Even though the function signatures are very unlikely to
+change, major improvements to performances are planned before we consider this
+stable.
+
+This section contains the higher level API for the autograd that builds on the
+basic API above and allows you to compute jacobians, hessians, etc.
+
+This API works with user-provided functions that take only Tensors as input
+and return only Tensors. If your function takes other arguments that are not
+Tensors or Tensors that don’t have requires_grad set, you can use a lambda to
+capture them. For example, for a function `f` that takes three inputs, a
+Tensor for which we want the jacobian, another tensor that should be
+considered constant and a boolean flag as `f(input, constant, flag=flag)` you
+can use it as `functional.jacobian(lambda x: f(x, constant, flag=flag),
+input)`.
+
+`torch.autograd.functional.jacobian(func, inputs, create_graph=False,
+strict=False, vectorize=False)` [source]
+
+    
+Function that computes the Jacobian of a given function.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a tuple of Tensors or a Tensor.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * create_graph (bool, optional) – If `True`, the Jacobian will be computed in a differentiable manner. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the jacobian for said inputs, which is the expected mathematical value. Defaults to `False`.
+  * vectorize (bool, optional) – This feature is experimental, please use at your own risk. When computing the jacobian, usually we invoke `autograd.grad` once per row of the jacobian. If this flag is `True`, we use the vmap prototype feature as the backend to vectorize calls to `autograd.grad` so we only invoke it once instead of once per row. This should lead to performance improvements in many use cases, however, due to this feature being incomplete, there may be performance cliffs. Please use `torch._C._debug_only_display_vmap_fallback_warnings(True)` to show any performance warnings and file us issues if warnings exist for your use case. Defaults to `False`.
+
+Returns
+
+    
+if there is a single input and output, this will be a single Tensor containing
+the Jacobian for the linearized inputs and output. If one of the two is a
+tuple, then the Jacobian will be a tuple of Tensors. If both of them are
+tuples, then the Jacobian will be a tuple of tuple of Tensors where
+`Jacobian[i][j]` will contain the Jacobian of the `i`th output and `j`th input
+and will have as size the concatenation of the sizes of the corresponding
+output and the corresponding input and will have same dtype and device as the
+corresponding input.
+
+Return type
+
+    
+Jacobian (Tensor or nested tuple of Tensors)
+
+#### Example
+
+    
+    >>> def exp_reducer(x):
+    ...   return x.exp().sum(dim=1)
+    >>> inputs = torch.rand(2, 2)
+    >>> jacobian(exp_reducer, inputs)
+    tensor([[[1.4917, 2.4352],
+             [0.0000, 0.0000]],
+            [[0.0000, 0.0000],
+             [2.4369, 2.3799]]])
+    
+    
+    >>> jacobian(exp_reducer, inputs, create_graph=True)
+    tensor([[[1.4917, 2.4352],
+             [0.0000, 0.0000]],
+            [[0.0000, 0.0000],
+             [2.4369, 2.3799]]], grad_fn=<ViewBackward>)
+    
+    
+    >>> def exp_adder(x, y):
+    ...   return 2 * x.exp() + 3 * y
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> jacobian(exp_adder, inputs)
+    (tensor([[2.8052, 0.0000],
+            [0.0000, 3.3963]]),
+     tensor([[3., 0.],
+             [0., 3.]]))
+    
+`torch.autograd.functional.hessian(func, inputs, create_graph=False,
+strict=False, vectorize=False)` [source]
+
+    
+Function that computes the Hessian of a given scalar function.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a Tensor with a single element.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * create_graph (bool, optional) – If `True`, the Hessian will be computed in a differentiable manner. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the hessian for said inputs, which is the expected mathematical value. Defaults to `False`.
+  * vectorize (bool, optional) – This feature is experimental, please use at your own risk. When computing the hessian, usually we invoke `autograd.grad` once per row of the hessian. If this flag is `True`, we use the vmap prototype feature as the backend to vectorize calls to `autograd.grad` so we only invoke it once instead of once per row. This should lead to performance improvements in many use cases, however, due to this feature being incomplete, there may be performance cliffs. Please use `torch._C._debug_only_display_vmap_fallback_warnings(True)` to show any performance warnings and file us issues if warnings exist for your use case. Defaults to `False`.
+
+Returns
+
+    
+if there is a single input, this will be a single Tensor containing the
+Hessian for the input. If it is a tuple, then the Hessian will be a tuple of
+tuples where `Hessian[i][j]` will contain the Hessian of the `i`th input and
+`j`th input with size the sum of the size of the `i`th input plus the size of
+the `j`th input. `Hessian[i][j]` will have the same dtype and device as the
+corresponding `i`th input.
+
+Return type
+
+    
+Hessian (Tensor or a tuple of tuple of Tensors)
+
+#### Example
+
+    
+    >>> def pow_reducer(x):
+    ...   return x.pow(3).sum()
+    >>> inputs = torch.rand(2, 2)
+    >>> hessian(pow_reducer, inputs)
+    tensor([[[[5.2265, 0.0000],
+              [0.0000, 0.0000]],
+             [[0.0000, 4.8221],
+              [0.0000, 0.0000]]],
+            [[[0.0000, 0.0000],
+              [1.9456, 0.0000]],
+             [[0.0000, 0.0000],
+              [0.0000, 3.2550]]]])
+    
+    
+    >>> hessian(pow_reducer, inputs, create_graph=True)
+    tensor([[[[5.2265, 0.0000],
+              [0.0000, 0.0000]],
+             [[0.0000, 4.8221],
+              [0.0000, 0.0000]]],
+            [[[0.0000, 0.0000],
+              [1.9456, 0.0000]],
+             [[0.0000, 0.0000],
+              [0.0000, 3.2550]]]], grad_fn=<ViewBackward>)
+    
+    
+    >>> def pow_adder_reducer(x, y):
+    ...   return (2 * x.pow(2) + 3 * y.pow(2)).sum()
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> hessian(pow_adder_reducer, inputs)
+    ((tensor([[4., 0.],
+              [0., 4.]]),
+      tensor([[0., 0.],
+              [0., 0.]])),
+     (tensor([[0., 0.],
+              [0., 0.]]),
+      tensor([[6., 0.],
+              [0., 6.]])))
+    
+`torch.autograd.functional.vjp(func, inputs, v=None, create_graph=False,
+strict=False)` [source]
+
+    
+Function that computes the dot product between a vector `v` and the Jacobian
+of the given function at the point given by the inputs.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a tuple of Tensors or a Tensor.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * v (tuple of Tensors or Tensor) – The vector for which the vector Jacobian product is computed. Must be the same size as the output of `func`. This argument is optional when the output of `func` contains a single element and (if it is not provided) will be set as a Tensor containing a single `1`.
+  * create_graph (bool, optional) – If `True`, both the output and result will be computed in a differentiable way. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the vjp for said inputs, which is the expected mathematical value. Defaults to `False`.
+
+Returns
+
+    
+tuple with:
+
+    
+func_output (tuple of Tensors or Tensor): output of `func(inputs)`
+
+vjp (tuple of Tensors or Tensor): result of the dot product with the same
+shape as the inputs.
+
+Return type
+
+    
+output (tuple)
+
+#### Example
+
+    
+    >>> def exp_reducer(x):
+    ...   return x.exp().sum(dim=1)
+    >>> inputs = torch.rand(4, 4)
+    >>> v = torch.ones(4)
+    >>> vjp(exp_reducer, inputs, v)
+    (tensor([5.7817, 7.2458, 5.7830, 6.7782]),
+     tensor([[1.4458, 1.3962, 1.3042, 1.6354],
+            [2.1288, 1.0652, 1.5483, 2.5035],
+            [2.2046, 1.1292, 1.1432, 1.3059],
+            [1.3225, 1.6652, 1.7753, 2.0152]]))
+    
+    
+    >>> vjp(exp_reducer, inputs, v, create_graph=True)
+    (tensor([5.7817, 7.2458, 5.7830, 6.7782], grad_fn=<SumBackward1>),
+     tensor([[1.4458, 1.3962, 1.3042, 1.6354],
+            [2.1288, 1.0652, 1.5483, 2.5035],
+            [2.2046, 1.1292, 1.1432, 1.3059],
+            [1.3225, 1.6652, 1.7753, 2.0152]], grad_fn=<MulBackward0>))
+    
+    
+    >>> def adder(x, y):
+    ...   return 2 * x + 3 * y
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> v = torch.ones(2)
+    >>> vjp(adder, inputs, v)
+    (tensor([2.4225, 2.3340]),
+     (tensor([2., 2.]), tensor([3., 3.])))
+    
+`torch.autograd.functional.jvp(func, inputs, v=None, create_graph=False,
+strict=False)` [source]
+
+    
+Function that computes the dot product between the Jacobian of the given
+function at the point given by the inputs and a vector `v`.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a tuple of Tensors or a Tensor.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * v (tuple of Tensors or Tensor) – The vector for which the Jacobian vector product is computed. Must be the same size as the input of `func`. This argument is optional when the input to `func` contains a single element and (if it is not provided) will be set as a Tensor containing a single `1`.
+  * create_graph (bool, optional) – If `True`, both the output and result will be computed in a differentiable way. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the jvp for said inputs, which is the expected mathematical value. Defaults to `False`.
+
+Returns
+
+    
+tuple with:
+
+    
+func_output (tuple of Tensors or Tensor): output of `func(inputs)`
+
+jvp (tuple of Tensors or Tensor): result of the dot product with the same
+shape as the output.
+
+Return type
+
+    
+output (tuple)
+
+#### Example
+
+    
+    >>> def exp_reducer(x):
+    ...   return x.exp().sum(dim=1)
+    >>> inputs = torch.rand(4, 4)
+    >>> v = torch.ones(4, 4)
+    >>> jvp(exp_reducer, inputs, v)
+    (tensor([6.3090, 4.6742, 7.9114, 8.2106]),
+     tensor([6.3090, 4.6742, 7.9114, 8.2106]))
+    
+    
+    >>> jvp(exp_reducer, inputs, v, create_graph=True)
+    (tensor([6.3090, 4.6742, 7.9114, 8.2106], grad_fn=<SumBackward1>),
+     tensor([6.3090, 4.6742, 7.9114, 8.2106], grad_fn=<SqueezeBackward1>))
+    
+    
+    >>> def adder(x, y):
+    ...   return 2 * x + 3 * y
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> v = (torch.ones(2), torch.ones(2))
+    >>> jvp(adder, inputs, v)
+    (tensor([2.2399, 2.5005]),
+     tensor([5., 5.]))
+    
+Note
+
+The jvp is currently computed by using the backward of the backward (sometimes
+called the double backwards trick) as we don’t have support for forward mode
+AD in PyTorch at the moment.
+
+`torch.autograd.functional.vhp(func, inputs, v=None, create_graph=False,
+strict=False)` [source]
+
+    
+Function that computes the dot product between a vector `v` and the Hessian of
+a given scalar function at the point given by the inputs.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a Tensor with a single element.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * v (tuple of Tensors or Tensor) – The vector for which the vector Hessian product is computed. Must be the same size as the input of `func`. This argument is optional when `func`’s input contains a single element and (if it is not provided) will be set as a Tensor containing a single `1`.
+  * create_graph (bool, optional) – If `True`, both the output and result will be computed in a differentiable way. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the vhp for said inputs, which is the expected mathematical value. Defaults to `False`.
+
+Returns
+
+    
+tuple with:
+
+    
+func_output (tuple of Tensors or Tensor): output of `func(inputs)`
+
+vhp (tuple of Tensors or Tensor): result of the dot product with the same
+shape as the inputs.
+
+Return type
+
+    
+output (tuple)
+
+#### Example
+
+    
+    >>> def pow_reducer(x):
+    ...   return x.pow(3).sum()
+    >>> inputs = torch.rand(2, 2)
+    >>> v = torch.ones(2, 2)
+    >>> vhp(pow_reducer, inputs, v)
+    (tensor(0.5591),
+     tensor([[1.0689, 1.2431],
+             [3.0989, 4.4456]]))
+    >>> vhp(pow_reducer, inputs, v, create_graph=True)
+    (tensor(0.5591, grad_fn=<SumBackward0>),
+     tensor([[1.0689, 1.2431],
+             [3.0989, 4.4456]], grad_fn=<MulBackward0>))
+    >>> def pow_adder_reducer(x, y):
+    ...   return (2 * x.pow(2) + 3 * y.pow(2)).sum()
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> v = (torch.zeros(2), torch.ones(2))
+    >>> vhp(pow_adder_reducer, inputs, v)
+    (tensor(4.8053),
+     (tensor([0., 0.]),
+      tensor([6., 6.])))
+    
+`torch.autograd.functional.hvp(func, inputs, v=None, create_graph=False,
+strict=False)` [source]
+
+    
+Function that computes the dot product between the Hessian of a given scalar
+function and a vector `v` at the point given by the inputs.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a Tensor with a single element.
+  * inputs (tuple of Tensors or Tensor) – inputs to the function `func`.
+  * v (tuple of Tensors or Tensor) – The vector for which the Hessian vector product is computed. Must be the same size as the input of `func`. This argument is optional when `func`’s input contains a single element and (if it is not provided) will be set as a Tensor containing a single `1`.
+  * create_graph (bool, optional) – If `True`, both the output and result will be computed in a differentiable way. Note that when `strict` is `False`, the result can not require gradients or be disconnected from the inputs. Defaults to `False`.
+  * strict (bool, optional) – If `True`, an error will be raised when we detect that there exists an input such that all the outputs are independent of it. If `False`, we return a Tensor of zeros as the hvp for said inputs, which is the expected mathematical value. Defaults to `False`.
+
+Returns
+
+    
+tuple with:
+
+    
+func_output (tuple of Tensors or Tensor): output of `func(inputs)`
+
+hvp (tuple of Tensors or Tensor): result of the dot product with the same
+shape as the inputs.
+
+Return type
+
+    
+output (tuple)
+
+#### Example
+
+    
+    >>> def pow_reducer(x):
+    ...   return x.pow(3).sum()
+    >>> inputs = torch.rand(2, 2)
+    >>> v = torch.ones(2, 2)
+    >>> hvp(pow_reducer, inputs, v)
+    (tensor(0.1448),
+     tensor([[2.0239, 1.6456],
+             [2.4988, 1.4310]]))
+    
+    
+    >>> hvp(pow_reducer, inputs, v, create_graph=True)
+    (tensor(0.1448, grad_fn=<SumBackward0>),
+     tensor([[2.0239, 1.6456],
+             [2.4988, 1.4310]], grad_fn=<MulBackward0>))
+    
+    
+    >>> def pow_adder_reducer(x, y):
+    ...   return (2 * x.pow(2) + 3 * y.pow(2)).sum()
+    >>> inputs = (torch.rand(2), torch.rand(2))
+    >>> v = (torch.zeros(2), torch.ones(2))
+    >>> hvp(pow_adder_reducer, inputs, v)
+    (tensor(2.3030),
+     (tensor([0., 0.]),
+      tensor([6., 6.])))
+    
+Note
+
+This function is significantly slower than `vhp` due to backward mode AD
+constraints. If your functions is twice continuously differentiable, then hvp
+= vhp.t(). So if you know that your function satisfies this condition, you
+should use vhp instead that is much faster with the current implementation.
+
+## Locally disabling gradient computation
+
+`class torch.autograd.no_grad` [source]
+
+    
+Context-manager that disabled gradient calculation.
+
+Disabling gradient calculation is useful for inference, when you are sure that
+you will not call `Tensor.backward()`. It will reduce memory consumption for
+computations that would otherwise have `requires_grad=True`.
+
+In this mode, the result of every computation will have `requires_grad=False`,
+even when the inputs have `requires_grad=True`.
+
+This context manager is thread local; it will not affect computation in other
+threads.
+
+Also functions as a decorator. (Make sure to instantiate with parenthesis.)
+
+Example:
+
+    
+    >>> x = torch.tensor([1], requires_grad=True)
+    >>> with torch.no_grad():
+    ...   y = x * 2
+    >>> y.requires_grad
+    False
+    >>> @torch.no_grad()
+    ... def doubler(x):
+    ...     return x * 2
+    >>> z = doubler(x)
+    >>> z.requires_grad
+    False
+    
+`class torch.autograd.enable_grad` [source]
+
+    
+Context-manager that enables gradient calculation.
+
+Enables gradient calculation, if it has been disabled via `no_grad` or
+`set_grad_enabled`.
+
+This context manager is thread local; it will not affect computation in other
+threads.
+
+Also functions as a decorator. (Make sure to instantiate with parenthesis.)
+
+Example:
+
+    
+    >>> x = torch.tensor([1], requires_grad=True)
+    >>> with torch.no_grad():
+    ...   with torch.enable_grad():
+    ...     y = x * 2
+    >>> y.requires_grad
+    True
+    >>> y.backward()
+    >>> x.grad
+    >>> @torch.enable_grad()
+    ... def doubler(x):
+    ...     return x * 2
+    >>> with torch.no_grad():
+    ...     z = doubler(x)
+    >>> z.requires_grad
+    True
+    
+`class torch.autograd.set_grad_enabled(mode)` [source]
+
+    
+Context-manager that sets gradient calculation to on or off.
+
+`set_grad_enabled` will enable or disable grads based on its argument `mode`.
+It can be used as a context-manager or as a function.
+
+This context manager is thread local; it will not affect computation in other
+threads.
+
+Parameters
+
+    
+mode (bool) – Flag whether to enable grad (`True`), or disable (`False`). This
+can be used to conditionally enable gradients.
+
+Example:
+
+    
+    >>> x = torch.tensor([1], requires_grad=True)
+    >>> is_train = False
+    >>> with torch.set_grad_enabled(is_train):
+    ...   y = x * 2
+    >>> y.requires_grad
+    False
+    >>> torch.set_grad_enabled(True)
+    >>> y = x * 2
+    >>> y.requires_grad
+    True
+    >>> torch.set_grad_enabled(False)
+    >>> y = x * 2
+    >>> y.requires_grad
+    False
+    
+## Default gradient layouts
+
+When a non-sparse `param` receives a non-sparse gradient during
+`torch.autograd.backward()` or `torch.Tensor.backward()` `param.grad` is
+accumulated as follows.
+
+If `param.grad` is initially `None`:
+
+  1. If `param`’s memory is non-overlapping and dense, `.grad` is created with strides matching `param` (thus matching `param`’s layout).
+  2. Otherwise, `.grad` is created with rowmajor-contiguous strides.
+
+If `param` already has a non-sparse `.grad` attribute:
+
+  3. If `create_graph=False`, `backward()` accumulates into `.grad` in-place, which preserves its strides.
+  4. If `create_graph=True`, `backward()` replaces `.grad` with a new tensor `.grad + new grad`, which attempts (but does not guarantee) matching the preexisting `.grad`’s strides.
+
+The default behavior (letting `.grad`s be `None` before the first
+`backward()`, such that their layout is created according to 1 or 2, and
+retained over time according to 3 or 4) is recommended for best performance.
+Calls to `model.zero_grad()` or `optimizer.zero_grad()` will not affect
+`.grad` layouts.
+
+In fact, resetting all `.grad`s to `None` before each accumulation phase,
+e.g.:
+
+    
+    for iterations...
+        ...
+        for param in model.parameters():
+            param.grad = None
+        loss.backward()
+    
+such that they’re recreated according to 1 or 2 every time, is a valid
+alternative to `model.zero_grad()` or `optimizer.zero_grad()` that may improve
+performance for some networks.
+
+### Manual gradient layouts
+
+If you need manual control over `.grad`’s strides, assign `param.grad =` a
+zeroed tensor with desired strides before the first `backward()`, and never
+reset it to `None`. 3 guarantees your layout is preserved as long as
+`create_graph=False`. 4 indicates your layout is likely preserved even if
+`create_graph=True`.
+
+## In-place operations on Tensors
+
+Supporting in-place operations in autograd is a hard matter, and we discourage
+their use in most cases. Autograd’s aggressive buffer freeing and reuse makes
+it very efficient and there are very few occasions when in-place operations
+actually lower memory usage by any significant amount. Unless you’re operating
+under heavy memory pressure, you might never need to use them.
+
+### In-place correctness checks
+
+All `Tensor` s keep track of in-place operations applied to them, and if the
+implementation detects that a tensor was saved for backward in one of the
+functions, but it was modified in-place afterwards, an error will be raised
+once backward pass is started. This ensures that if you’re using in-place
+functions and not seeing any errors, you can be sure that the computed
+gradients are correct.
+
+## Variable (deprecated)
+
+Warning
+
+The Variable API has been deprecated: Variables are no longer necessary to use
+autograd with tensors. Autograd automatically supports Tensors with
+`requires_grad` set to `True`. Below please find a quick guide on what has
+changed:
+
+  * `Variable(tensor)` and `Variable(tensor, requires_grad)` still work as expected, but they return Tensors instead of Variables.
+  * `var.data` is the same thing as `tensor.data`.
+  * Methods such as `var.backward(), var.detach(), var.register_hook()` now work on tensors with the same method names.
+
+In addition, one can now create tensors with `requires_grad=True` using
+factory methods such as `torch.randn()`, `torch.zeros()`, `torch.ones()`, and
+others like the following:
+
+`autograd_tensor = torch.randn((2, 3, 4), requires_grad=True)`
+
+## Tensor autograd functions
+
+`class torch.Tensor`
+
+    
+`grad`
+
+    
+This attribute is `None` by default and becomes a Tensor the first time a call
+to `backward()` computes gradients for `self`. The attribute will then contain
+the gradients computed and future calls to `backward()` will accumulate (add)
+gradients into it.
+
+`requires_grad`
+
+    
+Is `True` if gradients need to be computed for this Tensor, `False` otherwise.
+
+Note
+
+The fact that gradients need to be computed for a Tensor do not mean that the
+`grad` attribute will be populated, see `is_leaf` for more details.
+
+`is_leaf`
+
+    
+All Tensors that have `requires_grad` which is `False` will be leaf Tensors by
+convention.
+
+For Tensors that have `requires_grad` which is `True`, they will be leaf
+Tensors if they were created by the user. This means that they are not the
+result of an operation and so `grad_fn` is None.
+
+Only leaf Tensors will have their `grad` populated during a call to
+`backward()`. To get `grad` populated for non-leaf Tensors, you can use
+`retain_grad()`.
+
+Example:
+
+    
+    >>> a = torch.rand(10, requires_grad=True)
+    >>> a.is_leaf
+    True
+    >>> b = torch.rand(10, requires_grad=True).cuda()
+    >>> b.is_leaf
+    False
+    # b was created by the operation that cast a cpu Tensor into a cuda Tensor
+    >>> c = torch.rand(10, requires_grad=True) + 2
+    >>> c.is_leaf
+    False
+    # c was created by the addition operation
+    >>> d = torch.rand(10).cuda()
+    >>> d.is_leaf
+    True
+    # d does not require gradients and so has no operation creating it (that is tracked by the autograd engine)
+    >>> e = torch.rand(10).cuda().requires_grad_()
+    >>> e.is_leaf
+    True
+    # e requires gradients and has no operations creating it
+    >>> f = torch.rand(10, requires_grad=True, device="cuda")
+    >>> f.is_leaf
+    True
+    # f requires grad, has no operation creating it
+    
+`backward(gradient=None, retain_graph=None, create_graph=False, inputs=None)`
+[source]
+
+    
+Computes the gradient of current tensor w.r.t. graph leaves.
+
+The graph is differentiated using the chain rule. If the tensor is non-scalar
+(i.e. its data has more than one element) and requires gradient, the function
+additionally requires specifying `gradient`. It should be a tensor of matching
+type and location, that contains the gradient of the differentiated function
+w.r.t. `self`.
+
+This function accumulates gradients in the leaves - you might need to zero
+`.grad` attributes or set them to `None` before calling it. See Default
+gradient layouts for details on the memory layout of accumulated gradients.
+
+Note
+
+If you run any forward ops, create `gradient`, and/or call `backward` in a
+user-specified CUDA stream context, see Stream semantics of backward passes.
+
+Parameters
+
+    
+  * gradient (Tensor or None) – Gradient w.r.t. the tensor. If it is a tensor, it will be automatically converted to a Tensor that does not require grad unless `create_graph` is True. None values can be specified for scalar Tensors or ones that don’t require grad. If a None value would be acceptable then this argument is optional.
+  * retain_graph (bool, optional) – If `False`, the graph used to compute the grads will be freed. Note that in nearly all cases setting this option to True is not needed and often can be worked around in a much more efficient way. Defaults to the value of `create_graph`.
+  * create_graph (bool, optional) – If `True`, graph of the derivative will be constructed, allowing to compute higher order derivative products. Defaults to `False`.
+  * inputs (sequence of Tensor) – Inputs w.r.t. which the gradient will be accumulated into `.grad`. All other Tensors will be ignored. If not provided, the gradient is accumulated into all the leaf Tensors that were used to compute the attr::tensors. All the provided inputs must be leaf Tensors.
+
+`detach()`
+
+    
+Returns a new Tensor, detached from the current graph.
+
+The result will never require gradient.
+
+Note
+
+Returned Tensor shares the same storage with the original one. In-place
+modifications on either of them will be seen, and may trigger errors in
+correctness checks. IMPORTANT NOTE: Previously, in-place size / stride /
+storage changes (such as `resize_` / `resize_as_` / `set_` / `transpose_`) to
+the returned tensor also update the original tensor. Now, these in-place
+changes will not update the original tensor anymore, and will instead trigger
+an error. For sparse tensors: In-place indices / values changes (such as
+`zero_` / `copy_` / `add_`) to the returned tensor will not update the
+original tensor anymore, and will instead trigger an error.
+
+`detach_()`
+
+    
+Detaches the Tensor from the graph that created it, making it a leaf. Views
+cannot be detached in-place.
+
+`register_hook(hook)` [source]
+
+    
+Registers a backward hook.
+
+The hook will be called every time a gradient with respect to the Tensor is
+computed. The hook should have the following signature:
+
+    
+    hook(grad) -> Tensor or None
+    
+The hook should not modify its argument, but it can optionally return a new
+gradient which will be used in place of `grad`.
+
+This function returns a handle with a method `handle.remove()` that removes
+the hook from the module.
+
+Example:
+
+    
+    >>> v = torch.tensor([0., 0., 0.], requires_grad=True)
+    >>> h = v.register_hook(lambda grad: grad * 2)  # double the gradient
+    >>> v.backward(torch.tensor([1., 2., 3.]))
+    >>> v.grad
+    
+     2
+     4
+     6
+    [torch.FloatTensor of size (3,)]
+    
+    >>> h.remove()  # removes the hook
+    
+`retain_grad()` [source]
+
+    
+Enables .grad attribute for non-leaf Tensors.
+
+## Function
+
+`class torch.autograd.Function` [source]
+
+    
+Records operation history and defines formulas for differentiating ops.
+
+See the Note on extending the autograd engine for more details on how to use
+this class: https://pytorch.org/docs/stable/notes/extending.html#extending-
+torch-autograd
+
+Every operation performed on `Tensor` s creates a new function object, that
+performs the computation, and records that it happened. The history is
+retained in the form of a DAG of functions, with edges denoting data
+dependencies (`input <- output`). Then, when backward is called, the graph is
+processed in the topological ordering, by calling `backward()` methods of each
+`Function` object, and passing returned gradients on to next `Function` s.
+
+Normally, the only way users interact with functions is by creating subclasses
+and defining new operations. This is a recommended way of extending
+torch.autograd.
+
+Examples:
+
+    
+    >>> class Exp(Function):
+    >>>
+    >>>     @staticmethod
+    >>>     def forward(ctx, i):
+    >>>         result = i.exp()
+    >>>         ctx.save_for_backward(result)
+    >>>         return result
+    >>>
+    >>>     @staticmethod
+    >>>     def backward(ctx, grad_output):
+    >>>         result, = ctx.saved_tensors
+    >>>         return grad_output * result
+    >>>
+    >>> #Use it by calling the apply method:
+    >>> output = Exp.apply(input)
+    
+`static backward(ctx, *grad_outputs)` [source]
+
+    
+Defines a formula for differentiating the operation.
+
+This function is to be overridden by all subclasses.
+
+It must accept a context `ctx` as the first argument, followed by as many
+outputs did `forward()` return, and it should return as many tensors, as there
+were inputs to `forward()`. Each argument is the gradient w.r.t the given
+output, and each returned value should be the gradient w.r.t. the
+corresponding input.
+
+The context can be used to retrieve tensors saved during the forward pass. It
+also has an attribute `ctx.needs_input_grad` as a tuple of booleans
+representing whether each input needs gradient. E.g., `backward()` will have
+`ctx.needs_input_grad[0] = True` if the first input to `forward()` needs
+gradient computated w.r.t. the output.
+
+`static forward(ctx, *args, **kwargs)` [source]
+
+    
+Performs the operation.
+
+This function is to be overridden by all subclasses.
+
+It must accept a context ctx as the first argument, followed by any number of
+arguments (tensors or other types).
+
+The context can be used to store tensors that can be then retrieved during the
+backward pass.
+
+## Context method mixins
+
+When creating a new `Function`, the following methods are available to `ctx`.
+
+`class torch.autograd.function._ContextMethodMixin` [source]
+
+    
+`mark_dirty(*args)` [source]
+
+    
+Marks given tensors as modified in an in-place operation.
+
+This should be called at most once, only from inside the `forward()` method,
+and all arguments should be inputs.
+
+Every tensor that’s been modified in-place in a call to `forward()` should be
+given to this function, to ensure correctness of our checks. It doesn’t matter
+whether the function is called before or after modification.
+
+`mark_non_differentiable(*args)` [source]
+
+    
+Marks outputs as non-differentiable.
+
+This should be called at most once, only from inside the `forward()` method,
+and all arguments should be outputs.
+
+This will mark outputs as not requiring gradients, increasing the efficiency
+of backward computation. You still need to accept a gradient for each output
+in `backward()`, but it’s always going to be a zero tensor with the same shape
+as the shape of a corresponding output.
+
+This is used e.g. for indices returned from a max `Function`.
+
+`save_for_backward(*tensors)` [source]
+
+    
+Saves given tensors for a future call to `backward()`.
+
+This should be called at most once, and only from inside the `forward()`
+method.
+
+Later, saved tensors can be accessed through the `saved_tensors` attribute.
+Before returning them to the user, a check is made to ensure they weren’t used
+in any in-place operation that modified their content.
+
+Arguments can also be `None`.
+
+`set_materialize_grads(value)` [source]
+
+    
+Sets whether to materialize output grad tensors. Default is true.
+
+This should be called only from inside the `forward()` method
+
+If true, undefined output grad tensors will be expanded to tensors full of
+zeros prior to calling the `backward()` method.
+
+## Numerical gradient checking
+
+`torch.autograd.gradcheck(func, inputs, eps=1e-06, atol=1e-05, rtol=0.001,
+raise_exception=True, check_sparse_nnz=False, nondet_tol=0.0,
+check_undefined_grad=True, check_grad_dtypes=False, check_batched_grad=False)`
+[source]
+
+    
+Check gradients computed via small finite differences against analytical
+gradients w.r.t. tensors in `inputs` that are of floating point or complex
+type and with `requires_grad=True`.
+
+The check between numerical and analytical gradients uses `allclose()`.
+
+For complex functions, no notion of Jacobian exists. Gradcheck verifies if the
+numerical and analytical values of Wirtinger and Conjugate Wirtinger
+derivative are consistent. The gradient computation is done under the
+assumption that the overall function has a real valued output. For functions
+with complex output, gradcheck compares the numerical and analytical gradients
+for two values of `grad_output`: 1 and 1j. For more details, check out
+Autograd for Complex Numbers.
+
+Note
+
+The default values are designed for `input` of double precision. This check
+will likely fail if `input` is of less precision, e.g., `FloatTensor`.
+
+Warning
+
+If any checked tensor in `input` has overlapping memory, i.e., different
+indices pointing to the same memory address (e.g., from `torch.expand()`),
+this check will likely fail because the numerical gradients computed by point
+perturbation at such indices will change values at all other indices that
+share the same memory address.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a Tensor or a tuple of Tensors
+  * inputs (tuple of Tensor or Tensor) – inputs to the function
+  * eps (float, optional) – perturbation for finite differences
+  * atol (float, optional) – absolute tolerance
+  * rtol (float, optional) – relative tolerance
+  * raise_exception (bool, optional) – indicating whether to raise an exception if the check fails. The exception gives more information about the exact nature of the failure. This is helpful when debugging gradchecks.
+  * check_sparse_nnz (bool, optional) – if True, gradcheck allows for SparseTensor input, and for any SparseTensor at input, gradcheck will perform check at nnz positions only.
+  * nondet_tol (float, optional) – tolerance for non-determinism. When running identical inputs through the differentiation, the results must either match exactly (default, 0.0) or be within this tolerance.
+  * check_undefined_grad (bool, optional) – if True, check if undefined output grads are supported and treated as zeros, for `Tensor` outputs.
+  * check_batched_grad (bool, optional) – if True, check if we can compute batched gradients using prototype vmap support. Defaults to False.
+
+Returns
+
+    
+True if all differences satisfy allclose condition
+
+`torch.autograd.gradgradcheck(func, inputs, grad_outputs=None, eps=1e-06,
+atol=1e-05, rtol=0.001, gen_non_contig_grad_outputs=False,
+raise_exception=True, nondet_tol=0.0, check_undefined_grad=True,
+check_grad_dtypes=False, check_batched_grad=False)` [source]
+
+    
+Check gradients of gradients computed via small finite differences against
+analytical gradients w.r.t. tensors in `inputs` and `grad_outputs` that are of
+floating point or complex type and with `requires_grad=True`.
+
+This function checks that backpropagating through the gradients computed to
+the given `grad_outputs` are correct.
+
+The check between numerical and analytical gradients uses `allclose()`.
+
+Note
+
+The default values are designed for `input` and `grad_outputs` of double
+precision. This check will likely fail if they are of less precision, e.g.,
+`FloatTensor`.
+
+Warning
+
+If any checked tensor in `input` and `grad_outputs` has overlapping memory,
+i.e., different indices pointing to the same memory address (e.g., from
+`torch.expand()`), this check will likely fail because the numerical gradients
+computed by point perturbation at such indices will change values at all other
+indices that share the same memory address.
+
+Parameters
+
+    
+  * func (function) – a Python function that takes Tensor inputs and returns a Tensor or a tuple of Tensors
+  * inputs (tuple of Tensor or Tensor) – inputs to the function
+  * grad_outputs (tuple of Tensor or Tensor, optional) – The gradients with respect to the function’s outputs.
+  * eps (float, optional) – perturbation for finite differences
+  * atol (float, optional) – absolute tolerance
+  * rtol (float, optional) – relative tolerance
+  * gen_non_contig_grad_outputs (bool, optional) – if `grad_outputs` is `None` and `gen_non_contig_grad_outputs` is `True`, the randomly generated gradient outputs are made to be noncontiguous
+  * raise_exception (bool, optional) – indicating whether to raise an exception if the check fails. The exception gives more information about the exact nature of the failure. This is helpful when debugging gradchecks.
+  * nondet_tol (float, optional) – tolerance for non-determinism. When running identical inputs through the differentiation, the results must either match exactly (default, 0.0) or be within this tolerance. Note that a small amount of nondeterminism in the gradient will lead to larger inaccuracies in the second derivative.
+  * check_undefined_grad (bool, optional) – if True, check if undefined output grads are supported and treated as zeros
+  * check_batched_grad (bool, optional) – if True, check if we can compute batched gradients using prototype vmap support. Defaults to False.
+
+Returns
+
+    
+True if all differences satisfy allclose condition
+
+## Profiler
+
+Autograd includes a profiler that lets you inspect the cost of different
+operators inside your model - both on the CPU and GPU. There are two modes
+implemented at the moment - CPU-only using `profile`. and nvprof based
+(registers both CPU and GPU activity) using `emit_nvtx`.
+
+`class torch.autograd.profiler.profile(enabled=True, *, use_cuda=False,
+record_shapes=False, with_flops=False, profile_memory=False, with_stack=False,
+use_kineto=False, use_cpu=True)` [source]
+
+    
+Context manager that manages autograd profiler state and holds a summary of
+results. Under the hood it just records events of functions being executed in
+C++ and exposes those events to Python. You can wrap any code into it and it
+will only report runtime of PyTorch functions. Note: profiler is thread local
+and is automatically propagated into the async tasks
+
+Parameters
+
+    
+  * enabled (bool, optional) – Setting this to False makes this context manager a no-op.
+  * use_cuda (bool, optional) – Enables timing of CUDA events as well using the cudaEvent API. Adds approximately 4us of overhead to each tensor operation.
+  * record_shapes (bool, optional) – If shapes recording is set, information about input dimensions will be collected. This allows one to see which dimensions have been used under the hood and further group by them using prof.key_averages(group_by_input_shape=True). Please note that shape recording might skew your profiling data. It is recommended to use separate runs with and without shape recording to validate the timing. Most likely the skew will be negligible for bottom most events (in a case of nested function calls). But for higher level functions the total self cpu time might be artificially increased because of the shape collection.
+  * with_flops (bool, optional) – If with_flops is set, the profiler will estimate the FLOPS (floating pointer operations per second) value using the operator’s input shape and total time. This allows one to estimate the hardware performance. Currently, this option only works for the matrix multiplication and 2D convolution operators.
+  * profile_memory (bool, optional) – track tensor memory allocation/deallocation.
+  * with_stack (bool, optional) – record source information (file and line number) for the ops.
+  * use_kineto (bool, optional) – experimental, enable profiling with Kineto profiler.
+  * use_cpu (bool, optional) – profile CPU events; setting to `False` requires `use_kineto=True` and can be used to lower the overhead for GPU-only profiling.
+
+#### Example
+
+    
+    >>> x = torch.randn((1, 1), requires_grad=True)
+    >>> with torch.autograd.profiler.profile() as prof:
+    >>>     for _ in range(100):  # any normal python code, really!
+    >>>         y = x ** 2
+    >>          y.backward()
+    >>> # NOTE: some columns were removed for brevity
+    >>> print(prof.key_averages().table(sort_by="self_cpu_time_total"))
+    -----------------------------------  ---------------  ---------------  ---------------
+    Name                                 Self CPU total   CPU time avg     Number of Calls
+    -----------------------------------  ---------------  ---------------  ---------------
+    mul                                  32.048ms         32.048ms         200
+    pow                                  27.041ms         27.041ms         200
+    PowBackward0                         9.727ms          55.483ms         100
+    torch::autograd::AccumulateGrad      9.148ms          9.148ms          100
+    torch::autograd::GraphRoot           691.816us        691.816us        100
+    -----------------------------------  ---------------  ---------------  ---------------
+    
+`export_chrome_trace(path)` [source]
+
+    
+Exports an EventList as a Chrome tracing tools file.
+
+The checkpoint can be later loaded and inspected under `chrome://tracing` URL.
+
+Parameters
+
+    
+path (str) – Path where the trace will be written.
+
+`key_averages(group_by_input_shape=False, group_by_stack_n=0)` [source]
+
+    
+Averages all function events over their keys.
+
+Parameters
+
+    
+  * group_by_input_shapes – group entries by
+  * name, input shapes) rather than just event name. ((event) – 
+  * is useful to see which input shapes contribute to the runtime (This) – 
+  * most and may help with size-specific optimizations or (the) – 
+  * the best candidates for quantization (choosing) – 
+  * group_by_stack_n – group by top n stack trace entries
+
+Returns
+
+    
+An EventList containing FunctionEventAvg objects.
+
+`property self_cpu_time_total`
+
+    
+Returns total time spent on CPU obtained as a sum of all self times across all
+the events.
+
+`table(sort_by=None, row_limit=100, max_src_column_width=75, header=None,
+top_level_events_only=False)` [source]
+
+    
+Prints an EventList as a nicely formatted table.
+
+Parameters
+
+    
+  * sort_by (str, optional) – Attribute used to sort entries. By default they are printed in the same order as they were registered. Valid keys include: `cpu_time`, `cuda_time`, `cpu_time_total`, `cuda_time_total`, `cpu_memory_usage`, `cuda_memory_usage`, `self_cpu_memory_usage`, `self_cuda_memory_usage`, `count`.
+  * top_level_events_only (bool, optional) – Boolean flag to determine the selection of events to display. If true, the profiler will only display events at top level like top-level invocation of python `lstm`, python `add` or other functions, nested events like low-level cpu/cuda ops events are omitted for profiler result readability.
+
+Returns
+
+    
+A string containing the table.
+
+`total_average()` [source]
+
+    
+Averages all events.
+
+Returns
+
+    
+A FunctionEventAvg object.
+
+`class torch.autograd.profiler.emit_nvtx(enabled=True, record_shapes=False)`
+[source]
+
+    
+Context manager that makes every autograd operation emit an NVTX range.
+
+It is useful when running the program under nvprof:
+
+    
+    nvprof --profile-from-start off -o trace_name.prof -- <regular command here>
+    
+Unfortunately, there’s no way to force nvprof to flush the data it collected
+to disk, so for CUDA profiling one has to use this context manager to annotate
+nvprof traces and wait for the process to exit before inspecting them. Then,
+either NVIDIA Visual Profiler (nvvp) can be used to visualize the timeline, or
+`torch.autograd.profiler.load_nvprof()` can load the results for inspection
+e.g. in Python REPL.
+
+Parameters
+
+    
+  * enabled (bool, optional, default=True) – Setting `enabled=False` makes this context manager a no-op. Default: `True`.
+  * record_shapes (bool, optional, default=False) – If `record_shapes=True`, the nvtx range wrapping each autograd op will append information about the sizes of Tensor arguments received by that op, in the following format: `[[arg0.size(0), arg0.size(1), ...], [arg1.size(0), arg1.size(1), ...], ...]` Non-tensor arguments will be represented by `[]`. Arguments will be listed in the order they are received by the backend op. Please note that this order may not match the order in which those arguments were passed on the Python side. Also note that shape recording may increase the overhead of nvtx range creation.
+
+#### Example
+
+    
+    >>> with torch.cuda.profiler.profile():
+    ...     model(x) # Warmup CUDA memory allocator and profiler
+    ...     with torch.autograd.profiler.emit_nvtx():
+    ...         model(x)
+    
+Forward-backward correlation
+
+When viewing a profile created using `emit_nvtx` in the Nvidia Visual
+Profiler, correlating each backward-pass op with the corresponding forward-
+pass op can be difficult. To ease this task, `emit_nvtx` appends sequence
+number information to the ranges it generates.
+
+During the forward pass, each function range is decorated with `seq=<N>`.
+`seq` is a running counter, incremented each time a new backward Function
+object is created and stashed for backward. Thus, the `seq=<N>` annotation
+associated with each forward function range tells you that if a backward
+Function object is created by this forward function, the backward object will
+receive sequence number N. During the backward pass, the top-level range
+wrapping each C++ backward Function’s `apply()` call is decorated with
+`stashed seq=<M>`. `M` is the sequence number that the backward object was
+created with. By comparing `stashed seq` numbers in backward with `seq`
+numbers in forward, you can track down which forward op created each backward
+Function.
+
+Any functions executed during the backward pass are also decorated with
+`seq=<N>`. During default backward (with `create_graph=False`) this
+information is irrelevant, and in fact, `N` may simply be 0 for all such
+functions. Only the top-level ranges associated with backward Function
+objects’ `apply()` methods are useful, as a way to correlate these Function
+objects with the earlier forward pass.
+
+Double-backward
+
+If, on the other hand, a backward pass with `create_graph=True` is underway
+(in other words, if you are setting up for a double-backward), each function’s
+execution during backward is given a nonzero, useful `seq=<N>`. Those
+functions may themselves create Function objects to be executed later during
+double-backward, just as the original functions in the forward pass did. The
+relationship between backward and double-backward is conceptually the same as
+the relationship between forward and backward: The functions still emit
+current-sequence-number-tagged ranges, the Function objects they create still
+stash those sequence numbers, and during the eventual double-backward, the
+Function objects’ `apply()` ranges are still tagged with `stashed seq`
+numbers, which can be compared to `seq` numbers from the backward pass.
+
+`torch.autograd.profiler.load_nvprof(path)` [source]
+
+    
+Opens an nvprof trace file and parses autograd annotations.
+
+Parameters
+
+    
+path (str) – path to nvprof trace
+
+## Anomaly detection
+
+`class torch.autograd.detect_anomaly` [source]
+
+    
+Context-manager that enable anomaly detection for the autograd engine.
+
+This does two things:
+
+  * Running the forward pass with detection enabled will allow the backward pass to print the traceback of the forward operation that created the failing backward function.
+  * Any backward computation that generate “nan” value will raise an error.
+
+Warning
+
+This mode should be enabled only for debugging as the different tests will
+slow down your program execution.
+
+#### Example
+
+    
+    >>> import torch
+    >>> from torch import autograd
+    >>> class MyFunc(autograd.Function):
+    ...     @staticmethod
+    ...     def forward(ctx, inp):
+    ...         return inp.clone()
+    ...     @staticmethod
+    ...     def backward(ctx, gO):
+    ...         # Error during the backward pass
+    ...         raise RuntimeError("Some error in backward")
+    ...         return gO.clone()
+    >>> def run_fn(a):
+    ...     out = MyFunc.apply(a)
+    ...     return out.sum()
+    >>> inp = torch.rand(10, 10, requires_grad=True)
+    >>> out = run_fn(inp)
+    >>> out.backward()
+        Traceback (most recent call last):
+          File "<stdin>", line 1, in <module>
+          File "/your/pytorch/install/torch/tensor.py", line 93, in backward
+            torch.autograd.backward(self, gradient, retain_graph, create_graph)
+          File "/your/pytorch/install/torch/autograd/__init__.py", line 90, in backward
+            allow_unreachable=True)  # allow_unreachable flag
+          File "/your/pytorch/install/torch/autograd/function.py", line 76, in apply
+            return self._forward_cls.backward(self, *args)
+          File "<stdin>", line 8, in backward
+        RuntimeError: Some error in backward
+    >>> with autograd.detect_anomaly():
+    ...     inp = torch.rand(10, 10, requires_grad=True)
+    ...     out = run_fn(inp)
+    ...     out.backward()
+        Traceback of forward call that caused the error:
+          File "tmp.py", line 53, in <module>
+            out = run_fn(inp)
+          File "tmp.py", line 44, in run_fn
+            out = MyFunc.apply(a)
+        Traceback (most recent call last):
+          File "<stdin>", line 4, in <module>
+          File "/your/pytorch/install/torch/tensor.py", line 93, in backward
+            torch.autograd.backward(self, gradient, retain_graph, create_graph)
+          File "/your/pytorch/install/torch/autograd/__init__.py", line 90, in backward
+            allow_unreachable=True)  # allow_unreachable flag
+          File "/your/pytorch/install/torch/autograd/function.py", line 76, in apply
+            return self._forward_cls.backward(self, *args)
+          File "<stdin>", line 8, in backward
+        RuntimeError: Some error in backward
+    
+`class torch.autograd.set_detect_anomaly(mode)` [source]
+
+    
+Context-manager that sets the anomaly detection for the autograd engine on or
+off.
+
+`set_detect_anomaly` will enable or disable the autograd anomaly detection
+based on its argument `mode`. It can be used as a context-manager or as a
+function.
+
+See `detect_anomaly` above for details of the anomaly detection behaviour.
+
+Parameters
+
+    
+mode (bool) – Flag whether to enable anomaly detection (`True`), or disable
+(`False`).
+
+© 2019 Torch Contributors  
+Licensed under the 3-clause BSD License.  
+https://pytorch.org/docs/1.8.0/autograd.html
+
+  *[ISP]: Internet Service Provider
+  *[LIFO]: last-in, first-out
+  *[FIFO]: first-in, first-out
+

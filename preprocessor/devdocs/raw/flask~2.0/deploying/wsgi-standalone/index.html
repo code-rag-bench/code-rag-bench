@@ -1,0 +1,50 @@
+<h1>Standalone WSGI Containers</h1> <p>There are popular servers written in Python that contain WSGI applications and serve HTTP. These servers stand alone when they run; you can proxy to them from your web server. Note the section on <a class="reference internal" href="#deploying-proxy-setups"><span class="std std-ref">Proxy Setups</span></a> if you run into issues.</p>  <h2 id="gunicorn">Gunicorn</h2> <p><a class="reference external" href="https://gunicorn.org/">Gunicorn</a> ‘Green Unicorn’ is a WSGI HTTP Server for UNIX. It’s a pre-fork worker model ported from Ruby’s Unicorn project. It supports both <a class="reference external" href="https://eventlet.net/">eventlet</a> and <a class="reference external" href="https://greenlet.readthedocs.io/en/latest/">greenlet</a>. Running a Flask application on this server is quite simple:</p> <pre data-language="python">$ gunicorn myproject:app
+</pre> <p><a class="reference external" href="https://gunicorn.org/">Gunicorn</a> provides many command-line options – see <code>gunicorn -h</code>. For example, to run a Flask application with 4 worker processes (<code>-w
+4</code>) binding to localhost port 4000 (<code>-b 127.0.0.1:4000</code>):</p> <pre data-language="python">$ gunicorn -w 4 -b 127.0.0.1:4000 myproject:app
+</pre> <p>The <code>gunicorn</code> command expects the names of your application module or package and the application instance within the module. If you use the application factory pattern, you can pass a call to that:</p> <pre data-language="python">$ gunicorn "myproject:create_app()"
+</pre>   <h2 id="uwsgi">uWSGI</h2> <p><a class="reference external" href="https://uwsgi-docs.readthedocs.io/en/latest/">uWSGI</a> is a fast application server written in C. It is very configurable which makes it more complicated to setup than gunicorn.</p> <p>Running <a class="reference external" href="https://uwsgi-docs.readthedocs.io/en/latest/HTTP.html#the-uwsgi-http-https-router">uWSGI HTTP Router</a>:</p> <pre data-language="python">$ uwsgi --http 127.0.0.1:5000 --module myproject:app
+</pre> <p>For a more optimized setup, see <a class="reference internal" href="../uwsgi/index"><span class="doc">configuring uWSGI and NGINX</span></a>.</p>   <h2 id="gevent">Gevent</h2> <p><a class="reference external" href="http://www.gevent.org/">Gevent</a> is a coroutine-based Python networking library that uses <a class="reference external" href="https://greenlet.readthedocs.io/en/latest/">greenlet</a> to provide a high-level synchronous API on top of <a class="reference external" href="http://software.schmorp.de/pkg/libev.html">libev</a> event loop:</p> <pre data-language="python">from gevent.pywsgi import WSGIServer
+from yourapplication import app
+
+http_server = WSGIServer(('', 5000), app)
+http_server.serve_forever()
+</pre>   <h2 id="twisted-web">Twisted Web</h2> <p><a class="reference external" href="https://twistedmatrix.com/trac/wiki/TwistedWeb">Twisted Web</a> is the web server shipped with <a class="reference external" href="https://twistedmatrix.com/trac/">Twisted</a>, a mature, non-blocking event-driven networking library. Twisted Web comes with a standard WSGI container which can be controlled from the command line using the <code>twistd</code> utility:</p> <pre data-language="python">$ twistd web --wsgi myproject.app
+</pre> <p>This example will run a Flask application called <code>app</code> from a module named <code>myproject</code>.</p> <p>Twisted Web supports many flags and options, and the <code>twistd</code> utility does as well; see <code>twistd -h</code> and <code>twistd web -h</code> for more information. For example, to run a Twisted Web server in the foreground, on port 8080, with an application from <code>myproject</code>:</p> <pre data-language="python">$ twistd -n web --port tcp:8080 --wsgi myproject.app
+</pre>   <h2 id="deploying-proxy-setups">Proxy Setups</h2> <p id="proxy-setups">If you deploy your application using one of these servers behind an HTTP proxy you will need to rewrite a few headers in order for the application to work. The two problematic values in the WSGI environment usually are <code>REMOTE_ADDR</code> and <code>HTTP_HOST</code>. You can configure your httpd to pass these headers, or you can fix them in middleware. Werkzeug ships a fixer that will solve some common setups, but you might want to write your own WSGI middleware for specific setups.</p> <p>Here’s a simple nginx configuration which proxies to an application served on localhost at port 8000, setting appropriate headers:</p> <pre data-language="nginx">server {
+    listen 80;
+
+    server_name _;
+
+    access_log  /var/log/nginx/access.log;
+    error_log  /var/log/nginx/error.log;
+
+    location / {
+        proxy_pass         http://127.0.0.1:8000/;
+        proxy_redirect     off;
+
+        proxy_set_header   Host                 $host;
+        proxy_set_header   X-Real-IP            $remote_addr;
+        proxy_set_header   X-Forwarded-For      $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto    $scheme;
+    }
+}
+</pre> <p>If your httpd is not providing these headers, the most common setup invokes the host being set from <code>X-Forwarded-Host</code> and the remote address from <code>X-Forwarded-For</code>:</p> <pre data-language="python">from werkzeug.middleware.proxy_fix import ProxyFix
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+</pre> <div class="admonition-trusting-headers admonition"> <p class="admonition-title">Trusting Headers</p> <p>Please keep in mind that it is a security issue to use such a middleware in a non-proxy setup because it will blindly trust the incoming headers which might be forged by malicious clients.</p> </div> <p>If you want to rewrite the headers from another header, you might want to use a fixer like this:</p> <pre data-language="python">class CustomProxyFix(object):
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        host = environ.get('HTTP_X_FHOST', '')
+        if host:
+            environ['HTTP_HOST'] = host
+        return self.app(environ, start_response)
+
+app.wsgi_app = CustomProxyFix(app.wsgi_app)
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/deploying/wsgi-standalone/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/deploying/wsgi-standalone/</a>
+  </p>
+</div>

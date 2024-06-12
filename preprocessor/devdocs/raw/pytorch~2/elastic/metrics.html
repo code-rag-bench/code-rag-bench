@@ -1,0 +1,83 @@
+<h1 id="metrics-api">Metrics</h1> <p id="module-torch.distributed.elastic.metrics">Metrics API</p> <p><strong>Overview</strong>:</p> <p>The metrics API in torchelastic is used to publish telemetry metrics. It is designed to be used by torchelastic’s internal modules to publish metrics for the end user with the goal of increasing visibility and helping with debugging. However you may use the same API in your jobs to publish metrics to the same metrics <code>sink</code>.</p> <p>A <code>metric</code> can be thought of as timeseries data and is uniquely identified by the string-valued tuple <code>(metric_group, metric_name)</code>.</p> <p>torchelastic makes no assumptions about what a <code>metric_group</code> is and what relationship it has with <code>metric_name</code>. It is totally up to the user to use these two fields to uniquely identify a metric.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The metric group <code>torchelastic</code> is reserved by torchelastic for platform level metrics that it produces. For instance torchelastic may output the latency (in milliseconds) of a re-rendezvous operation from the agent as <code>(torchelastic, agent.rendezvous.duration.ms)</code></p> </div> <p>A sensible way to use metric groups is to map them to a stage or module in your job. You may also encode certain high level properties the job such as the region or stage (dev vs prod).</p> <p><strong>Publish Metrics</strong>:</p> <p>Using torchelastic’s metrics API is similar to using python’s logging framework. You first have to configure a metrics handler before trying to add metric data.</p> <p>The example below measures the latency for the <code>calculate()</code> function.</p> <pre data-language="python">import time
+import torch.distributed.elastic.metrics as metrics
+
+# makes all metrics other than the one from "my_module" to go /dev/null
+metrics.configure(metrics.NullMetricsHandler())
+metrics.configure(metrics.ConsoleMetricsHandler(), "my_module")
+
+def my_method():
+  start = time.time()
+  calculate()
+  end = time.time()
+  metrics.put_metric("calculate_latency", int(end-start), "my_module")
+</pre> <p>You may also use the torch.distributed.elastic.metrics.prof` decorator to conveniently and succinctly profile functions</p> <pre data-language="python"># -- in module examples.foobar --
+
+import torch.distributed.elastic.metrics as metrics
+
+metrics.configure(metrics.ConsoleMetricsHandler(), "foobar")
+metrics.configure(metrics.ConsoleMetricsHandler(), "Bar")
+
+@metrics.prof
+def foo():
+  pass
+
+class Bar():
+
+  @metrics.prof
+  def baz():
+      pass
+</pre> <p><code>@metrics.prof</code> will publish the following metrics</p> <pre data-language="python">&lt;leaf_module or classname&gt;.success - 1 if the function finished successfully
+&lt;leaf_module or classname&gt;.failure - 1 if the function threw an exception
+&lt;leaf_module or classname&gt;.duration.ms - function duration in milliseconds
+</pre> <p><strong>Configuring Metrics Handler</strong>:</p> <p><code>torch.distributed.elastic.metrics.MetricHandler</code> is responsible for emitting the added metric values to a particular destination. Metric groups can be configured with different metric handlers.</p> <p>By default torchelastic emits all metrics to <code>/dev/null</code>. By adding the following configuration metrics, <code>torchelastic</code> and <code>my_app</code> metric groups will be printed out to console.</p> <pre data-language="python">import torch.distributed.elastic.metrics as metrics
+
+metrics.configure(metrics.ConsoleMetricHandler(), group = "torchelastic")
+metrics.configure(metrics.ConsoleMetricHandler(), group = "my_app")
+</pre> <p><strong>Writing a Custom Metric Handler</strong>:</p> <p>If you want your metrics to be emitted to a custom location, implement the <code>torch.distributed.elastic.metrics.MetricHandler</code> interface and configure your job to use your custom metric handler.</p> <p>Below is a toy example that prints the metrics to <code>stdout</code></p> <pre data-language="python">import torch.distributed.elastic.metrics as metrics
+
+class StdoutMetricHandler(metrics.MetricHandler):
+   def emit(self, metric_data):
+       ts = metric_data.timestamp
+       group = metric_data.group_name
+       name = metric_data.name
+       value = metric_data.value
+       print(f"[{ts}][{group}]: {name}={value}")
+
+metrics.configure(StdoutMetricHandler(), group="my_app")
+</pre> <p>Now all metrics in the group <code>my_app</code> will be printed to stdout as:</p> <pre data-language="python">[1574213883.4182858][my_app]: my_metric=&lt;value&gt;
+[1574213940.5237644][my_app]: my_metric=&lt;value&gt;
+</pre>  <h2 id="metric-handlers">Metric Handlers</h2> <p>Below are the metric handlers that come included with torchelastic.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.api.MetricHandler">
+<code>class torch.distributed.elastic.metrics.api.MetricHandler</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#MetricHandler"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.api.ConsoleMetricHandler">
+<code>class torch.distributed.elastic.metrics.api.ConsoleMetricHandler</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#ConsoleMetricHandler"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.api.NullMetricHandler">
+<code>class torch.distributed.elastic.metrics.api.NullMetricHandler</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#NullMetricHandler"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl>   <h2 id="methods">Methods</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.configure">
+<code>torch.distributed.elastic.metrics.configure(handler, group=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#configure"><span class="viewcode-link">[source]</span></a>
+</dt> 
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.prof">
+<code>torch.distributed.elastic.metrics.prof(fn=None, group='torchelastic')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#prof"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>@profile decorator publishes duration.ms, count, success, failure metrics for the function that it decorates. The metric name defaults to the qualified name (<code>class_name.def_name</code>) of the function. If the function does not belong to a class, it uses the leaf module name instead.</p> <p>Usage</p> <pre data-language="python">@metrics.prof
+def x():
+    pass
+
+@metrics.prof(group="agent")
+def y():
+    pass
+</pre>  </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.metrics.put_metric">
+<code>torch.distributed.elastic.metrics.put_metric(metric_name, metric_value, metric_group='torchelastic')</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/metrics/api.html#put_metric"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Publishes a metric data point.</p> <p>Usage</p> <pre data-language="python">put_metric("metric_name", 1)
+put_metric("metric_name", 1, "metric_group_name")
+</pre>  </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/elastic/metrics.html" class="_attribution-link">https://pytorch.org/docs/2.1/elastic/metrics.html</a>
+  </p>
+</div>

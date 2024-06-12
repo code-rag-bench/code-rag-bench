@@ -1,0 +1,195 @@
+# Biclustering documents with the Spectral Co-clustering algorithm
+
+This example demonstrates the Spectral Co-clustering algorithm on the twenty
+newsgroups dataset. The ‘comp.os.ms-windows.misc’ category is excluded because
+it contains many posts containing nothing but data.
+
+The TF-IDF vectorized posts form a word frequency matrix, which is then
+biclustered using Dhillon’s Spectral Co-Clustering algorithm. The resulting
+document-word biclusters indicate subsets words used more often in those
+subsets documents.
+
+For a few of the best biclusters, its most common document categories and its
+ten most important words get printed. The best biclusters are determined by
+their normalized cut. The best words are determined by comparing their sums
+inside and outside the bicluster.
+
+For comparison, the documents are also clustered using MiniBatchKMeans. The
+document clusters derived from the biclusters achieve a better V-measure than
+clusters found by MiniBatchKMeans.
+
+Out:
+
+    
+    Vectorizing...
+    Coclustering...
+    Done in 2.67s. V-measure: 0.4431
+    MiniBatchKMeans...
+    Done in 10.75s. V-measure: 0.3344
+    
+    Best biclusters:
+    ----------------
+    bicluster 0 : 1961 documents, 4388 words
+    categories   : 23% talk.politics.guns, 18% talk.politics.misc, 17% sci.med
+    words        : gun, geb, guns, banks, gordon, clinton, pitt, cdt, surrender, veal
+    
+    bicluster 1 : 1269 documents, 3558 words
+    categories   : 27% soc.religion.christian, 25% talk.politics.mideast, 24% alt.atheism
+    words        : god, jesus, christians, sin, objective, kent, belief, christ, faith, moral
+    
+    bicluster 2 : 2201 documents, 2747 words
+    categories   : 18% comp.sys.mac.hardware, 17% comp.sys.ibm.pc.hardware, 16% comp.graphics
+    words        : voltage, board, dsp, packages, receiver, stereo, shipping, package, compression, image
+    
+    bicluster 3 : 1773 documents, 2620 words
+    categories   : 27% rec.motorcycles, 23% rec.autos, 13% misc.forsale
+    words        : bike, car, dod, engine, motorcycle, ride, honda, bikes, helmet, bmw
+    
+    bicluster 4 : 201 documents, 1175 words
+    categories   : 81% talk.politics.mideast, 10% alt.atheism, 7% soc.religion.christian
+    words        : turkish, armenia, armenian, armenians, turks, petch, sera, zuma, argic, gvg47
+    
+    
+    from collections import defaultdict
+    import operator
+    from time import time
+    
+    import numpy as np
+    
+    from sklearn.cluster import SpectralCoclustering
+    from sklearn.cluster import MiniBatchKMeans
+    from sklearn.datasets import fetch_20newsgroups
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.cluster import v_measure_score
+    
+    print(__doc__)
+    
+    
+    def number_normalizer(tokens):
+        """ Map all numeric tokens to a placeholder.
+    
+        For many applications, tokens that begin with a number are not directly
+        useful, but the fact that such a token exists can be relevant.  By applying
+        this form of dimensionality reduction, some methods may perform better.
+        """
+        return ("#NUMBER" if token[0].isdigit() else token for token in tokens)
+    
+    
+    class NumberNormalizingVectorizer(TfidfVectorizer):
+        def build_tokenizer(self):
+            tokenize = super().build_tokenizer()
+            return lambda doc: list(number_normalizer(tokenize(doc)))
+    
+    
+    # exclude 'comp.os.ms-windows.misc'
+    categories = ['alt.atheism', 'comp.graphics',
+                  'comp.sys.ibm.pc.hardware', 'comp.sys.mac.hardware',
+                  'comp.windows.x', 'misc.forsale', 'rec.autos',
+                  'rec.motorcycles', 'rec.sport.baseball',
+                  'rec.sport.hockey', 'sci.crypt', 'sci.electronics',
+                  'sci.med', 'sci.space', 'soc.religion.christian',
+                  'talk.politics.guns', 'talk.politics.mideast',
+                  'talk.politics.misc', 'talk.religion.misc']
+    newsgroups = fetch_20newsgroups(categories=categories)
+    y_true = newsgroups.target
+    
+    vectorizer = NumberNormalizingVectorizer(stop_words='english', min_df=5)
+    cocluster = SpectralCoclustering(n_clusters=len(categories),
+                                     svd_method='arpack', random_state=0)
+    kmeans = MiniBatchKMeans(n_clusters=len(categories), batch_size=20000,
+                             random_state=0)
+    
+    print("Vectorizing...")
+    X = vectorizer.fit_transform(newsgroups.data)
+    
+    print("Coclustering...")
+    start_time = time()
+    cocluster.fit(X)
+    y_cocluster = cocluster.row_labels_
+    print("Done in {:.2f}s. V-measure: {:.4f}".format(
+        time() - start_time,
+        v_measure_score(y_cocluster, y_true)))
+    
+    print("MiniBatchKMeans...")
+    start_time = time()
+    y_kmeans = kmeans.fit_predict(X)
+    print("Done in {:.2f}s. V-measure: {:.4f}".format(
+        time() - start_time,
+        v_measure_score(y_kmeans, y_true)))
+    
+    feature_names = vectorizer.get_feature_names()
+    document_names = list(newsgroups.target_names[i] for i in newsgroups.target)
+    
+    
+    def bicluster_ncut(i):
+        rows, cols = cocluster.get_indices(i)
+        if not (np.any(rows) and np.any(cols)):
+            import sys
+            return sys.float_info.max
+        row_complement = np.nonzero(np.logical_not(cocluster.rows_[i]))[0]
+        col_complement = np.nonzero(np.logical_not(cocluster.columns_[i]))[0]
+        # Note: the following is identical to X[rows[:, np.newaxis],
+        # cols].sum() but much faster in scipy <= 0.16
+        weight = X[rows][:, cols].sum()
+        cut = (X[row_complement][:, cols].sum() +
+               X[rows][:, col_complement].sum())
+        return cut / weight
+    
+    
+    def most_common(d):
+        """Items of a defaultdict(int) with the highest values.
+    
+        Like Counter.most_common in Python >=2.7.
+        """
+        return sorted(d.items(), key=operator.itemgetter(1), reverse=True)
+    
+    
+    bicluster_ncuts = list(bicluster_ncut(i)
+                           for i in range(len(newsgroups.target_names)))
+    best_idx = np.argsort(bicluster_ncuts)[:5]
+    
+    print()
+    print("Best biclusters:")
+    print("----------------")
+    for idx, cluster in enumerate(best_idx):
+        n_rows, n_cols = cocluster.get_shape(cluster)
+        cluster_docs, cluster_words = cocluster.get_indices(cluster)
+        if not len(cluster_docs) or not len(cluster_words):
+            continue
+    
+        # categories
+        counter = defaultdict(int)
+        for i in cluster_docs:
+            counter[document_names[i]] += 1
+        cat_string = ", ".join("{:.0f}% {}".format(float(c) / n_rows * 100, name)
+                               for name, c in most_common(counter)[:3])
+    
+        # words
+        out_of_cluster_docs = cocluster.row_labels_ != cluster
+        out_of_cluster_docs = np.where(out_of_cluster_docs)[0]
+        word_col = X[:, cluster_words]
+        word_scores = np.array(word_col[cluster_docs, :].sum(axis=0) -
+                               word_col[out_of_cluster_docs, :].sum(axis=0))
+        word_scores = word_scores.ravel()
+        important_words = list(feature_names[cluster_words[i]]
+                               for i in word_scores.argsort()[:-11:-1])
+    
+        print("bicluster {} : {} documents, {} words".format(
+            idx, n_rows, n_cols))
+        print("categories   : {}".format(cat_string))
+        print("words        : {}\n".format(', '.join(important_words)))
+    
+Total running time of the script: ( 0 minutes 19.454 seconds)
+
+![Launch
+binder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG0AAAAUCAMAAACwC0NtAAABWVBMVEW7u7vo6OjCwsLMzMzz8/P4+Pju7u68vLzd3d24uLjx8fHm5ubT09PAwMDJycnPz8+urq7Ly8va2tq5ubnq6uqSkpLBwcH09PS6urrypVmvr6/i4uLDw8O0tLSjo6PX19e9u7pYm8qxsbGrq6u+vr7s7OzZ2dng4OCVlZXk5OTIyMiWlpampqaoqKj6+vrGxsagoKC9vb2ZmZn29vb///+Nq8Kzs7PSspNlnshfnsr2o1HnZYHXc46dnZ2Li4vS0tKPj4+3t7fOtJm2urztpmKGqsTarYFcmsnTjZzkaYXOl6Kqtr7lqnHEqrD1olLMmqW+t7jWsIzGt6hrnsbQk6Gis7/IoavgbIfhcoprlcHYaom+oH2Elq50kLzV1dWHh4fDuK2Xr8GZsMDHtqatsLrglH/sfm60pLHKqqDWnJHJcJDtgWzoknG8dJaLqr/0lVqeo7jlbX7owswW4TTQAAACXklEQVRIx+3V52/iMBgH4DcsBwfCCCkhQICMS4G0AQKUXqFpumh7Pa57l9t7//9fzlRHWeXbCemkvpEs+ZWtR/rZVqAKj/WvK7u+v7m/np2RdpjokG9pNthRIrF0dJjYfDWLGM/ed76dAWx31v923NS0tWXvRCtD90bTN9Sy1Ona3u6Hp1939+Cw04/SRU9bizwTLTbUG9OtoRZGU7Hn5xefEz9/Nz9tJt4ONDOGky7Q52AuCbStYRvKOmZcyENjKjWqPYnFdZSiQbd9vhCkyMyDUBQzBbC7WmhMe7Gyk92+vrm9ud7ODjRKLQZoiKmgakBTRcULdKboZlDVXMtERzWvMU915xhgknwag2auRaook2/JlhqKi+EJ7QR+5NqX7XYNBtq8wtIZYFQoUxAtc2ELsORIYbS4AGpgLEnZqetqHpKOIGLVKwnSIqIKrKkVIm6FG09y9+Jj4/Z789fy8rOBlsddd7enBYlGDt0Cyw+CiDwcmGOaDRC808ix+lRysIKFtG4g4IKIe/JK7qycf7kicW7l3txrQS9fYomWAptoqZ6mu8HEvVsyrmkIomxPCxLNwQVgSZKpkkT7I6HJa3Jw0rxq7h3AVu71veaPMfkkNlmc1PuaEs/HOYSJZo9qOo5pRl8D0aI0DRkeBnedhzSAd5fHpxunjfskw0Xg5YV5w9+qiBUeigrASxD5esXgVgGM1shmg68srDkyT7aAfxUUXuFXuTovSxWQSg++gq3c8nE7VxvqcOE6iA6kRRD6LSecfvgNObIwPBOFu/3y1De3UWvkGrWNx9/T/1B/AFudUABdgF9sAAAAAElFTkSuQmCC)
+
+`Download Python source code: plot_bicluster_newsgroups.py`
+
+`Download Jupyter notebook: plot_bicluster_newsgroups.ipynb`
+
+© 2007–2020 The scikit-learn developers  
+Licensed under the 3-clause BSD License.  
+https://scikit-
+learn.org/0.24/auto_examples/bicluster/plot_bicluster_newsgroups.html
+

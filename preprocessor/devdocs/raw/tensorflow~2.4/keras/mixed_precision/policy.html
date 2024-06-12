@@ -1,0 +1,100 @@
+<h1 class="devsite-page-title">tf.keras.mixed_precision.Policy</h1>       <p>A dtype policy for a Keras layer.</p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.keras.mixed_precision.Policy(
+    name
+)
+</pre>  <p>A dtype policy determines a layer's computation and variable dtypes. Each layer has a policy. Policies can be passed to the <code translate="no" dir="ltr">dtype</code> argument of layer constructors, or a global policy can be set with <a href="set_global_policy"><code translate="no" dir="ltr">tf.keras.mixed_precision.set_global_policy</code></a>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> The policy name, which determines the compute and variable dtypes. Can be any dtype name, such as <code translate="no" dir="ltr">'float32'</code> or <code translate="no" dir="ltr">'float64'</code>, which causes both the compute and variable dtypes will be that dtype. Can also be the string <code translate="no" dir="ltr">'mixed_float16'</code> or <code translate="no" dir="ltr">'mixed_bfloat16'</code>, which causes the compute dtype to be float16 or bfloat16 and the variable dtype to be float32. </td> </tr> </table> <p>Typically you only need to interact with dtype policies when using mixed precision, which is the use of float16 or bfloat16 for computations and float32 for variables. This is why the term <code translate="no" dir="ltr">mixed_precision</code> appears in the API name. Mixed precision can be enabled by passing <code translate="no" dir="ltr">'mixed_float16'</code> or <code translate="no" dir="ltr">'mixed_bfloat16'</code> to <code translate="no" dir="ltr">tf.keras.mixed_precision.set_global_policy</code>. See <a href="https://www.tensorflow.org/guide/keras/mixed_precision">the mixed precision guide</a> for more information on how to use mixed precision.</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+tf.keras.mixed_precision.set_global_policy('mixed_float16')
+layer1 = tf.keras.layers.Dense(10)
+layer1.dtype_policy  # `layer1` will automatically use mixed precision
+&lt;Policy "mixed_float16"&gt;
+# Can optionally override layer to use float32 instead of mixed precision.
+layer2 = tf.keras.layers.Dense(10, dtype='float32')
+layer2.dtype_policy
+&lt;Policy "float32"&gt;
+# Set policy back to initial float32 for future examples.
+tf.keras.mixed_precision.set_global_policy('float32')
+</pre> <p>In the example above, passing <code translate="no" dir="ltr">dtype='float32'</code> to the layer is equivalent to passing <code translate="no" dir="ltr">dtype=tf.keras.mixed_precision.Policy('float32')</code>. In general, passing a dtype to a layer is equivalent to passing the corresponding policy, so it is never necessary to explicitly construct a <code translate="no" dir="ltr">Policy</code> object.</p> <blockquote class="note">
+<strong>Note:</strong><span> <a href="../model#compile"><code translate="no" dir="ltr">Model.compile</code></a> will automatically wrap an optimizer with a <a href="lossscaleoptimizer"><code translate="no" dir="ltr">tf.keras.mixed_precision.LossScaleOptimizer</code></a> if you use the <code translate="no" dir="ltr">'mixed_float16'</code> policy. If you use a custom training loop instead of calling <a href="../model#compile"><code translate="no" dir="ltr">Model.compile</code></a>, you should explicitly use a <a href="lossscaleoptimizer"><code translate="no" dir="ltr">tf.keras.mixed_precision.LossScaleOptimizer</code></a> to avoid numeric underflow with float16.</span>
+</blockquote> <h3 id="how_a_layer_uses_its_policys_compute_dtype" data-text="How a layer uses its policy's compute dtype">How a layer uses its policy's compute dtype</h3> <p>A layer casts its inputs to its compute dtype. This causes the layer's computations and output to also be in the compute dtype. For example:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+x = tf.ones((4, 4, 4, 4), dtype='float64')
+# `layer`'s policy defaults to float32.
+layer = tf.keras.layers.Conv2D(filters=4, kernel_size=2)
+layer.compute_dtype  # Equivalent to layer.dtype_policy.compute_dtype
+'float32'
+# `layer` casts it's inputs to its compute dtype and does computations in
+# that dtype.
+y = layer(x)
+y.dtype
+tf.float32
+</pre> <p>Note that the base <a href="../layers/layer"><code translate="no" dir="ltr">tf.keras.layers.Layer</code></a> class inserts the casts. If subclassing your own layer, you do not have to insert any casts.</p> <p>Currently, only tensors in the first argument to the layer's <code translate="no" dir="ltr">call</code> method are casted (although this will likely be changed in a future minor release). For example:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+class MyLayer(tf.keras.layers.Layer):
+  # Bug! `b` will not be casted.
+  def call(self, a, b):
+    return a + 1., b + 1.
+a = tf.constant(1., dtype="float32")
+b = tf.constant(1., dtype="float32")
+layer = MyLayer(dtype="float64")
+x, y = layer(a, b)
+x.dtype
+tf.float64
+y.dtype
+tf.float32
+</pre> <p>If writing your own layer with multiple inputs, you should either explicitly cast other tensors to <code translate="no" dir="ltr">self.compute_dtype</code> in <code translate="no" dir="ltr">call</code> or accept all tensors in the first argument as a list.</p> <p>The casting only occurs in TensorFlow 2. If <a href="../../compat/v1/disable_v2_behavior"><code translate="no" dir="ltr">tf.compat.v1.disable_v2_behavior()</code></a> has been called, you can enable the casting behavior with <a href="../../compat/v1/keras/layers/enable_v2_dtype_behavior"><code translate="no" dir="ltr">tf.compat.v1.keras.layers.enable_v2_dtype_behavior()</code></a>.</p> <h3 id="how_a_layer_uses_its_policys_variable_dtype" data-text="How a layer uses its policy's variable dtype">How a layer uses its policy's variable dtype</h3> <p>The default dtype of variables created by <a href="../layers/layer#add_weight"><code translate="no" dir="ltr">tf.keras.layers.Layer.add_weight</code></a> is the layer's policy's variable dtype.</p> <p>If a layer's compute and variable dtypes differ, <code translate="no" dir="ltr">add_weight</code> will wrap floating-point variables with a special wrapper called an <code translate="no" dir="ltr">AutoCastVariable</code>. <code translate="no" dir="ltr">AutoCastVariable</code> is identical to the original variable except it casts itself to the layer's compute dtype when used within <a href="../layers/layer#call"><code translate="no" dir="ltr">Layer.call</code></a>. This means if you are writing a layer, you do not have to explicitly cast the variables to the layer's compute dtype. For example:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+class SimpleDense(tf.keras.layers.Layer):
+
+  def build(self, input_shape):
+    # With mixed precision, self.kernel is a float32 AutoCastVariable
+    self.kernel = self.add_weight('kernel', (input_shape[-1], 10))
+
+  def call(self, inputs):
+    # With mixed precision, self.kernel will be casted to float16
+    return tf.linalg.matmul(inputs, self.kernel)
+
+dtype_policy = tf.keras.mixed_precision.Policy('mixed_float16')
+layer = SimpleDense(dtype=dtype_policy)
+y = layer(tf.ones((10, 10)))
+y.dtype
+tf.float16
+layer.kernel.dtype
+tf.float32
+</pre> <p>A layer author can prevent a variable from being wrapped with an <code translate="no" dir="ltr">AutoCastVariable</code> by passing <code translate="no" dir="ltr">experimental_autocast=False</code> to <code translate="no" dir="ltr">add_weight</code>, which is useful if the float32 value of the variable must be accessed within the layer.</p> <h3 id="how_to_write_a_layer_that_supports_mixed_precision_and_float64" data-text="How to write a layer that supports mixed precision and float64.">How to write a layer that supports mixed precision and float64.</h3> <p>For the most part, layers will automatically support mixed precision and float64 without any additional work, due to the fact the base layer automatically casts inputs, creates variables of the correct type, and in the case of mixed precision, wraps variables with <code translate="no" dir="ltr">AutoCastVariables</code>.</p> <p>The primary case where you need extra work to support mixed precision or float64 is when you create a new tensor, such as with <a href="../../ones"><code translate="no" dir="ltr">tf.ones</code></a> or <a href="../../random/normal"><code translate="no" dir="ltr">tf.random.normal</code></a>, In such cases, you must create the tensor of the correct dtype. For example, if you call <a href="../../random/normal"><code translate="no" dir="ltr">tf.random.normal</code></a>, you must pass the compute dtype, which is the dtype the inputs have been casted to:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+class AddRandom(tf.keras.layers.Layer):
+
+  def call(self, inputs):
+    # We must pass `dtype=inputs.dtype`, otherwise a TypeError may
+    # occur when adding `inputs` to `rand`.
+    rand = tf.random.normal(shape=inputs.shape, dtype=inputs.dtype)
+    return inputs + rand
+</pre> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+dtype_policy = tf.keras.mixed_precision.Policy('mixed_float16')
+layer = AddRandom(dtype=dtype_policy)
+y = layer(x)
+y.dtype
+tf.float16
+</pre> <p>If you did not pass <code translate="no" dir="ltr">dtype=inputs.dtype</code> to <a href="../../random/normal"><code translate="no" dir="ltr">tf.random.normal</code></a>, a <code translate="no" dir="ltr">TypeError</code> would have occurred. This is because the <a href="../../random/normal"><code translate="no" dir="ltr">tf.random.normal</code></a>'s dtype defaults to <code translate="no" dir="ltr">"float32"</code>, but the input dtype is float16. You cannot add a float32 tensor with a float16 tensor.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Attributes</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">compute_dtype</code> </td> <td> The compute dtype of this policy. <p>This is the dtype layers will do their computations in. Typically layers output tensors with the compute dtype as well.</p> <p>Note that even if the compute dtype is float16 or bfloat16, hardware devices may not do individual adds, multiplies, and other fundamental operations in float16 or bfloat16, but instead may do some of them in float32 for numeric stability. The compute dtype is the dtype of the inputs and outputs of the TensorFlow ops that the layer executes. Internally, many TensorFlow ops will do certain internal calculations in float32 or some other device-internal intermediate format with higher precision than float16/bfloat16, to increase numeric stability.</p> <p>For example, a <a href="../layers/dense"><code translate="no" dir="ltr">tf.keras.layers.Dense</code></a> layer, when run on a GPU with a float16 compute dtype, will pass float16 inputs to <a href="../../linalg/matmul"><code translate="no" dir="ltr">tf.linalg.matmul</code></a>. But, <a href="../../linalg/matmul"><code translate="no" dir="ltr">tf.linalg.matmul</code></a> will do use float32 intermediate math. The performance benefit of float16 is still apparent, due to increased memory bandwidth and the fact modern GPUs have specialized hardware for computing matmuls on float16 inputs while still keeping intermediate computations in float32. </p>
+</td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Returns the name of this policy. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">variable_dtype</code> </td> <td> The variable dtype of this policy. <p>This is the dtype layers will create their variables in, unless a layer explicitly chooses a different dtype. If this is different than <a href="policy#compute_dtype"><code translate="no" dir="ltr">Policy.compute_dtype</code></a>, Layers will cast variables to the compute dtype to avoid type errors.</p> <p>Variable regularizers are run in the variable dtype, not the compute dtype. </p>
+</td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="from_config" data-text="from_config"><code translate="no" dir="ltr">from_config</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/keras/mixed_precision/policy.py#L310-L318">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+@classmethod
+from_config(
+    config, custom_objects=None
+)
+</pre> <h3 id="get_config" data-text="get_config"><code translate="no" dir="ltr">get_config</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/keras/mixed_precision/policy.py#L307-L308">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_config()
+</pre>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/keras/mixed_precision/Policy" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/keras/mixed_precision/Policy</a>
+  </p>
+</div>

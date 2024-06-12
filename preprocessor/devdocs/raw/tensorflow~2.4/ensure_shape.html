@@ -1,0 +1,101 @@
+<h1 class="devsite-page-title">tf.ensure_shape</h1>      <table class="tfo-notebook-buttons tfo-api nocontent" align="left">  <td> <a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/ops/check_ops.py#L2219-L2338">  View source on GitHub </a> </td> </table> <p>Updates the shape of a tensor and checks at runtime that the shape holds.</p> <section class="expandable"> <h4 class="showalways" id="view-aliases" data-text="View aliases">View aliases</h4> <p> <b>Compat aliases for migration</b> </p>
+<p>See <a href="https://www.tensorflow.org/guide/migrate">Migration guide</a> for more details.</p> <p><a href="https://www.tensorflow.org/api_docs/python/tf/ensure_shape"><code translate="no" dir="ltr">tf.compat.v1.ensure_shape</code></a></p> </section> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.ensure_shape(
+    x, shape, name=None
+)
+</pre>  <h4 id="for_example" data-text="For example:">For example:</h4> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function(input_signature=[tf.TensorSpec(shape=None, dtype=tf.float32)])
+def f(tensor):
+  return tf.ensure_shape(tensor, [3, 3])
+
+f(tf.zeros([3, 3])) # Passes
+&lt;tf.Tensor: shape=(3, 3), dtype=float32, numpy=
+array([[0., 0., 0.],
+       [0., 0., 0.],
+       [0., 0., 0.]], dtype=float32)&gt;
+f([1, 2, 3]) # fails
+Traceback (most recent call last):
+
+InvalidArgumentError:  Shape of tensor x [3] is not compatible with expected shape [3,3].
+</pre> <p>The above example raises <a href="errors/invalidargumenterror"><code translate="no" dir="ltr">tf.errors.InvalidArgumentError</code></a>, because the shape (3,) is not compatible with the shape (None, 3, 3)</p> <p>With eager execution this is a shape assertion, that returns the input:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+x = tf.constant([1,2,3])
+print(x.shape)
+(3,)
+x = tf.ensure_shape(x, [3])
+x = tf.ensure_shape(x, [5])
+Traceback (most recent call last):
+
+tf.errors.InvalidArgumentError: Shape of tensor dummy_input [3] is not
+  compatible with expected shape [5]. [Op:EnsureShape]
+</pre> <p>Inside a <a href="function"><code translate="no" dir="ltr">tf.function</code></a> or <a href="graph"><code translate="no" dir="ltr">v1.Graph</code></a> context it checks both the buildtime and runtime shapes. This is stricter than <a href="tensor#set_shape"><code translate="no" dir="ltr">tf.Tensor.set_shape</code></a> which only checks the buildtime shape.</p> <blockquote class="note">
+<strong>Note:</strong><span> This differs from <a href="tensor#set_shape"><code translate="no" dir="ltr">tf.Tensor.set_shape</code></a> in that it sets the static shape of the resulting tensor and enforces it at runtime, raising an error if the tensor's runtime shape is incompatible with the specified shape. <a href="tensor#set_shape"><code translate="no" dir="ltr">tf.Tensor.set_shape</code></a> sets the static shape of the tensor without enforcing it at runtime, which may result in inconsistencies between the statically-known shape of tensors and the runtime value of tensors.</span>
+</blockquote> <p>For example, of loading images of a known size:</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def decode_image(png):
+  image = tf.image.decode_png(png, channels=3)
+  # the `print` executes during tracing.
+  print("Initial shape: ", image.shape)
+  image = tf.ensure_shape(image,[28, 28, 3])
+  print("Final shape: ", image.shape)
+  return image
+</pre> <p>When tracing a function, no ops are being executed, shapes may be unknown. See the <a href="https://www.tensorflow.org/guide/concrete_function">Concrete Functions Guide</a> for details.</p> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+concrete_decode = decode_image.get_concrete_function(
+    tf.TensorSpec([], dtype=tf.string))
+Initial shape:  (None, None, 3)
+Final shape:  (28, 28, 3)
+</pre> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+image = tf.random.uniform(maxval=255, shape=[28, 28, 3], dtype=tf.int32)
+image = tf.cast(image,tf.uint8)
+png = tf.image.encode_png(image)
+image2 = concrete_decode(png)
+print(image2.shape)
+(28, 28, 3)
+</pre> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+image = tf.concat([image,image], axis=0)
+print(image.shape)
+(56, 28, 3)
+png = tf.image.encode_png(image)
+image2 = concrete_decode(png)
+Traceback (most recent call last):
+
+tf.errors.InvalidArgumentError:  Shape of tensor DecodePng [56,28,3] is not
+  compatible with expected shape [28,28,3].
+</pre> <aside class="caution"><strong>Caution:</strong><span> if you don't use the result of <a href="ensure_shape"><code translate="no" dir="ltr">tf.ensure_shape</code></a> the check may not run.</span></aside> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+@tf.function
+def bad_decode_image(png):
+  image = tf.image.decode_png(png, channels=3)
+  # the `print` executes during tracing.
+  print("Initial shape: ", image.shape)
+  # BAD: forgot to use the returned tensor.
+  tf.ensure_shape(image,[28, 28, 3])
+  print("Final shape: ", image.shape)
+  return image
+</pre> <pre class="devsite-click-to-copy prettyprint lang-py" translate="no" dir="ltr" data-language="cpp">
+image = bad_decode_image(png)
+Initial shape:  (None, None, 3)
+Final shape:  (None, None, 3)
+print(image.shape)
+(56, 28, 3)
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">x</code> </td> <td> A <code translate="no" dir="ltr">Tensor</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">shape</code> </td> <td> A <code translate="no" dir="ltr">TensorShape</code> representing the shape of this tensor, a <code translate="no" dir="ltr">TensorShapeProto</code>, a list, a tuple, or None. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> A name for this operation (optional). Defaults to "EnsureShape". </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <code translate="no" dir="ltr">Tensor</code>. Has the same type and contents as <code translate="no" dir="ltr">x</code>. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <a href="https://www.tensorflow.org/api_docs/python/tf/errors/InvalidArgumentError"><code translate="no" dir="ltr">tf.errors.InvalidArgumentError</code></a> </td> <td> If <code translate="no" dir="ltr">shape</code> is incompatible with the shape of <code translate="no" dir="ltr">x</code>. </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/ensure_shape" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/ensure_shape</a>
+  </p>
+</div>

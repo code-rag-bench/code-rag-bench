@@ -1,0 +1,126 @@
+<h1 id="how-to-create-custom-django-admin-commands">How to create custom django-admin commands</h1> <p id="s-module-django.core.management">Applications can register their own actions with <code>manage.py</code>. For example, you might want to add a <code>manage.py</code> action for a Django app that you’re distributing. In this document, we will be building a custom <code>closepoll</code> command for the <code>polls</code> application from the <a class="reference internal" href="../intro/tutorial01"><span class="doc">tutorial</span></a>.</p> <p>To do this, add a <code>management/commands</code> directory to the application. Django will register a <code>manage.py</code> command for each Python module in that directory whose name doesn’t begin with an underscore. For example:</p> <pre data-language="python">polls/
+    __init__.py
+    models.py
+    management/
+        __init__.py
+        commands/
+            __init__.py
+            _private.py
+            closepoll.py
+    tests.py
+    views.py
+</pre> <p>In this example, the <code>closepoll</code> command will be made available to any project that includes the <code>polls</code> application in <a class="reference internal" href="../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>.</p> <p>The <code>_private.py</code> module will not be available as a management command.</p> <p>The <code>closepoll.py</code> module has only one requirement – it must define a class <code>Command</code> that extends <a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a> or one of its <a class="reference internal" href="#ref-basecommand-subclasses"><span class="std std-ref">subclasses</span></a>.</p> <div class="admonition-standalone-scripts admonition"> <p class="first admonition-title">Standalone scripts</p> <p class="last">Custom management commands are especially useful for running standalone scripts or for scripts that are periodically executed from the UNIX crontab or from Windows scheduled tasks control panel.</p> </div> <p>To implement the command, edit <code>polls/management/commands/closepoll.py</code> to look like this:</p> <pre data-language="python">from django.core.management.base import BaseCommand, CommandError
+from polls.models import Question as Poll
+
+class Command(BaseCommand):
+    help = 'Closes the specified poll for voting'
+
+    def add_arguments(self, parser):
+        parser.add_argument('poll_ids', nargs='+', type=int)
+
+    def handle(self, *args, **options):
+        for poll_id in options['poll_ids']:
+            try:
+                poll = Poll.objects.get(pk=poll_id)
+            except Poll.DoesNotExist:
+                raise CommandError('Poll "%s" does not exist' % poll_id)
+
+            poll.opened = False
+            poll.save()
+
+            self.stdout.write(self.style.SUCCESS('Successfully closed poll "%s"' % poll_id))
+</pre> <div class="admonition note" id="management-commands-output"> <p class="first admonition-title">Note</p> <p>When you are using management commands and wish to provide console output, you should write to <code>self.stdout</code> and <code>self.stderr</code>, instead of printing to <code>stdout</code> and <code>stderr</code> directly. By using these proxies, it becomes much easier to test your custom command. Note also that you don’t need to end messages with a newline character, it will be added automatically, unless you specify the <code>ending</code> parameter:</p> <pre data-language="python">self.stdout.write("Unterminated line", ending='')
+</pre> </div> <p>The new custom command can be called using <code>python manage.py closepoll
+&lt;poll_ids&gt;</code>.</p> <p>The <code>handle()</code> method takes one or more <code>poll_ids</code> and sets <code>poll.opened</code> to <code>False</code> for each one. If the user referenced any nonexistent polls, a <a class="reference internal" href="#django.core.management.CommandError" title="django.core.management.CommandError"><code>CommandError</code></a> is raised. The <code>poll.opened</code> attribute does not exist in the <a class="reference internal" href="../intro/tutorial02"><span class="doc">tutorial</span></a> and was added to <code>polls.models.Question</code> for this example.</p>  <h2 id="custom-commands-options">Accepting optional arguments</h2> <p id="s-accepting-optional-arguments">The same <code>closepoll</code> could be easily modified to delete a given poll instead of closing it by accepting additional command line options. These custom options can be added in the <a class="reference internal" href="#django.core.management.BaseCommand.add_arguments" title="django.core.management.BaseCommand.add_arguments"><code>add_arguments()</code></a> method like this:</p> <pre data-language="python">class Command(BaseCommand):
+    def add_arguments(self, parser):
+        # Positional arguments
+        parser.add_argument('poll_ids', nargs='+', type=int)
+
+        # Named (optional) arguments
+        parser.add_argument(
+            '--delete',
+            action='store_true',
+            help='Delete poll instead of closing it',
+        )
+
+    def handle(self, *args, **options):
+        # ...
+        if options['delete']:
+            poll.delete()
+        # ...
+</pre> <p>The option (<code>delete</code> in our example) is available in the options dict parameter of the handle method. See the <a class="reference external" href="https://docs.python.org/3/library/argparse.html#module-argparse" title="(in Python v3.10)"><code>argparse</code></a> Python documentation for more about <code>add_argument</code> usage.</p> <p>In addition to being able to add custom command line options, all <a class="reference internal" href="../ref/django-admin"><span class="doc">management commands</span></a> can accept some default options such as <a class="reference internal" href="../ref/django-admin#cmdoption-verbosity"><code>--verbosity</code></a> and <a class="reference internal" href="../ref/django-admin#cmdoption-traceback"><code>--traceback</code></a>.</p>   <h2 id="id1">Management commands and locales</h2> <p id="s-management-commands-and-locales">By default, management commands are executed with the current active locale.</p> <p>If, for some reason, your custom management command must run without an active locale (for example, to prevent translated content from being inserted into the database), deactivate translations using the <code>@no_translations</code> decorator on your <a class="reference internal" href="#django.core.management.BaseCommand.handle" title="django.core.management.BaseCommand.handle"><code>handle()</code></a> method:</p> <pre data-language="python">from django.core.management.base import BaseCommand, no_translations
+
+class Command(BaseCommand):
+    ...
+
+    @no_translations
+    def handle(self, *args, **options):
+        ...
+</pre> <p>Since translation deactivation requires access to configured settings, the decorator can’t be used for commands that work without configured settings.</p>   <h2 id="testing">Testing</h2> <p id="s-testing">Information on how to test custom management commands can be found in the <a class="reference internal" href="../topics/testing/tools#topics-testing-management-commands"><span class="std std-ref">testing docs</span></a>.</p>   <h2 id="overriding-commands">Overriding commands</h2> <p id="s-overriding-commands">Django registers the built-in commands and then searches for commands in <a class="reference internal" href="../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> in reverse. During the search, if a command name duplicates an already registered command, the newly discovered command overrides the first.</p> <p>In other words, to override a command, the new command must have the same name and its app must be before the overridden command’s app in <a class="reference internal" href="../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>.</p> <p>Management commands from third-party apps that have been unintentionally overridden can be made available under a new name by creating a new command in one of your project’s apps (ordered before the third-party app in <a class="reference internal" href="../ref/settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a>) which imports the <code>Command</code> of the overridden command.</p>   <h2 id="command-objects">Command objects</h2> <dl class="class" id="s-command-objects"> <dt id="django.core.management.BaseCommand">
+<code>class BaseCommand</code> </dt> 
+</dl> <p>The base class from which all management commands ultimately derive.</p> <p>Use this class if you want access to all of the mechanisms which parse the command-line arguments and work out what code to call in response; if you don’t need to change any of that behavior, consider using one of its <a class="reference internal" href="#ref-basecommand-subclasses"><span class="std std-ref">subclasses</span></a>.</p> <p>Subclassing the <a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a> class requires that you implement the <a class="reference internal" href="#django.core.management.BaseCommand.handle" title="django.core.management.BaseCommand.handle"><code>handle()</code></a> method.</p>  <h3 id="attributes">Attributes</h3> <p id="s-attributes">All attributes can be set in your derived class and can be used in <a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a>’s <a class="reference internal" href="#ref-basecommand-subclasses"><span class="std std-ref">subclasses</span></a>.</p> <dl class="attribute"> <dt id="django.core.management.BaseCommand.help">
+<code>BaseCommand.help</code> </dt> <dd>
+<p>A short description of the command, which will be printed in the help message when the user runs the command <code>python manage.py help &lt;command&gt;</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.missing_args_message">
+<code>BaseCommand.missing_args_message</code> </dt> <dd>
+<p>If your command defines mandatory positional arguments, you can customize the message error returned in the case of missing arguments. The default is output by <a class="reference external" href="https://docs.python.org/3/library/argparse.html#module-argparse" title="(in Python v3.10)"><code>argparse</code></a> (“too few arguments”).</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.output_transaction">
+<code>BaseCommand.output_transaction</code> </dt> <dd>
+<p>A boolean indicating whether the command outputs SQL statements; if <code>True</code>, the output will automatically be wrapped with <code>BEGIN;</code> and <code>COMMIT;</code>. Default value is <code>False</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.requires_migrations_checks">
+<code>BaseCommand.requires_migrations_checks</code> </dt> <dd>
+<p>A boolean; if <code>True</code>, the command prints a warning if the set of migrations on disk don’t match the migrations in the database. A warning doesn’t prevent the command from executing. Default value is <code>False</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.requires_system_checks">
+<code>BaseCommand.requires_system_checks</code> </dt> <dd>
+<p>A list or tuple of tags, e.g. <code>[Tags.staticfiles, Tags.models]</code>. System checks <a class="reference internal" href="../topics/checks#registering-labeling-checks"><span class="std std-ref">registered in the chosen tags</span></a> will be checked for errors prior to executing the command. The value <code>'__all__'</code> can be used to specify that all system checks should be performed. Default value is <code>'__all__'</code>.</p> <div class="versionchanged"> <span class="title">Changed in Django 3.2:</span> <p>In older versions, the <code>requires_system_checks</code> attribute expects a boolean value instead of a list or tuple of tags.</p> </div> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.style">
+<code>BaseCommand.style</code> </dt> <dd>
+<p>An instance attribute that helps create colored output when writing to <code>stdout</code> or <code>stderr</code>. For example:</p> <pre data-language="python">self.stdout.write(self.style.SUCCESS('...'))
+</pre> <p>See <a class="reference internal" href="../ref/django-admin#syntax-coloring"><span class="std std-ref">Syntax coloring</span></a> to learn how to modify the color palette and to see the available styles (use uppercased versions of the “roles” described in that section).</p> <p>If you pass the <a class="reference internal" href="../ref/django-admin#cmdoption-no-color"><code>--no-color</code></a> option when running your command, all <code>self.style()</code> calls will return the original string uncolored.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.core.management.BaseCommand.suppressed_base_arguments">
+<code>BaseCommand.suppressed_base_arguments</code> </dt> <dd>
+<div class="versionadded"> <span class="title">New in Django 4.0.</span> </div> <p>The default command options to suppress in the help output. This should be a set of option names (e.g. <code>'--verbosity'</code>). The default values for the suppressed options are still passed.</p> </dd>
+</dl>   <h3 id="methods">Methods</h3> <p id="s-methods"><a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a> has a few methods that can be overridden but only the <a class="reference internal" href="#django.core.management.BaseCommand.handle" title="django.core.management.BaseCommand.handle"><code>handle()</code></a> method must be implemented.</p> <div class="admonition-implementing-a-constructor-in-a-subclass admonition"> <p class="first admonition-title">Implementing a constructor in a subclass</p> <p>If you implement <code>__init__</code> in your subclass of <a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a>, you must call <a class="reference internal" href="#django.core.management.BaseCommand" title="django.core.management.BaseCommand"><code>BaseCommand</code></a>’s <code>__init__</code>:</p> <pre data-language="python">class Command(BaseCommand):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # ...
+</pre> </div> <dl class="method"> <dt id="django.core.management.BaseCommand.create_parser">
+<code>BaseCommand.create_parser(prog_name, subcommand, **kwargs)</code> </dt> <dd>
+<p>Returns a <code>CommandParser</code> instance, which is an <a class="reference external" href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser" title="(in Python v3.10)"><code>ArgumentParser</code></a> subclass with a few customizations for Django.</p> <p>You can customize the instance by overriding this method and calling <code>super()</code> with <code>kwargs</code> of <a class="reference external" href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser" title="(in Python v3.10)"><code>ArgumentParser</code></a> parameters.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.management.BaseCommand.add_arguments">
+<code>BaseCommand.add_arguments(parser)</code> </dt> <dd>
+<p>Entry point to add parser arguments to handle command line arguments passed to the command. Custom commands should override this method to add both positional and optional arguments accepted by the command. Calling <code>super()</code> is not needed when directly subclassing <code>BaseCommand</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.management.BaseCommand.get_version">
+<code>BaseCommand.get_version()</code> </dt> <dd>
+<p>Returns the Django version, which should be correct for all built-in Django commands. User-supplied commands can override this method to return their own version.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.management.BaseCommand.execute">
+<code>BaseCommand.execute(*args, **options)</code> </dt> <dd>
+<p>Tries to execute this command, performing system checks if needed (as controlled by the <a class="reference internal" href="#django.core.management.BaseCommand.requires_system_checks" title="django.core.management.BaseCommand.requires_system_checks"><code>requires_system_checks</code></a> attribute). If the command raises a <a class="reference internal" href="#django.core.management.CommandError" title="django.core.management.CommandError"><code>CommandError</code></a>, it’s intercepted and printed to stderr.</p> </dd>
+</dl> <div class="admonition-calling-a-management-command-in-your-code admonition"> <p class="first admonition-title">Calling a management command in your code</p> <p class="last"><code>execute()</code> should not be called directly from your code to execute a command. Use <a class="reference internal" href="../ref/django-admin#django.core.management.call_command" title="django.core.management.call_command"><code>call_command()</code></a> instead.</p> </div> <dl class="method"> <dt id="django.core.management.BaseCommand.handle">
+<code>BaseCommand.handle(*args, **options)</code> </dt> <dd>
+<p>The actual logic of the command. Subclasses must implement this method.</p> <p>It may return a string which will be printed to <code>stdout</code> (wrapped by <code>BEGIN;</code> and <code>COMMIT;</code> if <a class="reference internal" href="#django.core.management.BaseCommand.output_transaction" title="django.core.management.BaseCommand.output_transaction"><code>output_transaction</code></a> is <code>True</code>).</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.management.BaseCommand.check">
+<code>BaseCommand.check(app_configs=None, tags=None, display_num_errors=False)</code> </dt> <dd>
+<p>Uses the system check framework to inspect the entire Django project for potential problems. Serious problems are raised as a <a class="reference internal" href="#django.core.management.CommandError" title="django.core.management.CommandError"><code>CommandError</code></a>; warnings are output to stderr; minor notifications are output to stdout.</p> <p>If <code>app_configs</code> and <code>tags</code> are both <code>None</code>, all system checks are performed. <code>tags</code> can be a list of check tags, like <code>compatibility</code> or <code>models</code>.</p> </dd>
+</dl>   <h3 id="ref-basecommand-subclasses">
+<code>BaseCommand</code> subclasses</h3> <dl class="class" id="s-basecommand-subclasses"> <dt id="django.core.management.AppCommand">
+<code>class AppCommand</code> </dt> 
+</dl> <p>A management command which takes one or more installed application labels as arguments, and does something with each of them.</p> <p>Rather than implementing <a class="reference internal" href="#django.core.management.BaseCommand.handle" title="django.core.management.BaseCommand.handle"><code>handle()</code></a>, subclasses must implement <a class="reference internal" href="#django.core.management.AppCommand.handle_app_config" title="django.core.management.AppCommand.handle_app_config"><code>handle_app_config()</code></a>, which will be called once for each application.</p> <dl class="method"> <dt id="django.core.management.AppCommand.handle_app_config">
+<code>AppCommand.handle_app_config(app_config, **options)</code> </dt> <dd>
+<p>Perform the command’s actions for <code>app_config</code>, which will be an <a class="reference internal" href="../ref/applications#django.apps.AppConfig" title="django.apps.AppConfig"><code>AppConfig</code></a> instance corresponding to an application label given on the command line.</p> </dd>
+</dl> <dl class="class"> <dt id="django.core.management.LabelCommand">
+<code>class LabelCommand</code> </dt> 
+</dl> <p>A management command which takes one or more arbitrary arguments (labels) on the command line, and does something with each of them.</p> <p>Rather than implementing <a class="reference internal" href="#django.core.management.BaseCommand.handle" title="django.core.management.BaseCommand.handle"><code>handle()</code></a>, subclasses must implement <a class="reference internal" href="#django.core.management.LabelCommand.handle_label" title="django.core.management.LabelCommand.handle_label"><code>handle_label()</code></a>, which will be called once for each label.</p> <dl class="attribute"> <dt id="django.core.management.LabelCommand.label">
+<code>LabelCommand.label</code> </dt> <dd>
+<p>A string describing the arbitrary arguments passed to the command. The string is used in the usage text and error messages of the command. Defaults to <code>'label'</code>.</p> </dd>
+</dl> <dl class="method"> <dt id="django.core.management.LabelCommand.handle_label">
+<code>LabelCommand.handle_label(label, **options)</code> </dt> <dd>
+<p>Perform the command’s actions for <code>label</code>, which will be the string as given on the command line.</p> </dd>
+</dl>   <h3 id="command-exceptions">Command exceptions</h3> <dl class="exception" id="s-command-exceptions"> <dt id="django.core.management.CommandError">
+<code>exception CommandError(returncode=1)</code> </dt> 
+</dl> <p>Exception class indicating a problem while executing a management command.</p> <p>If this exception is raised during the execution of a management command from a command line console, it will be caught and turned into a nicely-printed error message to the appropriate output stream (i.e., stderr); as a result, raising this exception (with a sensible description of the error) is the preferred way to indicate that something has gone wrong in the execution of a command. It accepts the optional <code>returncode</code> argument to customize the exit status for the management command to exit with, using <a class="reference external" href="https://docs.python.org/3/library/sys.html#sys.exit" title="(in Python v3.10)"><code>sys.exit()</code></a>.</p> <p>If a management command is called from code through <a class="reference internal" href="../ref/django-admin#django.core.management.call_command" title="django.core.management.call_command"><code>call_command()</code></a>, it’s up to you to catch the exception when needed.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/howto/custom-management-commands/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/howto/custom-management-commands/</a>
+  </p>
+</div>

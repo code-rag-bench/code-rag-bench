@@ -1,0 +1,198 @@
+<h1 class="devsite-page-title">tf.compat.v1.train.SyncReplicasOptimizer</h1>       <p>Class to synchronize, aggregate gradients and pass them to the optimizer.</p> <p>Inherits From: <a href="optimizer"><code translate="no" dir="ltr">Optimizer</code></a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+tf.compat.v1.train.SyncReplicasOptimizer(
+    opt, replicas_to_aggregate, total_num_replicas=None, variable_averages=None,
+    variables_to_average=None, use_locking=False, name='sync_replicas'
+)
+</pre>  <p>This class is deprecated. For synchronous training, please use <a href="https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/distribute">Distribution Strategies</a>.</p> <p>In a typical asynchronous training environment, it's common to have some stale gradients. For example, with a N-replica asynchronous training, gradients will be applied to the variables N times independently. Depending on each replica's training speed, some gradients might be calculated from copies of the variable from several steps back (N-1 steps on average). This optimizer avoids stale gradients by collecting gradients from all replicas, averaging them, then applying them to the variables in one shot, after which replicas can fetch the new variables and continue.</p> <p>The following accumulators/queue are created:</p> <ul> <li>N <code translate="no" dir="ltr">gradient accumulators</code>, one per variable to train. Gradients are pushed to them and the chief worker will wait until enough gradients are collected and then average them before applying to variables. The accumulator will drop all stale gradients (more details in the accumulator op).</li> <li>1 <code translate="no" dir="ltr">token</code> queue where the optimizer pushes the new global_step value after all variables are updated.</li> </ul> <p>The following local variable is created:</p> <ul> <li>
+<code translate="no" dir="ltr">sync_rep_local_step</code>, one per replica. Compared against the global_step in each accumulator to check for staleness of the gradients.</li> </ul> <p>The optimizer adds nodes to the graph to collect gradients and pause the trainers until variables are updated. For the Parameter Server job:</p> <ol> <li>An accumulator is created for each variable, and each replica pushes the gradients into the accumulators instead of directly applying them to the variables.</li> <li>Each accumulator averages once enough gradients (replicas_to_aggregate) have been accumulated.</li> <li>Apply the averaged gradients to the variables.</li> <li>Only after all variables have been updated, increment the global step.</li> <li>Only after step 4, pushes <code translate="no" dir="ltr">global_step</code> in the <code translate="no" dir="ltr">token_queue</code>, once for each worker replica. The workers can now fetch the global step, use it to update its local_step variable and start the next batch. Please note that some workers can consume multiple minibatches, while some may not consume even one. This is because each worker fetches minibatches as long as a token exists. If one worker is stuck for some reason and does not consume a token, another worker can use it.</li> </ol> <h4 id="for_the_replicas" data-text="For the replicas:">For the replicas:</h4> <ol> <li>Start a step: fetch variables and compute gradients.</li> <li>Once the gradients have been computed, push them into gradient accumulators. Each accumulator will check the staleness and drop the stale.</li> <li>After pushing all the gradients, dequeue an updated value of global_step from the token queue and record that step to its local_step variable. Note that this is effectively a barrier.</li> <li>Start the next batch.</li> </ol> <h3 id="usage" data-text="Usage">Usage</h3> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python"># Create any optimizer to update the variables, say a simple SGD:
+opt = GradientDescentOptimizer(learning_rate=0.1)
+
+# Wrap the optimizer with sync_replicas_optimizer with 50 replicas: at each
+# step the optimizer collects 50 gradients before applying to variables.
+# Note that if you want to have 2 backup replicas, you can change
+# total_num_replicas=52 and make sure this number matches how many physical
+# replicas you started in your job.
+opt = tf.compat.v1.train.SyncReplicasOptimizer(opt, replicas_to_aggregate=50,
+                               total_num_replicas=50)
+
+# Some models have startup_delays to help stabilize the model but when using
+# sync_replicas training, set it to 0.
+
+# Now you can call `minimize()` or `compute_gradients()` and
+# `apply_gradients()` normally
+training_op = opt.minimize(total_loss, global_step=self.global_step)
+
+
+# You can create the hook which handles initialization and queues.
+sync_replicas_hook = opt.make_session_run_hook(is_chief)
+</pre> <p>In the training program, every worker will run the train_op as if not synchronized.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">with training.MonitoredTrainingSession(
+    master=workers[worker_id].target, is_chief=is_chief,
+    hooks=[sync_replicas_hook]) as mon_sess:
+  while not mon_sess.should_stop():
+    mon_sess.run(training_op)
+</pre> <p>To use SyncReplicasOptimizer with an <code translate="no" dir="ltr">Estimator</code>, you need to send sync_replicas_hook while calling the fit.</p> <pre class="prettyprint lang-python" translate="no" dir="ltr" data-language="python">my_estimator = DNNClassifier(..., optimizer=opt)
+my_estimator.fit(..., hooks=[sync_replicas_hook])
+</pre>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">opt</code> </td> <td> The actual optimizer that will be used to compute and apply the gradients. Must be one of the Optimizer classes. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">replicas_to_aggregate</code> </td> <td> number of replicas to aggregate for each variable update. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">total_num_replicas</code> </td> <td> Total number of tasks/workers/replicas, could be different from replicas_to_aggregate. If total_num_replicas &gt; replicas_to_aggregate: it is backup_replicas + replicas_to_aggregate. If total_num_replicas &lt; replicas_to_aggregate: Replicas compute multiple batches per update to variables. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">variable_averages</code> </td> <td> Optional <code translate="no" dir="ltr">ExponentialMovingAverage</code> object, used to maintain moving averages for the variables passed in <code translate="no" dir="ltr">variables_to_average</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">variables_to_average</code> </td> <td> a list of variables that need to be averaged. Only needed if variable_averages is passed in. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">use_locking</code> </td> <td> If True use locks for update operation. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> string. Optional name of the returned operation. </td> </tr> </table> <h2 id="methods" data-text="Methods">Methods</h2> <h3 id="apply_gradients" data-text="apply_gradients"><code translate="no" dir="ltr">apply_gradients</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L225-L358">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+apply_gradients(
+    grads_and_vars, global_step=None, name=None
+)
+</pre> <p>Apply gradients to variables.</p> <p>This contains most of the synchronization implementation and also wraps the apply_gradients() from the real optimizer.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">grads_and_vars</code> </td> <td> List of (gradient, variable) pairs as returned by compute_gradients(). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">global_step</code> </td> <td> Optional Variable to increment by one after the variables have been updated. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Optional name for the returned operation. Default to the name passed to the Optimizer constructor. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">train_op</code> </td> <td> The op to dequeue a token so the replicas can exit this batch and start the next one. This is executed by each replica. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If the grads_and_vars is empty. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If global step is not provided, the staleness cannot be checked. </td> </tr> </table> <h3 id="compute_gradients" data-text="compute_gradients"><code translate="no" dir="ltr">compute_gradients</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L207-L223">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+compute_gradients(
+    *args, **kwargs
+)
+</pre> <p>Compute gradients of "loss" for the variables in "var_list".</p> <p>This simply wraps the compute_gradients() from the real optimizer. The gradients will be aggregated in the apply_gradients() so that user can modify the gradients like clipping with per replica global norm if needed. The global norm with aggregated gradients can be bad as one replica's huge gradients can hurt the gradients from other replicas.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">*args</code> </td> <td> Arguments for compute_gradients(). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">**kwargs</code> </td> <td> Keyword arguments for compute_gradients(). </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A list of (gradient, variable) pairs. </td> </tr> 
+</table> <h3 id="get_chief_queue_runner" data-text="get_chief_queue_runner"><code translate="no" dir="ltr">get_chief_queue_runner</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L360-L378">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_chief_queue_runner()
+</pre> <p>Returns the QueueRunner for the chief to execute.</p> <p>This includes the operations to synchronize replicas: aggregate gradients, apply to variables, increment global step, insert tokens to token queue.</p> <p>Note that this can only be called after calling apply_gradients() which actually generates this queuerunner.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A <code translate="no" dir="ltr">QueueRunner</code> for chief to execute. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If this is called before apply_gradients(). </td> </tr> </table> <h3 id="get_init_tokens_op" data-text="get_init_tokens_op"><code translate="no" dir="ltr">get_init_tokens_op</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L419-L458">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_init_tokens_op(
+    num_tokens=-1
+)
+</pre> <p>Returns the op to fill the sync_token_queue with the tokens.</p> <p>This is supposed to be executed in the beginning of the chief/sync thread so that even if the total_num_replicas is less than replicas_to_aggregate, the model can still proceed as the replicas can compute multiple steps per variable update. Make sure: <code translate="no" dir="ltr">num_tokens &gt;= replicas_to_aggregate - total_num_replicas</code>.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">num_tokens</code> </td> <td> Number of tokens to add to the queue. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> An op for the chief/sync replica to fill the token queue. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If this is called before apply_gradients(). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If num_tokens are smaller than replicas_to_aggregate - total_num_replicas. </td> </tr> </table> <h3 id="get_name" data-text="get_name"><code translate="no" dir="ltr">get_name</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/optimizer.py#L352-L353">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_name()
+</pre> <h3 id="get_slot" data-text="get_slot"><code translate="no" dir="ltr">get_slot</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L380-L392">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_slot(
+    *args, **kwargs
+)
+</pre> <p>Return a slot named "name" created for "var" by the Optimizer.</p> <p>This simply wraps the get_slot() from the actual optimizer.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">*args</code> </td> <td> Arguments for get_slot(). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">**kwargs</code> </td> <td> Keyword arguments for get_slot(). </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> The <code translate="no" dir="ltr">Variable</code> for the slot if it was created, <code translate="no" dir="ltr">None</code> otherwise. </td> </tr> 
+</table> <h3 id="get_slot_names" data-text="get_slot_names"><code translate="no" dir="ltr">get_slot_names</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L405-L417">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+get_slot_names(
+    *args, **kwargs
+)
+</pre> <p>Return a list of the names of slots created by the <code translate="no" dir="ltr">Optimizer</code>.</p> <p>This simply wraps the get_slot_names() from the actual optimizer.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">*args</code> </td> <td> Arguments for get_slot(). </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">**kwargs</code> </td> <td> Keyword arguments for get_slot(). </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A list of strings. </td> </tr> 
+</table> <h3 id="make_session_run_hook" data-text="make_session_run_hook"><code translate="no" dir="ltr">make_session_run_hook</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L460-L462">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+make_session_run_hook(
+    is_chief, num_tokens=-1
+)
+</pre> <p>Creates a hook to handle SyncReplicasHook ops such as initialization.</p> <h3 id="minimize" data-text="minimize"><code translate="no" dir="ltr">minimize</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/optimizer.py#L355-L413">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+minimize(
+    loss, global_step=None, var_list=None, gate_gradients=GATE_OP,
+    aggregation_method=None, colocate_gradients_with_ops=False, name=None,
+    grad_loss=None
+)
+</pre> <p>Add operations to minimize <code translate="no" dir="ltr">loss</code> by updating <code translate="no" dir="ltr">var_list</code>.</p> <p>This method simply combines calls <code translate="no" dir="ltr">compute_gradients()</code> and <code translate="no" dir="ltr">apply_gradients()</code>. If you want to process the gradient before applying them call <code translate="no" dir="ltr">compute_gradients()</code> and <code translate="no" dir="ltr">apply_gradients()</code> explicitly instead of using this function.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Args</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">loss</code> </td> <td> A <code translate="no" dir="ltr">Tensor</code> containing the value to minimize. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">global_step</code> </td> <td> Optional <code translate="no" dir="ltr">Variable</code> to increment by one after the variables have been updated. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">var_list</code> </td> <td> Optional list or tuple of <code translate="no" dir="ltr">Variable</code> objects to update to minimize <code translate="no" dir="ltr">loss</code>. Defaults to the list of variables collected in the graph under the key <code translate="no" dir="ltr">GraphKeys.TRAINABLE_VARIABLES</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">gate_gradients</code> </td> <td> How to gate the computation of gradients. Can be <code translate="no" dir="ltr">GATE_NONE</code>, <code translate="no" dir="ltr">GATE_OP</code>, or <code translate="no" dir="ltr">GATE_GRAPH</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">aggregation_method</code> </td> <td> Specifies the method used to combine gradient terms. Valid values are defined in the class <code translate="no" dir="ltr">AggregationMethod</code>. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">colocate_gradients_with_ops</code> </td> <td> If True, try colocating gradients with the corresponding op. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">name</code> </td> <td> Optional name for the returned operation. </td> </tr>
+<tr> <td> <code translate="no" dir="ltr">grad_loss</code> </td> <td> Optional. A <code translate="no" dir="ltr">Tensor</code> holding the gradient computed for <code translate="no" dir="ltr">loss</code>. </td> </tr> </table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> An Operation that updates the variables in <code translate="no" dir="ltr">var_list</code>. If <code translate="no" dir="ltr">global_step</code> was not <code translate="no" dir="ltr">None</code>, that operation also increments <code translate="no" dir="ltr">global_step</code>. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Raises</th></tr> 
+<tr> <td> <code translate="no" dir="ltr">ValueError</code> </td> <td> If some of the variables are not <code translate="no" dir="ltr">Variable</code> objects. </td> </tr> </table> <h4 id="eager_compatibility" data-text="Eager Compatibility">Eager Compatibility</h4> <p>When eager execution is enabled, <code translate="no" dir="ltr">loss</code> should be a Python function that takes no arguments and computes the value to be minimized. Minimization (and gradient computation) is done with respect to the elements of <code translate="no" dir="ltr">var_list</code> if not None, else with respect to any trainable variables created during the execution of the <code translate="no" dir="ltr">loss</code> function. <code translate="no" dir="ltr">gate_gradients</code>, <code translate="no" dir="ltr">aggregation_method</code>, <code translate="no" dir="ltr">colocate_gradients_with_ops</code> and <code translate="no" dir="ltr">grad_loss</code> are ignored when eager execution is enabled.</p> <h3 id="variables" data-text="variables"><code translate="no" dir="ltr">variables</code></h3> <p><a target="_blank" href="https://github.com/tensorflow/tensorflow/blob/v2.4.0/tensorflow/python/training/sync_replicas_optimizer.py#L394-L403">View source</a></p> <pre class="devsite-click-to-copy prettyprint lang-py tfo-signature-link" translate="no" dir="ltr" data-language="cpp">
+variables()
+</pre> <p>Fetches a list of optimizer variables in the default graph.</p> <p>This wraps <code translate="no" dir="ltr">variables()</code> from the actual optimizer. It does not include the <code translate="no" dir="ltr">SyncReplicasOptimizer</code>'s local step.</p>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Returns</th></tr> <tr class="alt"> <td colspan="2"> A list of variables. </td> </tr> 
+</table>  
+<table class="responsive fixed orange"> <colgroup>
+<col width="214px">
+<col>
+</colgroup> <tr><th colspan="2">Class Variables</th></tr> 
+<tr> <td> GATE_GRAPH </td> <td> <code translate="no" dir="ltr">2</code> </td> </tr>
+<tr> <td> GATE_NONE </td> <td> <code translate="no" dir="ltr">0</code> </td> </tr>
+<tr> <td> GATE_OP </td> <td> <code translate="no" dir="ltr">1</code> </td> </tr> </table>  <devsite-page-rating position="footer" selected-rating="0" hover-rating-star="0"> </devsite-page-rating><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2020 The TensorFlow Authors. All rights reserved.<br>Licensed under the Creative Commons Attribution License 3.0.<br>Code samples licensed under the Apache 2.0 License.<br>
+    <a href="https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/compat/v1/train/SyncReplicasOptimizer" class="_attribution-link">https://www.tensorflow.org/versions/r2.4/api_docs/python/tf/compat/v1/train/SyncReplicasOptimizer</a>
+  </p>
+</div>

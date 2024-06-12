@@ -1,0 +1,83 @@
+<h1 id="versioning">Versioning</h1> <blockquote> <p>Versioning an interface is just a "polite" way to kill deployed clients.</p> <p>— <a href="https://www.slideshare.net/evolve_conference/201308-fielding-evolve/31">Roy Fielding</a>.</p> </blockquote> <p>API versioning allows you to alter behavior between different clients. REST framework provides for a number of different versioning schemes.</p> <p>Versioning is determined by the incoming client request, and may either be based on the request URL, or based on the request headers.</p> <p>There are a number of valid approaches to approaching versioning. <a href="https://www.infoq.com/articles/roy-fielding-on-versioning">Non-versioned systems can also be appropriate</a>, particularly if you're engineering for very long-term systems with multiple clients outside of your control.</p> <h2 id="versioning-with-rest-framework">Versioning with REST framework</h2> <p>When API versioning is enabled, the <code>request.version</code> attribute will contain a string that corresponds to the version requested in the incoming client request.</p> <p>By default, versioning is not enabled, and <code>request.version</code> will always return <code>None</code>.</p> <h4 id="varying-behavior-based-on-the-version">Varying behavior based on the version</h4> <p>How you vary the API behavior is up to you, but one example you might typically want is to switch to a different serialization style in a newer version. For example:</p> <pre data-language="python">def get_serializer_class(self):
+    if self.request.version == 'v1':
+        return AccountSerializerVersion1
+    return AccountSerializer
+</pre> <h4 id="reversing-urls-for-versioned-apis">Reversing URLs for versioned APIs</h4> <p>The <code>reverse</code> function included by REST framework ties in with the versioning scheme. You need to make sure to include the current <code>request</code> as a keyword argument, like so.</p> <pre data-language="python">from rest_framework.reverse import reverse
+
+reverse('bookings-list', request=request)
+</pre> <p>The above function will apply any URL transformations appropriate to the request version. For example:</p> <ul> <li>If <code>NamespaceVersioning</code> was being used, and the API version was 'v1', then the URL lookup used would be <code>'v1:bookings-list'</code>, which might resolve to a URL like <code>http://example.org/v1/bookings/</code>.</li> <li>If <code>QueryParameterVersioning</code> was being used, and the API version was <code>1.0</code>, then the returned URL might be something like <code>http://example.org/bookings/?version=1.0</code>
+</li> </ul> <h4 id="versioned-apis-and-hyperlinked-serializers">Versioned APIs and hyperlinked serializers</h4> <p>When using hyperlinked serialization styles together with a URL based versioning scheme make sure to include the request as context to the serializer.</p> <pre data-language="python">def get(self, request):
+    queryset = Booking.objects.all()
+    serializer = BookingsSerializer(queryset, many=True, context={'request': request})
+    return Response({'all_bookings': serializer.data})
+</pre> <p>Doing so will allow any returned URLs to include the appropriate versioning.</p> <h2 id="configuring-the-versioning-scheme">Configuring the versioning scheme</h2> <p>The versioning scheme is defined by the <code>DEFAULT_VERSIONING_CLASS</code> settings key.</p> <pre data-language="python">REST_FRAMEWORK = {
+    'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning'
+}
+</pre> <p>Unless it is explicitly set, the value for <code>DEFAULT_VERSIONING_CLASS</code> will be <code>None</code>. In this case the <code>request.version</code> attribute will always return <code>None</code>.</p> <p>You can also set the versioning scheme on an individual view. Typically you won't need to do this, as it makes more sense to have a single versioning scheme used globally. If you do need to do so, use the <code>versioning_class</code> attribute.</p> <pre data-language="python">class ProfileList(APIView):
+    versioning_class = versioning.QueryParameterVersioning
+</pre> <h4 id="other-versioning-settings">Other versioning settings</h4> <p>The following settings keys are also used to control versioning:</p> <ul> <li>
+<code>DEFAULT_VERSION</code>. The value that should be used for <code>request.version</code> when no versioning information is present. Defaults to <code>None</code>.</li> <li>
+<code>ALLOWED_VERSIONS</code>. If set, this value will restrict the set of versions that may be returned by the versioning scheme, and will raise an error if the provided version is not in this set. Note that the value used for the <code>DEFAULT_VERSION</code> setting is always considered to be part of the <code>ALLOWED_VERSIONS</code> set (unless it is <code>None</code>). Defaults to <code>None</code>.</li> <li>
+<code>VERSION_PARAM</code>. The string that should be used for any versioning parameters, such as in the media type or URL query parameters. Defaults to <code>'version'</code>.</li> </ul> <p>You can also set your versioning class plus those three values on a per-view or a per-viewset basis by defining your own versioning scheme and using the <code>default_version</code>, <code>allowed_versions</code> and <code>version_param</code> class variables. For example, if you want to use <code>URLPathVersioning</code>:</p> <pre data-language="python">from rest_framework.versioning import URLPathVersioning
+from rest_framework.views import APIView
+
+class ExampleVersioning(URLPathVersioning):
+    default_version = ...
+    allowed_versions = ...
+    version_param = ...
+
+class ExampleView(APIVIew):
+    versioning_class = ExampleVersioning
+</pre>  <h1 id="api-reference">API Reference</h1> <h2 id="acceptheaderversioning">AcceptHeaderVersioning</h2> <p>This scheme requires the client to specify the version as part of the media type in the <code>Accept</code> header. The version is included as a media type parameter, that supplements the main media type.</p> <p>Here's an example HTTP request using the accept header versioning style.</p> <pre data-language="python">GET /bookings/ HTTP/1.1
+Host: example.com
+Accept: application/json; version=1.0
+</pre> <p>In the example request above <code>request.version</code> attribute would return the string <code>'1.0'</code>.</p> <p>Versioning based on accept headers is <a href="http://blog.steveklabnik.com/posts/2011-07-03-nobody-understands-rest-or-http#i_want_my_api_to_be_versioned">generally considered</a> as <a href="https://github.com/interagent/http-api-design/blob/master/en/foundations/require-versioning-in-the-accepts-header.md">best practice</a>, although other styles may be suitable depending on your client requirements.</p> <h4 id="using-accept-headers-with-vendor-media-types">Using accept headers with vendor media types</h4> <p>Strictly speaking the <code>json</code> media type is not specified as <a href="https://tools.ietf.org/html/rfc4627#section-6">including additional parameters</a>. If you are building a well-specified public API you might consider using a <a href="https://en.wikipedia.org/wiki/Internet_media_type#Vendor_tree">vendor media type</a>. To do so, configure your renderers to use a JSON based renderer with a custom media type:</p> <pre data-language="python">class BookingsAPIRenderer(JSONRenderer):
+    media_type = 'application/vnd.megacorp.bookings+json'
+</pre> <p>Your client requests would now look like this:</p> <pre data-language="python">GET /bookings/ HTTP/1.1
+Host: example.com
+Accept: application/vnd.megacorp.bookings+json; version=1.0
+</pre> <h2 id="urlpathversioning">URLPathVersioning</h2> <p>This scheme requires the client to specify the version as part of the URL path.</p> <pre data-language="python">GET /v1/bookings/ HTTP/1.1
+Host: example.com
+Accept: application/json
+</pre> <p>Your URL conf must include a pattern that matches the version with a <code>'version'</code> keyword argument, so that this information is available to the versioning scheme.</p> <pre data-language="python">urlpatterns = [
+    re_path(
+        r'^(?P&lt;version&gt;(v1|v2))/bookings/$',
+        bookings_list,
+        name='bookings-list'
+    ),
+    re_path(
+        r'^(?P&lt;version&gt;(v1|v2))/bookings/(?P&lt;pk&gt;[0-9]+)/$',
+        bookings_detail,
+        name='bookings-detail'
+    )
+]
+</pre> <h2 id="namespaceversioning">NamespaceVersioning</h2> <p>To the client, this scheme is the same as <code>URLPathVersioning</code>. The only difference is how it is configured in your Django application, as it uses URL namespacing, instead of URL keyword arguments.</p> <pre data-language="python">GET /v1/something/ HTTP/1.1
+Host: example.com
+Accept: application/json
+</pre> <p>With this scheme the <code>request.version</code> attribute is determined based on the <code>namespace</code> that matches the incoming request path.</p> <p>In the following example we're giving a set of views two different possible URL prefixes, each under a different namespace:</p> <pre data-language="python"># bookings/urls.py
+urlpatterns = [
+    re_path(r'^$', bookings_list, name='bookings-list'),
+    re_path(r'^(?P&lt;pk&gt;[0-9]+)/$', bookings_detail, name='bookings-detail')
+]
+
+# urls.py
+urlpatterns = [
+    re_path(r'^v1/bookings/', include('bookings.urls', namespace='v1')),
+    re_path(r'^v2/bookings/', include('bookings.urls', namespace='v2'))
+]
+</pre> <p>Both <code>URLPathVersioning</code> and <code>NamespaceVersioning</code> are reasonable if you just need a simple versioning scheme. The <code>URLPathVersioning</code> approach might be better suitable for small ad-hoc projects, and the <code>NamespaceVersioning</code> is probably easier to manage for larger projects.</p> <h2 id="hostnameversioning">HostNameVersioning</h2> <p>The hostname versioning scheme requires the client to specify the requested version as part of the hostname in the URL.</p> <p>For example the following is an HTTP request to the <code>http://v1.example.com/bookings/</code> URL:</p> <pre data-language="python">GET /bookings/ HTTP/1.1
+Host: v1.example.com
+Accept: application/json
+</pre> <p>By default this implementation expects the hostname to match this simple regular expression:</p> <pre data-language="python">^([a-zA-Z0-9]+)\.[a-zA-Z0-9]+\.[a-zA-Z0-9]+$
+</pre> <p>Note that the first group is enclosed in brackets, indicating that this is the matched portion of the hostname.</p> <p>The <code>HostNameVersioning</code> scheme can be awkward to use in debug mode as you will typically be accessing a raw IP address such as <code>127.0.0.1</code>. There are various online tutorials on how to <a href="https://reinteractive.net/posts/199-developing-and-testing-rails-applications-with-subdomains">access localhost with a custom subdomain</a> which you may find helpful in this case.</p> <p>Hostname based versioning can be particularly useful if you have requirements to route incoming requests to different servers based on the version, as you can configure different DNS records for different API versions.</p> <h2 id="queryparameterversioning">QueryParameterVersioning</h2> <p>This scheme is a simple style that includes the version as a query parameter in the URL. For example:</p> <pre data-language="python">GET /something/?version=0.1 HTTP/1.1
+Host: example.com
+Accept: application/json
+</pre>  <h1 id="custom-versioning-schemes">Custom versioning schemes</h1> <p>To implement a custom versioning scheme, subclass <code>BaseVersioning</code> and override the <code>.determine_version</code> method.</p> <h2 id="example">Example</h2> <p>The following example uses a custom <code>X-API-Version</code> header to determine the requested version.</p> <pre data-language="python">class XAPIVersionScheme(versioning.BaseVersioning):
+    def determine_version(self, request, *args, **kwargs):
+        return request.META.get('HTTP_X_API_VERSION', None)
+</pre> <p>If your versioning scheme is based on the request URL, you will also want to alter how versioned URLs are determined. In order to do so you should override the <code>.reverse()</code> method on the class. See the source code for examples.</p> <p class="_links"><a class="_links-link" href="https://github.com/encode/django-rest-framework/tree/master/rest_framework/versioning.py">versioning.py</a></p><div class="_attribution">
+  <p class="_attribution-p">
+    Copyright &copy; 2011&ndash;present Encode OSS Ltd.<br>Licensed under the BSD License.<br>
+    <a href="https://www.django-rest-framework.org/api-guide/versioning/" class="_attribution-link">https://www.django-rest-framework.org/api-guide/versioning/</a>
+  </p>
+</div>

@@ -1,0 +1,161 @@
+<h1 id="the-sites-framework">The “sites” framework</h1> <p id="s-module-django.contrib.sites">Django comes with an optional “sites” framework. It’s a hook for associating objects and functionality to particular websites, and it’s a holding place for the domain names and “verbose” names of your Django-powered sites.</p> <p>Use it if your single Django installation powers more than one site and you need to differentiate between those sites in some way.</p> <p>The sites framework is mainly based on this model:</p> <dl class="class"> <dt id="django.contrib.sites.models.Site">
+<code>class models.Site</code> </dt> <dd>
+<p>A model for storing the <code>domain</code> and <code>name</code> attributes of a website.</p> <dl class="attribute"> <dt id="django.contrib.sites.models.Site.domain">
+<code>domain</code> </dt> <dd>
+<p>The fully qualified domain name associated with the website. For example, <code>www.example.com</code>.</p> </dd>
+</dl> <dl class="attribute"> <dt id="django.contrib.sites.models.Site.name">
+<code>name</code> </dt> <dd>
+<p>A human-readable “verbose” name for the website.</p> </dd>
+</dl> </dd>
+</dl> <p>The <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting specifies the database ID of the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object associated with that particular settings file. If the setting is omitted, the <a class="reference internal" href="#django.contrib.sites.shortcuts.get_current_site" title="django.contrib.sites.shortcuts.get_current_site"><code>get_current_site()</code></a> function will try to get the current site by comparing the <a class="reference internal" href="#django.contrib.sites.models.Site.domain" title="django.contrib.sites.models.Site.domain"><code>domain</code></a> with the host name from the <a class="reference internal" href="../request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>request.get_host()</code></a> method.</p> <p>How you use this is up to you, but Django uses it in a couple of ways automatically via a couple of conventions.</p>  <h2 id="example-usage">Example usage</h2> <p id="s-example-usage">Why would you use sites? It’s best explained through examples.</p>  <h3 id="associating-content-with-multiple-sites">Associating content with multiple sites</h3> <p id="s-associating-content-with-multiple-sites">The <a class="reference external" href="https://www2.ljworld.com/">LJWorld.com</a> and <a class="reference external" href="http://www.lawrence.com/">Lawrence.com</a> sites are operated by the same news organization – the Lawrence Journal-World newspaper in Lawrence, Kansas. LJWorld.com focused on news, while Lawrence.com focused on local entertainment. But sometimes editors wanted to publish an article on <em>both</em> sites.</p> <p>The naive way of solving the problem would be to require site producers to publish the same story twice: once for LJWorld.com and again for Lawrence.com. But that’s inefficient for site producers, and it’s redundant to store multiple copies of the same story in the database.</p> <p>A better solution removes the content duplication: Both sites use the same article database, and an article is associated with one or more sites. In Django model terminology, that’s represented by a <a class="reference internal" href="../models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a> in the <code>Article</code> model:</p> <pre data-language="python">from django.contrib.sites.models import Site
+from django.db import models
+
+class Article(models.Model):
+    headline = models.CharField(max_length=200)
+    # ...
+    sites = models.ManyToManyField(Site)
+</pre> <p>This accomplishes several things quite nicely:</p> <ul> <li>It lets the site producers edit all content – on both sites – in a single interface (the Django admin). </li> <li>It means the same story doesn’t have to be published twice in the database; it only has a single record in the database. </li> <li>
+<p class="first">It lets the site developers use the same Django view code for both sites. The view code that displays a given story checks to make sure the requested story is on the current site. It looks something like this:</p> <pre data-language="python">from django.contrib.sites.shortcuts import get_current_site
+
+def article_detail(request, article_id):
+    try:
+        a = Article.objects.get(id=article_id, sites__id=get_current_site(request).id)
+    except Article.DoesNotExist:
+        raise Http404("Article does not exist on this site")
+    # ...
+</pre> </li> </ul>   <h3 id="associating-content-with-a-single-site">Associating content with a single site</h3> <p id="s-associating-content-with-a-single-site">Similarly, you can associate a model to the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> model in a many-to-one relationship, using <a class="reference internal" href="../models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a>.</p> <p>For example, if an article is only allowed on a single site, you’d use a model like this:</p> <pre data-language="python">from django.contrib.sites.models import Site
+from django.db import models
+
+class Article(models.Model):
+    headline = models.CharField(max_length=200)
+    # ...
+    site = models.ForeignKey(Site, on_delete=models.CASCADE)
+</pre> <p>This has the same benefits as described in the last section.</p>   <h3 id="hooking-into-current-site-from-views">Hooking into the current site from views</h3> <p id="s-hooking-into-the-current-site-from-views">You can use the sites framework in your Django views to do particular things based on the site in which the view is being called. For example:</p> <pre data-language="python">from django.conf import settings
+
+def my_view(request):
+    if settings.SITE_ID == 3:
+        # Do something.
+        pass
+    else:
+        # Do something else.
+        pass
+</pre> <p>It’s fragile to hard-code the site IDs like that, in case they change. The cleaner way of accomplishing the same thing is to check the current site’s domain:</p> <pre data-language="python">from django.contrib.sites.shortcuts import get_current_site
+
+def my_view(request):
+    current_site = get_current_site(request)
+    if current_site.domain == 'foo.com':
+        # Do something
+        pass
+    else:
+        # Do something else.
+        pass
+</pre> <p>This has also the advantage of checking if the sites framework is installed, and return a <a class="reference internal" href="#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a> instance if it is not.</p> <p>If you don’t have access to the request object, you can use the <code>get_current()</code> method of the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> model’s manager. You should then ensure that your settings file does contain the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting. This example is equivalent to the previous one:</p> <pre data-language="python">from django.contrib.sites.models import Site
+
+def my_function_without_request():
+    current_site = Site.objects.get_current()
+    if current_site.domain == 'foo.com':
+        # Do something
+        pass
+    else:
+        # Do something else.
+        pass
+</pre>   <h3 id="getting-the-current-domain-for-display">Getting the current domain for display</h3> <p id="s-getting-the-current-domain-for-display">LJWorld.com and Lawrence.com both have email alert functionality, which lets readers sign up to get notifications when news happens. It’s pretty basic: A reader signs up on a web form and immediately gets an email saying, “Thanks for your subscription.”</p> <p>It’d be inefficient and redundant to implement this sign up processing code twice, so the sites use the same code behind the scenes. But the “thank you for signing up” notice needs to be different for each site. By using <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> objects, we can abstract the “thank you” notice to use the values of the current site’s <a class="reference internal" href="#django.contrib.sites.models.Site.name" title="django.contrib.sites.models.Site.name"><code>name</code></a> and <a class="reference internal" href="#django.contrib.sites.models.Site.domain" title="django.contrib.sites.models.Site.domain"><code>domain</code></a>.</p> <p>Here’s an example of what the form-handling view looks like:</p> <pre data-language="python">from django.contrib.sites.shortcuts import get_current_site
+from django.core.mail import send_mail
+
+def register_for_newsletter(request):
+    # Check form values, etc., and subscribe the user.
+    # ...
+
+    current_site = get_current_site(request)
+    send_mail(
+        'Thanks for subscribing to %s alerts' % current_site.name,
+        'Thanks for your subscription. We appreciate it.\n\n-The %s team.' % (
+            current_site.name,
+        ),
+        'editor@%s' % current_site.domain,
+        [user.email],
+    )
+
+    # ...
+</pre> <p>On Lawrence.com, this email has the subject line “Thanks for subscribing to lawrence.com alerts.” On LJWorld.com, the email has the subject “Thanks for subscribing to LJWorld.com alerts.” Same goes for the email’s message body.</p> <p>Note that an even more flexible (but more heavyweight) way of doing this would be to use Django’s template system. Assuming Lawrence.com and LJWorld.com have different template directories (<a class="reference internal" href="../settings#std:setting-TEMPLATES-DIRS"><code>DIRS</code></a>), you could farm out to the template system like so:</p> <pre data-language="python">from django.core.mail import send_mail
+from django.template import loader
+
+def register_for_newsletter(request):
+    # Check form values, etc., and subscribe the user.
+    # ...
+
+    subject = loader.get_template('alerts/subject.txt').render({})
+    message = loader.get_template('alerts/message.txt').render({})
+    send_mail(subject, message, 'editor@ljworld.com', [user.email])
+
+    # ...
+</pre> <p>In this case, you’d have to create <code>subject.txt</code> and <code>message.txt</code> template files for both the LJWorld.com and Lawrence.com template directories. That gives you more flexibility, but it’s also more complex.</p> <p>It’s a good idea to exploit the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> objects as much as possible, to remove unneeded complexity and redundancy.</p>   <h3 id="getting-the-current-domain-for-full-urls">Getting the current domain for full URLs</h3> <p id="s-getting-the-current-domain-for-full-urls">Django’s <code>get_absolute_url()</code> convention is nice for getting your objects’ URL without the domain name, but in some cases you might want to display the full URL – with <code>http://</code> and the domain and everything – for an object. To do this, you can use the sites framework. An example:</p> <pre data-language="python">&gt;&gt;&gt; from django.contrib.sites.models import Site
+&gt;&gt;&gt; obj = MyModel.objects.get(id=3)
+&gt;&gt;&gt; obj.get_absolute_url()
+'/mymodel/objects/3/'
+&gt;&gt;&gt; Site.objects.get_current().domain
+'example.com'
+&gt;&gt;&gt; 'https://%s%s' % (Site.objects.get_current().domain, obj.get_absolute_url())
+'https://example.com/mymodel/objects/3/'
+</pre>    <h2 id="id1">Enabling the sites framework</h2> <p id="s-enabling-the-sites-framework">To enable the sites framework, follow these steps:</p> <ol class="arabic"> <li>Add <code>'django.contrib.sites'</code> to your <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> setting. </li> <li>
+<p class="first">Define a <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting:</p> <pre data-language="python">SITE_ID = 1
+</pre> </li> <li>Run <a class="reference internal" href="../django-admin#django-admin-migrate"><code>migrate</code></a>. </li> </ol> <p><code>django.contrib.sites</code> registers a <a class="reference internal" href="../signals#django.db.models.signals.post_migrate" title="django.db.models.signals.post_migrate"><code>post_migrate</code></a> signal handler which creates a default site named <code>example.com</code> with the domain <code>example.com</code>. This site will also be created after Django creates the test database. To set the correct name and domain for your project, you can use a <a class="reference internal" href="../../topics/migrations#data-migrations"><span class="std std-ref">data migration</span></a>.</p> <p>In order to serve different sites in production, you’d create a separate settings file with each <code>SITE_ID</code> (perhaps importing from a common settings file to avoid duplicating shared settings) and then specify the appropriate <a class="reference internal" href="../../topics/settings#envvar-DJANGO_SETTINGS_MODULE" id="index-0"><code>DJANGO_SETTINGS_MODULE</code></a> for each site.</p>   <h2 id="caching-the-current-site-object">Caching the current <code>Site</code> object</h2> <p id="s-caching-the-current-site-object">As the current site is stored in the database, each call to <code>Site.objects.get_current()</code> could result in a database query. But Django is a little cleverer than that: on the first request, the current site is cached, and any subsequent call returns the cached data instead of hitting the database.</p> <p>If for any reason you want to force a database query, you can tell Django to clear the cache using <code>Site.objects.clear_cache()</code>:</p> <pre data-language="python"># First call; current site fetched from database.
+current_site = Site.objects.get_current()
+# ...
+
+# Second call; current site fetched from cache.
+current_site = Site.objects.get_current()
+# ...
+
+# Force a database query for the third call.
+Site.objects.clear_cache()
+current_site = Site.objects.get_current()
+</pre>   <h2 id="the-currentsitemanager">The <code>CurrentSiteManager</code>
+</h2> <dl class="class" id="s-the-currentsitemanager"> <dt id="django.contrib.sites.managers.CurrentSiteManager">
+<code>class managers.CurrentSiteManager</code> </dt> 
+</dl> <p>If <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> plays a key role in your application, consider using the helpful <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> in your model(s). It’s a model <a class="reference internal" href="../../topics/db/managers"><span class="doc">manager</span></a> that automatically filters its queries to include only objects associated with the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>.</p> <div class="admonition-mandatory-setting-site-id admonition"> <p class="first admonition-title">Mandatory <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a></p> <p class="last">The <code>CurrentSiteManager</code> is only usable when the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting is defined in your settings.</p> </div> <p>Use <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> by adding it to your model explicitly. For example:</p> <pre data-language="python">from django.contrib.sites.models import Site
+from django.contrib.sites.managers import CurrentSiteManager
+from django.db import models
+
+class Photo(models.Model):
+    photo = models.FileField(upload_to='photos')
+    photographer_name = models.CharField(max_length=100)
+    pub_date = models.DateField()
+    site = models.ForeignKey(Site, on_delete=models.CASCADE)
+    objects = models.Manager()
+    on_site = CurrentSiteManager()
+</pre> <p>With this model, <code>Photo.objects.all()</code> will return all <code>Photo</code> objects in the database, but <code>Photo.on_site.all()</code> will return only the <code>Photo</code> objects associated with the current site, according to the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting.</p> <p>Put another way, these two statements are equivalent:</p> <pre data-language="python">Photo.objects.filter(site=settings.SITE_ID)
+Photo.on_site.all()
+</pre> <p>How did <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> know which field of <code>Photo</code> was the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>? By default, <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> looks for a either a <a class="reference internal" href="../models/fields#django.db.models.ForeignKey" title="django.db.models.ForeignKey"><code>ForeignKey</code></a> called <code>site</code> or a <a class="reference internal" href="../models/fields#django.db.models.ManyToManyField" title="django.db.models.ManyToManyField"><code>ManyToManyField</code></a> called <code>sites</code> to filter on. If you use a field named something other than <code>site</code> or <code>sites</code> to identify which <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> objects your object is related to, then you need to explicitly pass the custom field name as a parameter to <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> on your model. The following model, which has a field called <code>publish_on</code>, demonstrates this:</p> <pre data-language="python">from django.contrib.sites.models import Site
+from django.contrib.sites.managers import CurrentSiteManager
+from django.db import models
+
+class Photo(models.Model):
+    photo = models.FileField(upload_to='photos')
+    photographer_name = models.CharField(max_length=100)
+    pub_date = models.DateField()
+    publish_on = models.ForeignKey(Site, on_delete=models.CASCADE)
+    objects = models.Manager()
+    on_site = CurrentSiteManager('publish_on')
+</pre> <p>If you attempt to use <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a> and pass a field name that doesn’t exist, Django will raise a <code>ValueError</code>.</p> <p>Finally, note that you’ll probably want to keep a normal (non-site-specific) <code>Manager</code> on your model, even if you use <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a>. As explained in the <a class="reference internal" href="../../topics/db/managers"><span class="doc">manager documentation</span></a>, if you define a manager manually, then Django won’t create the automatic <code>objects = models.Manager()</code> manager for you. Also note that certain parts of Django – namely, the Django admin site and generic views – use whichever manager is defined <em>first</em> in the model, so if you want your admin site to have access to all objects (not just site-specific ones), put <code>objects = models.Manager()</code> in your model, before you define <a class="reference internal" href="#django.contrib.sites.managers.CurrentSiteManager" title="django.contrib.sites.managers.CurrentSiteManager"><code>CurrentSiteManager</code></a>.</p>   <h2 id="id2">Site middleware</h2> <p id="s-site-middleware">If you often use this pattern:</p> <pre data-language="python">from django.contrib.sites.models import Site
+
+def my_view(request):
+    site = Site.objects.get_current()
+    ...
+</pre> <p>To avoid repetitions, add <a class="reference internal" href="../middleware#django.contrib.sites.middleware.CurrentSiteMiddleware" title="django.contrib.sites.middleware.CurrentSiteMiddleware"><code>django.contrib.sites.middleware.CurrentSiteMiddleware</code></a> to <a class="reference internal" href="../settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a>. The middleware sets the <code>site</code> attribute on every request object, so you can use <code>request.site</code> to get the current site.</p>   <h2 id="how-django-uses-the-sites-framework">How Django uses the sites framework</h2> <p id="s-how-django-uses-the-sites-framework">Although it’s not required that you use the sites framework, it’s strongly encouraged, because Django takes advantage of it in a few places. Even if your Django installation is powering only a single site, you should take the two seconds to create the site object with your <code>domain</code> and <code>name</code>, and point to its ID in your <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting.</p> <p>Here’s how Django uses the sites framework:</p> <ul class="simple"> <li>In the <a class="reference internal" href="redirects#module-django.contrib.redirects" title="django.contrib.redirects: A framework for managing redirects."><code>redirects framework</code></a>, each redirect object is associated with a particular site. When Django searches for a redirect, it takes into account the current site.</li> <li>In the <a class="reference internal" href="flatpages#module-django.contrib.flatpages" title="django.contrib.flatpages: A framework for managing simple ?flat? HTML content in a database."><code>flatpages framework</code></a>, each flatpage is associated with a particular site. When a flatpage is created, you specify its <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>, and the <a class="reference internal" href="flatpages#django.contrib.flatpages.middleware.FlatpageFallbackMiddleware" title="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware"><code>FlatpageFallbackMiddleware</code></a> checks the current site in retrieving flatpages to display.</li> <li>In the <a class="reference internal" href="syndication#module-django.contrib.syndication" title="django.contrib.syndication: A framework for generating syndication feeds, in RSS and Atom, quite easily."><code>syndication framework</code></a>, the templates for <code>title</code> and <code>description</code> automatically have access to a variable <code>{{ site }}</code>, which is the <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object representing the current site. Also, the hook for providing item URLs will use the <code>domain</code> from the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object if you don’t specify a fully-qualified domain.</li> <li>In the <a class="reference internal" href="../../topics/auth/index#module-django.contrib.auth" title="django.contrib.auth: Django's authentication framework."><code>authentication framework</code></a>, <a class="reference internal" href="../../topics/auth/default#django.contrib.auth.views.LoginView" title="django.contrib.auth.views.LoginView"><code>django.contrib.auth.views.LoginView</code></a> passes the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> name to the template as <code>{{ site_name }}</code>.</li> <li>The shortcut view (<code>django.contrib.contenttypes.views.shortcut</code>) uses the domain of the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object when calculating an object’s URL.</li> <li>In the admin framework, the “view on site” link uses the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> to work out the domain for the site that it will redirect to.</li> </ul>   <h2 id="requestsite-objects">
+<code>RequestSite</code> objects</h2> <p id="s-requestsite-objects">Some <a class="reference internal" href="index"><span class="doc">django.contrib</span></a> applications take advantage of the sites framework but are architected in a way that doesn’t <em>require</em> the sites framework to be installed in your database. (Some people don’t want to, or just aren’t <em>able</em> to install the extra database table that the sites framework requires.) For those cases, the framework provides a <a class="reference internal" href="#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>django.contrib.sites.requests.RequestSite</code></a> class, which can be used as a fallback when the database-backed sites framework is not available.</p> <dl class="class"> <dt id="django.contrib.sites.requests.RequestSite">
+<code>class requests.RequestSite</code> </dt> <dd>
+<p>A class that shares the primary interface of <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> (i.e., it has <code>domain</code> and <code>name</code> attributes) but gets its data from a Django <a class="reference internal" href="../request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> object rather than from a database.</p> <dl class="method"> <dt id="django.contrib.sites.requests.RequestSite.__init__">
+<code>__init__(request)</code> </dt> <dd>
+<p>Sets the <code>name</code> and <code>domain</code> attributes to the value of <a class="reference internal" href="../request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>get_host()</code></a>.</p> </dd>
+</dl> </dd>
+</dl> <p>A <a class="reference internal" href="#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a> object has a similar interface to a normal <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object, except its <a class="reference internal" href="#django.contrib.sites.requests.RequestSite.__init__" title="django.contrib.sites.requests.RequestSite.__init__"><code>__init__()</code></a> method takes an <a class="reference internal" href="../request-response#django.http.HttpRequest" title="django.http.HttpRequest"><code>HttpRequest</code></a> object. It’s able to deduce the <code>domain</code> and <code>name</code> by looking at the request’s domain. It has <code>save()</code> and <code>delete()</code> methods to match the interface of <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a>, but the methods raise <a class="reference external" href="https://docs.python.org/3/library/exceptions.html#NotImplementedError" title="(in Python v3.10)"><code>NotImplementedError</code></a>.</p>   <h2 id="get-current-site-shortcut">
+<code>get_current_site</code> shortcut</h2> <p id="s-get-current-site-shortcut">Finally, to avoid repetitive fallback code, the framework provides a <a class="reference internal" href="#django.contrib.sites.shortcuts.get_current_site" title="django.contrib.sites.shortcuts.get_current_site"><code>django.contrib.sites.shortcuts.get_current_site()</code></a> function.</p> <dl class="function"> <dt id="django.contrib.sites.shortcuts.get_current_site">
+<code>shortcuts.get_current_site(request)</code> </dt> <dd>
+<p>A function that checks if <code>django.contrib.sites</code> is installed and returns either the current <a class="reference internal" href="#django.contrib.sites.models.Site" title="django.contrib.sites.models.Site"><code>Site</code></a> object or a <a class="reference internal" href="#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a> object based on the request. It looks up the current site based on <a class="reference internal" href="../request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>request.get_host()</code></a> if the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting is not defined.</p> <p>Both a domain and a port may be returned by <a class="reference internal" href="../request-response#django.http.HttpRequest.get_host" title="django.http.HttpRequest.get_host"><code>request.get_host()</code></a> when the Host header has a port explicitly specified, e.g. <code>example.com:80</code>. In such cases, if the lookup fails because the host does not match a record in the database, the port is stripped and the lookup is retried with the domain part only. This does not apply to <a class="reference internal" href="#django.contrib.sites.requests.RequestSite" title="django.contrib.sites.requests.RequestSite"><code>RequestSite</code></a> which will always use the unmodified host.</p> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/sites/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/sites/</a>
+  </p>
+</div>

@@ -1,0 +1,59 @@
+<h1>mod_wsgi (Apache)</h1> <p>If you are using the <a class="reference external" href="https://httpd.apache.org/">Apache</a> webserver, consider using <a class="reference external" href="https://github.com/GrahamDumpleton/mod_wsgi">mod_wsgi</a>.</p> <div class="admonition-watch-out admonition"> <p class="admonition-title">Watch Out</p> <p>Please make sure in advance that any <code>app.run()</code> calls you might have in your application file are inside an <code>if __name__ ==
+'__main__':</code> block or moved to a separate file. Just make sure it’s not called because this will always start a local WSGI server which we do not want if we deploy that application to mod_wsgi.</p> </div>  <h2 id="installing-mod-wsgi">Installing <code>mod_wsgi</code>
+</h2> <p>If you don’t have <code>mod_wsgi</code> installed yet you have to either install it using a package manager or compile it yourself. The mod_wsgi <a class="reference external" href="https://modwsgi.readthedocs.io/en/develop/installation.html">installation instructions</a> cover source installations on UNIX systems.</p> <p>If you are using Ubuntu/Debian you can apt-get it and activate it as follows:</p> <pre data-language="text">$ apt-get install libapache2-mod-wsgi-py3
+</pre> <p>If you are using a yum based distribution (Fedora, OpenSUSE, etc..) you can install it as follows:</p> <pre data-language="text">$ yum install mod_wsgi
+</pre> <p>On FreeBSD install <code>mod_wsgi</code> by compiling the <code>www/mod_wsgi</code> port or by using pkg_add:</p> <pre data-language="text">$ pkg install ap24-py37-mod_wsgi
+</pre> <p>If you are using pkgsrc you can install <code>mod_wsgi</code> by compiling the <code>www/ap2-wsgi</code> package.</p> <p>If you encounter segfaulting child processes after the first apache reload you can safely ignore them. Just restart the server.</p>   <h2 id="creating-a-wsgi-file">Creating a <code>.wsgi</code> file</h2> <p>To run your application you need a <code>yourapplication.wsgi</code> file. This file contains the code <code>mod_wsgi</code> is executing on startup to get the application object. The object called <code>application</code> in that file is then used as application.</p> <p>For most applications the following file should be sufficient:</p> <pre data-language="python">from yourapplication import app as application
+</pre> <p>If a factory function is used in a <code>__init__.py</code> file, then the function should be imported:</p> <pre data-language="python">from yourapplication import create_app
+application = create_app()
+</pre> <p>If you don’t have a factory function for application creation but a singleton instance you can directly import that one as <code>application</code>.</p> <p>Store that file somewhere that you will find it again (e.g.: <code>/var/www/yourapplication</code>) and make sure that <code>yourapplication</code> and all the libraries that are in use are on the python load path. If you don’t want to install it system wide consider using a <a class="reference external" href="https://pypi.org/project/virtualenv/">virtual python</a> instance. Keep in mind that you will have to actually install your application into the virtualenv as well. Alternatively there is the option to just patch the path in the <code>.wsgi</code> file before the import:</p> <pre data-language="python">import sys
+sys.path.insert(0, '/path/to/the/application')
+</pre>   <h2 id="configuring-apache">Configuring Apache</h2> <p>The last thing you have to do is to create an Apache configuration file for your application. In this example we are telling <code>mod_wsgi</code> to execute the application under a different user for security reasons:</p> <pre data-language="apache">&lt;VirtualHost *&gt;
+    ServerName example.com
+
+    WSGIDaemonProcess yourapplication user=user1 group=group1 threads=5
+    WSGIScriptAlias / /var/www/yourapplication/yourapplication.wsgi
+
+    &lt;Directory /var/www/yourapplication&gt;
+        WSGIProcessGroup yourapplication
+        WSGIApplicationGroup %{GLOBAL}
+        Order deny,allow
+        Allow from all
+    &lt;/Directory&gt;
+&lt;/VirtualHost&gt;
+</pre> <p>Note: WSGIDaemonProcess isn’t implemented in Windows and Apache will refuse to run with the above configuration. On a Windows system, eliminate those lines:</p> <pre data-language="apache">&lt;VirtualHost *&gt;
+    ServerName example.com
+    WSGIScriptAlias / C:\yourdir\yourapp.wsgi
+    &lt;Directory C:\yourdir&gt;
+        Order deny,allow
+        Allow from all
+    &lt;/Directory&gt;
+&lt;/VirtualHost&gt;
+</pre> <p>Note: There have been some changes in access control configuration for <a class="reference external" href="https://httpd.apache.org/docs/trunk/upgrading.html">Apache 2.4</a>.</p> <p>Most notably, the syntax for directory permissions has changed from httpd 2.2</p> <pre data-language="apache">Order allow,deny
+Allow from all
+</pre> <p>to httpd 2.4 syntax</p> <pre data-language="apache">Require all granted
+</pre> <p>For more information consult the <a class="reference external" href="https://modwsgi.readthedocs.io/en/develop/index.html">mod_wsgi documentation</a>.</p>   <h2 id="troubleshooting">Troubleshooting</h2> <p>If your application does not run, follow this guide to troubleshoot:</p> <dl> <dt>
+<strong>Problem:</strong> application does not run, errorlog shows SystemExit ignored</dt>
+<dd>
+<p>You have an <code>app.run()</code> call in your application file that is not guarded by an <code>if __name__ == '__main__':</code> condition. Either remove that <a class="reference internal" href="../../api/index#flask.Flask.run" title="flask.Flask.run"><code>run()</code></a> call from the file and move it into a separate <code>run.py</code> file or put it into such an if block.</p> </dd> <dt>
+<strong>Problem:</strong> application gives permission errors</dt>
+<dd>
+<p>Probably caused by your application running as the wrong user. Make sure the folders the application needs access to have the proper privileges set and the application runs as the correct user (<code>user</code> and <code>group</code> parameter to the <code>WSGIDaemonProcess</code> directive)</p> </dd> <dt>
+<strong>Problem:</strong> application dies with an error on print</dt>
+<dd>
+<p>Keep in mind that mod_wsgi disallows doing anything with <a class="reference external" href="https://docs.python.org/3/library/sys.html#sys.stdout" title="(in Python v3.9)"><code>sys.stdout</code></a> and <a class="reference external" href="https://docs.python.org/3/library/sys.html#sys.stderr" title="(in Python v3.9)"><code>sys.stderr</code></a>. You can disable this protection from the config by setting the <code>WSGIRestrictStdout</code> to <code>off</code>:</p> <pre data-language="apache">WSGIRestrictStdout Off
+</pre> <p>Alternatively you can also replace the standard out in the .wsgi file with a different stream:</p> <pre data-language="python">import sys
+sys.stdout = sys.stderr
+</pre> </dd> <dt>
+<strong>Problem:</strong> accessing resources gives IO errors</dt>
+<dd>
+<p>Your application probably is a single .py file you symlinked into the site-packages folder. Please be aware that this does not work, instead you either have to put the folder into the pythonpath the file is stored in, or convert your application into a package.</p> <p>The reason for this is that for non-installed packages, the module filename is used to locate the resources and for symlinks the wrong filename is picked up.</p> </dd> </dl>   <h2 id="support-for-automatic-reloading">Support for Automatic Reloading</h2> <p>To help deployment tools you can activate support for automatic reloading. Whenever something changes the <code>.wsgi</code> file, <code>mod_wsgi</code> will reload all the daemon processes for us.</p> <p>For that, just add the following directive to your <code>Directory</code> section:</p> <pre data-language="apache">WSGIScriptReloading On
+</pre>   <h2 id="working-with-virtual-environments">Working with Virtual Environments</h2> <p>Virtual environments have the advantage that they never install the required dependencies system wide so you have a better control over what is used where. If you want to use a virtual environment with mod_wsgi you have to modify your <code>.wsgi</code> file slightly.</p> <p>Add the following lines to the top of your <code>.wsgi</code> file:</p> <pre data-language="python">activate_this = '/path/to/env/bin/activate_this.py'
+with open(activate_this) as file_:
+    exec(file_.read(), dict(__file__=activate_this))
+</pre> <p>This sets up the load paths according to the settings of the virtual environment. Keep in mind that the path has to be absolute.</p><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://flask.palletsprojects.com/en/2.0.x/deploying/mod_wsgi/" class="_attribution-link">https://flask.palletsprojects.com/en/2.0.x/deploying/mod_wsgi/</a>
+  </p>
+</div>

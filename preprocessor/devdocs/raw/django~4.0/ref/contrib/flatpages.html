@@ -1,0 +1,89 @@
+<h1 id="the-flatpages-app">The flatpages app</h1> <p id="s-module-django.contrib.flatpages">Django comes with an optional “flatpages” application. It lets you store “flat” HTML content in a database and handles the management for you via Django’s admin interface and a Python API.</p> <p>A flatpage is a object with a URL, title and content. Use it for one-off, special-case pages, such as “About” or “Privacy Policy” pages, that you want to store in a database but for which you don’t want to develop a custom Django application.</p> <p>A flatpage can use a custom template or a default, systemwide flatpage template. It can be associated with one, or multiple, sites.</p> <p>The content field may optionally be left blank if you prefer to put your content in a custom template.</p>  <h2 id="installation">Installation</h2> <p id="s-installation">To install the flatpages app, follow these steps:</p> <ol class="arabic"> <li>
+<p class="first">Install the <a class="reference internal" href="sites#module-django.contrib.sites" title="django.contrib.sites: Lets you operate multiple websites from the same database and Django project"><code>sites framework</code></a> by adding <code>'django.contrib.sites'</code> to your <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> setting, if it’s not already in there.</p> <p>Also make sure you’ve correctly set <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> to the ID of the site the settings file represents. This will usually be <code>1</code> (i.e. <code>SITE_ID = 1</code>, but if you’re using the sites framework to manage multiple sites, it could be the ID of a different site.</p> </li> <li>Add <code>'django.contrib.flatpages'</code> to your <a class="reference internal" href="../settings#std:setting-INSTALLED_APPS"><code>INSTALLED_APPS</code></a> setting. </li> </ol> <p>Then either:</p> <ol class="arabic" start="3"> <li>
+<p class="first">Add an entry in your URLconf. For example:</p> <pre data-language="python">urlpatterns = [
+    path('pages/', include('django.contrib.flatpages.urls')),
+]
+</pre> </li> </ol> <p>or:</p> <ol class="arabic simple" start="3"> <li>Add <code>'django.contrib.flatpages.middleware.FlatpageFallbackMiddleware'</code> to your <a class="reference internal" href="../settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> setting.</li> <li>Run the command <a class="reference internal" href="../django-admin#django-admin-migrate"><code>manage.py migrate</code></a>.</li> </ol>   <h2 id="how-it-works">How it works</h2> <p id="s-how-it-works"><code>manage.py migrate</code> creates two tables in your database: <code>django_flatpage</code> and <code>django_flatpage_sites</code>. <code>django_flatpage</code> is a lookup table that maps a URL to a title and bunch of text content. <code>django_flatpage_sites</code> associates a flatpage with a site.</p>  <h3 id="using-the-urlconf">Using the URLconf</h3> <p id="s-using-the-urlconf">There are several ways to include the flat pages in your URLconf. You can dedicate a particular path to flat pages:</p> <pre data-language="python">urlpatterns = [
+    path('pages/', include('django.contrib.flatpages.urls')),
+]
+</pre> <p>You can also set it up as a “catchall” pattern. In this case, it is important to place the pattern at the end of the other urlpatterns:</p> <pre data-language="python">from django.contrib.flatpages import views
+
+# Your other patterns here
+urlpatterns += [
+    re_path(r'^(?P&lt;url&gt;.*/)$', views.flatpage),
+]
+</pre> <div class="admonition warning"> <p class="first admonition-title">Warning</p> <p class="last">If you set <a class="reference internal" href="../settings#std:setting-APPEND_SLASH"><code>APPEND_SLASH</code></a> to <code>False</code>, you must remove the slash in the catchall pattern or flatpages without a trailing slash will not be matched.</p> </div> <p>Another common setup is to use flat pages for a limited set of known pages and to hard code the urls, so you can reference them with the <a class="reference internal" href="../templates/builtins#std:templatetag-url"><code>url</code></a> template tag:</p> <pre data-language="python">from django.contrib.flatpages import views
+
+urlpatterns += [
+    path('about-us/', views.flatpage, {'url': '/about-us/'}, name='about'),
+    path('license/', views.flatpage, {'url': '/license/'}, name='license'),
+]
+</pre>   <h3 id="using-the-middleware">Using the middleware</h3> <p id="s-using-the-middleware">The <a class="reference internal" href="#django.contrib.flatpages.middleware.FlatpageFallbackMiddleware" title="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware"><code>FlatpageFallbackMiddleware</code></a> can do all of the work.</p> <dl class="class"> <dt id="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware">
+<code>class FlatpageFallbackMiddleware</code> </dt> <dd>
+<p>Each time any Django application raises a 404 error, this middleware checks the flatpages database for the requested URL as a last resort. Specifically, it checks for a flatpage with the given URL with a site ID that corresponds to the <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> setting.</p> <p>If it finds a match, it follows this algorithm:</p> <ul class="simple"> <li>If the flatpage has a custom template, it loads that template. Otherwise, it loads the template <code>flatpages/default.html</code>.</li> <li>It passes that template a single context variable, <code>flatpage</code>, which is the flatpage object. It uses <a class="reference internal" href="../templates/api#django.template.RequestContext" title="django.template.RequestContext"><code>RequestContext</code></a> in rendering the template.</li> </ul> <p>The middleware will only add a trailing slash and redirect (by looking at the <a class="reference internal" href="../settings#std:setting-APPEND_SLASH"><code>APPEND_SLASH</code></a> setting) if the resulting URL refers to a valid flatpage. Redirects are permanent (301 status code).</p> <p>If it doesn’t find a match, the request continues to be processed as usual.</p> <p>The middleware only gets activated for 404s – not for 500s or responses of any other status code.</p> </dd>
+</dl> <div class="admonition-flatpages-will-not-apply-view-middleware admonition"> <p class="first admonition-title">Flatpages will not apply view middleware</p> <p class="last">Because the <code>FlatpageFallbackMiddleware</code> is applied only after URL resolution has failed and produced a 404, the response it returns will not apply any <a class="reference internal" href="../../topics/http/middleware#view-middleware"><span class="std std-ref">view middleware</span></a> methods. Only requests which are successfully routed to a view via normal URL resolution apply view middleware.</p> </div> <p>Note that the order of <a class="reference internal" href="../settings#std:setting-MIDDLEWARE"><code>MIDDLEWARE</code></a> matters. Generally, you can put <a class="reference internal" href="#django.contrib.flatpages.middleware.FlatpageFallbackMiddleware" title="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware"><code>FlatpageFallbackMiddleware</code></a> at the end of the list. This means it will run first when processing the response, and ensures that any other response-processing middleware see the real flatpage response rather than the 404.</p> <p>For more on middleware, read the <a class="reference internal" href="../../topics/http/middleware"><span class="doc">middleware docs</span></a>.</p> <div class="admonition-ensure-that-your-404-template-works admonition"> <p class="first admonition-title">Ensure that your 404 template works</p> <p class="last">Note that the <a class="reference internal" href="#django.contrib.flatpages.middleware.FlatpageFallbackMiddleware" title="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware"><code>FlatpageFallbackMiddleware</code></a> only steps in once another view has successfully produced a 404 response. If another view or middleware class attempts to produce a 404 but ends up raising an exception instead, the response will become an HTTP 500 (“Internal Server Error”) and the <a class="reference internal" href="#django.contrib.flatpages.middleware.FlatpageFallbackMiddleware" title="django.contrib.flatpages.middleware.FlatpageFallbackMiddleware"><code>FlatpageFallbackMiddleware</code></a> will not attempt to serve a flat page.</p> </div>    <h2 id="how-to-add-change-and-delete-flatpages">How to add, change and delete flatpages</h2>  <h3 id="flatpages-admin">Via the admin interface</h3> <p id="s-how-to-add-change-and-delete-flatpages">If you’ve activated the automatic Django admin interface, you should see a “Flatpages” section on the admin index page. Edit flatpages as you edit any other object in the system.</p> <p>The <code>FlatPage</code> model has an <code>enable_comments</code> field that isn’t used by <code>contrib.flatpages</code>, but that could be useful for your project or third-party apps. It doesn’t appear in the admin interface, but you can add it by registering a custom <code>ModelAdmin</code> for <code>FlatPage</code>:</p> <pre data-language="python">from django.contrib import admin
+from django.contrib.flatpages.admin import FlatPageAdmin
+from django.contrib.flatpages.models import FlatPage
+from django.utils.translation import gettext_lazy as _
+
+# Define a new FlatPageAdmin
+class FlatPageAdmin(FlatPageAdmin):
+    fieldsets = (
+        (None, {'fields': ('url', 'title', 'content', 'sites')}),
+        (_('Advanced options'), {
+            'classes': ('collapse',),
+            'fields': (
+                'enable_comments',
+                'registration_required',
+                'template_name',
+            ),
+        }),
+    )
+
+# Re-register FlatPageAdmin
+admin.site.unregister(FlatPage)
+admin.site.register(FlatPage, FlatPageAdmin)
+</pre>   <h3 id="via-the-python-api">Via the Python API</h3> <dl class="class" id="s-via-the-python-api"> <dt id="django.contrib.flatpages.models.FlatPage">
+<code>class FlatPage</code> </dt> <dd>
+<p>Flatpages are represented by a standard <a class="reference internal" href="../../topics/db/models"><span class="doc">Django model</span></a>, which lives in <a class="reference external" href="https://github.com/django/django/blob/main/django/contrib/flatpages/models.py">django/contrib/flatpages/models.py</a>. You can access flatpage objects via the <a class="reference internal" href="../../topics/db/queries"><span class="doc">Django database API</span></a>.</p> </dd>
+</dl> <div class="admonition-check-for-duplicate-flatpage-urls admonition"> <p class="first admonition-title">Check for duplicate flatpage URLs.</p> <p class="last">If you add or modify flatpages via your own code, you will likely want to check for duplicate flatpage URLs within the same site. The flatpage form used in the admin performs this validation check, and can be imported from <code>django.contrib.flatpages.forms.FlatpageForm</code> and used in your own views.</p> </div>    <h2 id="flatpage-templates">Flatpage templates</h2> <p id="s-flatpage-templates">By default, flatpages are rendered via the template <code>flatpages/default.html</code>, but you can override that for a particular flatpage: in the admin, a collapsed fieldset titled “Advanced options” (clicking will expand it) contains a field for specifying a template name. If you’re creating a flat page via the Python API you can set the template name as the field <code>template_name</code> on the <code>FlatPage</code> object.</p> <p>Creating the <code>flatpages/default.html</code> template is your responsibility; in your template directory, create a <code>flatpages</code> directory containing a file <code>default.html</code>.</p> <p>Flatpage templates are passed a single context variable, <code>flatpage</code>, which is the flatpage object.</p> <p>Here’s a sample <code>flatpages/default.html</code> template:</p> <pre data-language="markup">&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;title&gt;{{ flatpage.title }}&lt;/title&gt;
+&lt;/head&gt;
+&lt;body&gt;
+{{ flatpage.content }}
+&lt;/body&gt;
+&lt;/html&gt;
+</pre> <p>Since you’re already entering raw HTML into the admin page for a flatpage, both <code>flatpage.title</code> and <code>flatpage.content</code> are marked as <strong>not</strong> requiring <a class="reference internal" href="../templates/language#automatic-html-escaping"><span class="std std-ref">automatic HTML escaping</span></a> in the template.</p>   <h2 id="getting-a-list-of-flatpage-objects-in-your-templates">Getting a list of FlatPage objects in your templates</h2> <p id="s-getting-a-list-of-flatpage-objects-in-your-templates">The flatpages app provides a template tag that allows you to iterate over all of the available flatpages on the <a class="reference internal" href="sites#hooking-into-current-site-from-views"><span class="std std-ref">current site</span></a>.</p> <p>Like all custom template tags, you’ll need to <a class="reference internal" href="../templates/language#loading-custom-template-libraries"><span class="std std-ref">load its custom tag library</span></a> before you can use it. After loading the library, you can retrieve all current flatpages via the <a class="reference internal" href="#std:templatetag-get_flatpages"><code>get_flatpages</code></a> tag:</p> <pre data-language="markup">{% load flatpages %}
+{% get_flatpages as flatpages %}
+&lt;ul&gt;
+    {% for page in flatpages %}
+        &lt;li&gt;&lt;a href="{{ page.url }}"&gt;{{ page.title }}&lt;/a&gt;&lt;/li&gt;
+    {% endfor %}
+&lt;/ul&gt;
+</pre>  <h3 id="std:templatetag-get_flatpages">Displaying <code>registration_required</code> flatpages</h3> <p id="s-displaying-registration-required-flatpages">By default, the <a class="reference internal" href="#std:templatetag-get_flatpages"><code>get_flatpages</code></a> template tag will only show flatpages that are marked <code>registration_required = False</code>. If you want to display registration-protected flatpages, you need to specify an authenticated user using a <code>for</code> clause.</p> <p>For example:</p> <pre data-language="markup">{% get_flatpages for someuser as about_pages %}
+</pre> <p>If you provide an anonymous user, <a class="reference internal" href="#std:templatetag-get_flatpages"><code>get_flatpages</code></a> will behave the same as if you hadn’t provided a user – i.e., it will only show you public flatpages.</p>   <h3 id="limiting-flatpages-by-base-url">Limiting flatpages by base URL</h3> <p id="s-limiting-flatpages-by-base-url">An optional argument, <code>starts_with</code>, can be applied to limit the returned pages to those beginning with a particular base URL. This argument may be passed as a string, or as a variable to be resolved from the context.</p> <p>For example:</p> <pre data-language="markup">{% get_flatpages '/about/' as about_pages %}
+{% get_flatpages about_prefix as about_pages %}
+{% get_flatpages '/about/' for someuser as about_pages %}
+</pre>    <h2 id="integrating-with-django-contrib-sitemaps">Integrating with django.contrib.sitemaps</h2> <dl class="class" id="s-integrating-with-django-contrib-sitemaps"> <dt id="django.contrib.flatpages.sitemaps.FlatPageSitemap">
+<code>class FlatPageSitemap</code> </dt> <dd>
+<p>The <a class="reference internal" href="#django.contrib.flatpages.sitemaps.FlatPageSitemap" title="django.contrib.flatpages.sitemaps.FlatPageSitemap"><code>sitemaps.FlatPageSitemap</code></a> class looks at all publicly visible <a class="reference internal" href="#module-django.contrib.flatpages" title="django.contrib.flatpages: A framework for managing simple ?flat? HTML content in a database."><code>flatpages</code></a> defined for the current <a class="reference internal" href="../settings#std:setting-SITE_ID"><code>SITE_ID</code></a> (see the <a class="reference internal" href="sites#module-django.contrib.sites" title="django.contrib.sites: Lets you operate multiple websites from the same database and Django project"><code>sites documentation</code></a>) and creates an entry in the sitemap. These entries include only the <a class="reference internal" href="sitemaps#django.contrib.sitemaps.Sitemap.location" title="django.contrib.sitemaps.Sitemap.location"><code>location</code></a> attribute – not <a class="reference internal" href="sitemaps#django.contrib.sitemaps.Sitemap.lastmod" title="django.contrib.sitemaps.Sitemap.lastmod"><code>lastmod</code></a>, <a class="reference internal" href="sitemaps#django.contrib.sitemaps.Sitemap.changefreq" title="django.contrib.sitemaps.Sitemap.changefreq"><code>changefreq</code></a> or <a class="reference internal" href="sitemaps#django.contrib.sitemaps.Sitemap.priority" title="django.contrib.sitemaps.Sitemap.priority"><code>priority</code></a>.</p> </dd>
+</dl>  <h3 id="example">Example</h3> <p id="s-example">Here’s an example of a URLconf using <a class="reference internal" href="#django.contrib.flatpages.sitemaps.FlatPageSitemap" title="django.contrib.flatpages.sitemaps.FlatPageSitemap"><code>FlatPageSitemap</code></a>:</p> <pre data-language="python">from django.contrib.flatpages.sitemaps import FlatPageSitemap
+from django.contrib.sitemaps.views import sitemap
+from django.urls import path
+
+urlpatterns = [
+    # ...
+
+    # the sitemap
+    path('sitemap.xml', sitemap,
+        {'sitemaps': {'flatpages': FlatPageSitemap}},
+        name='django.contrib.sitemaps.views.sitemap'),
+]
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/ref/contrib/flatpages/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/ref/contrib/flatpages/</a>
+  </p>
+</div>

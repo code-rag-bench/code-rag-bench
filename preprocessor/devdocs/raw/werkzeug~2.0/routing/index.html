@@ -1,0 +1,463 @@
+<h1 id="url-routing">URL Routing</h1> <p>When it comes to combining multiple controller or view functions (however you want to call them), you need a dispatcher. A simple way would be applying regular expression tests on <code>PATH_INFO</code> and call registered callback functions that return the value.</p> <p>Werkzeug provides a much more powerful system, similar to <a class="reference external" href="https://routes.readthedocs.io/en/latest/">Routes</a>. All the objects mentioned on this page must be imported from <a class="reference internal" href="#module-werkzeug.routing" title="werkzeug.routing"><code>werkzeug.routing</code></a>, not from <code>werkzeug</code>!</p> <section id="quickstart"> <h2>Quickstart</h2> <p>Here is a simple example which could be the URL definition for a blog:</p> <pre data-language="python">from werkzeug.routing import Map, Rule, NotFound, RequestRedirect
+
+url_map = Map([
+    Rule('/', endpoint='blog/index'),
+    Rule('/&lt;int:year&gt;/', endpoint='blog/archive'),
+    Rule('/&lt;int:year&gt;/&lt;int:month&gt;/', endpoint='blog/archive'),
+    Rule('/&lt;int:year&gt;/&lt;int:month&gt;/&lt;int:day&gt;/', endpoint='blog/archive'),
+    Rule('/&lt;int:year&gt;/&lt;int:month&gt;/&lt;int:day&gt;/&lt;slug&gt;',
+         endpoint='blog/show_post'),
+    Rule('/about', endpoint='blog/about_me'),
+    Rule('/feeds/', endpoint='blog/feeds'),
+    Rule('/feeds/&lt;feed_name&gt;.rss', endpoint='blog/show_feed')
+])
+
+def application(environ, start_response):
+    urls = url_map.bind_to_environ(environ)
+    try:
+        endpoint, args = urls.match()
+    except HTTPException, e:
+        return e(environ, start_response)
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [f'Rule points to {endpoint!r} with arguments {args!r}']
+</pre> <p>So what does that do? First of all we create a new <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a> which stores a bunch of URL rules. Then we pass it a list of <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule"><code>Rule</code></a> objects.</p> <p>Each <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule"><code>Rule</code></a> object is instantiated with a string that represents a rule and an endpoint which will be the alias for what view the rule represents. Multiple rules can have the same endpoint, but should have different arguments to allow URL construction.</p> <p>The format for the URL rules is straightforward, but explained in detail below.</p> <p>Inside the WSGI application we bind the url_map to the current request which will return a new <a class="reference internal" href="#werkzeug.routing.MapAdapter" title="werkzeug.routing.MapAdapter"><code>MapAdapter</code></a>. This url_map adapter can then be used to match or build domains for the current request.</p> <p>The <a class="reference internal" href="#werkzeug.routing.MapAdapter.match" title="werkzeug.routing.MapAdapter.match"><code>MapAdapter.match()</code></a> method can then either return a tuple in the form <code>(endpoint, args)</code> or raise one of the three exceptions <a class="reference internal" href="../exceptions/index#werkzeug.exceptions.NotFound" title="werkzeug.exceptions.NotFound"><code>NotFound</code></a>, <a class="reference internal" href="../exceptions/index#werkzeug.exceptions.MethodNotAllowed" title="werkzeug.exceptions.MethodNotAllowed"><code>MethodNotAllowed</code></a>, or <code>RequestRedirect</code>. For more details about those exceptions have a look at the documentation of the <a class="reference internal" href="#werkzeug.routing.MapAdapter.match" title="werkzeug.routing.MapAdapter.match"><code>MapAdapter.match()</code></a> method.</p> </section> <section id="rule-format"> <h2>Rule Format</h2> <p>Rule strings are URL paths with placeholders for variable parts in the format <code>&lt;converter(arguments):name&gt;</code>. <code>converter</code> and <code>arguments</code> (with parentheses) are optional. If no converter is given, the <code>default</code> converter is used (<code>string</code> by default). The available converters are discussed below.</p> <p>Rules that end with a slash are “branches”, others are “leaves”. If <code>strict_slashes</code> is enabled (the default), visiting a branch URL without a trailing slash will redirect to the URL with a slash appended.</p> <p>Many HTTP servers merge consecutive slashes into one when receiving requests. If <code>merge_slashes</code> is enabled (the default), rules will merge slashes in non-variable parts when matching and building. Visiting a URL with consecutive slashes will redirect to the URL with slashes merged. If you want to disable <code>merge_slashes</code> for a <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule"><code>Rule</code></a> or <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>, you’ll also need to configure your web server appropriately.</p> </section> <section id="built-in-converters"> <h2>Built-in Converters</h2> <p>Converters for common types of URL variables are built-in. The available converters can be overridden or extended through <a class="reference internal" href="#werkzeug.routing.Map.converters" title="werkzeug.routing.Map.converters"><code>Map.converters</code></a>.</p> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.UnicodeConverter">
+<code>class werkzeug.routing.UnicodeConverter(map, minlength=1, maxlength=None, length=None)</code> </dt> <dd>
+<p>This converter is the default converter and accepts any string but only one path segment. Thus the string can not include a slash.</p> <p>This is the default validator.</p> <p>Example:</p> <pre data-language="python">Rule('/pages/&lt;page&gt;'),
+Rule('/&lt;string(length=2):lang_code&gt;')
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>minlength</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – the minimum length of the string. Must be greater or equal 1.</li> <li>
+<strong>maxlength</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em>) – the maximum length of the string.</li> <li>
+<strong>length</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em>) – the exact length of the string.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.PathConverter">
+<code>class werkzeug.routing.PathConverter(map, *args, **kwargs)</code> </dt> <dd>
+<p>Like the default <a class="reference internal" href="#werkzeug.routing.UnicodeConverter" title="werkzeug.routing.UnicodeConverter"><code>UnicodeConverter</code></a>, but it also matches slashes. This is useful for wikis and similar applications:</p> <pre data-language="python">Rule('/&lt;path:wikipage&gt;')
+Rule('/&lt;path:wikipage&gt;/edit')
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>args</strong> (<em>Any</em>) – </li> <li>
+<strong>kwargs</strong> (<em>Any</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.AnyConverter">
+<code>class werkzeug.routing.AnyConverter(map, *items)</code> </dt> <dd>
+<p>Matches one of the items provided. Items can either be Python identifiers or strings:</p> <pre data-language="python">Rule('/&lt;any(about, help, imprint, class, "foo,bar"):page_name&gt;')
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>items</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – this function accepts the possible items as positional arguments.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.IntegerConverter">
+<code>class werkzeug.routing.IntegerConverter(map, fixed_digits=0, min=None, max=None, signed=False)</code> </dt> <dd>
+<p>This converter only accepts integer values:</p> <pre data-language="python">Rule("/page/&lt;int:page&gt;")
+</pre> <p>By default it only accepts unsigned, positive values. The <code>signed</code> parameter will enable signed, negative values.</p> <pre data-language="python">Rule("/page/&lt;int(signed=True):page&gt;")
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – The <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>fixed_digits</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a>) – The number of fixed digits in the URL. If you set this to <code>4</code> for example, the rule will only match if the URL looks like <code>/0001/</code>. The default is variable length.</li> <li>
+<strong>min</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em>) – The minimal value.</li> <li>
+<strong>max</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.9)">int</a><em>]</em>) – The maximal value.</li> <li>
+<strong>signed</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – Allow signed (negative) values.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.15: </span>The <code>signed</code> parameter.</p> </div> </details>
+</dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.FloatConverter">
+<code>class werkzeug.routing.FloatConverter(map, min=None, max=None, signed=False)</code> </dt> <dd>
+<p>This converter only accepts floating point values:</p> <pre data-language="python">Rule("/probability/&lt;float:probability&gt;")
+</pre> <p>By default it only accepts unsigned, positive values. The <code>signed</code> parameter will enable signed, negative values.</p> <pre data-language="python">Rule("/offset/&lt;float(signed=True):offset&gt;")
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – The <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>min</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>]</em>) – The minimal value.</li> <li>
+<strong>max</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.9)">float</a><em>]</em>) – The maximal value.</li> <li>
+<strong>signed</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – Allow signed (negative) values.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.15: </span>The <code>signed</code> parameter.</p> </div> </details>
+</dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.UUIDConverter">
+<code>class werkzeug.routing.UUIDConverter(map, *args, **kwargs)</code> </dt> <dd>
+<p>This converter only accepts UUID strings:</p> <pre data-language="python">Rule('/object/&lt;uuid:identifier&gt;')
+</pre> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.10.</span></p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">Map</a>) – the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a>.</li> <li>
+<strong>args</strong> (<em>Any</em>) – </li> <li>
+<strong>kwargs</strong> (<em>Any</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> </section> <section id="maps-rules-and-adapters"> <h2>Maps, Rules and Adapters</h2> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.Map">
+<code>class werkzeug.routing.Map(rules=None, default_subdomain='', charset='utf-8', strict_slashes=True, merge_slashes=True, redirect_defaults=True, converters=None, sort_parameters=False, sort_key=None, encoding_errors='replace', host_matching=False)</code> </dt> <dd>
+<p>The map class stores all the URL rules and some configuration parameters. Some of the configuration values are only stored on the <code>Map</code> instance since those affect all rules, others are just defaults and can be overridden for each rule. Note that you have to specify all arguments besides the <code>rules</code> as keyword arguments!</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>rules</strong> (<em>Optional</em><em>[</em><em>Iterable</em><em>[</em><a class="reference internal" href="#werkzeug.routing.RuleFactory" title="werkzeug.routing.RuleFactory">werkzeug.routing.RuleFactory</a><em>]</em><em>]</em>) – sequence of url rules for this map.</li> <li>
+<strong>default_subdomain</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – The default subdomain for rules without a subdomain defined.</li> <li>
+<strong>charset</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – charset of the url. defaults to <code>"utf-8"</code>
+</li> <li>
+<strong>strict_slashes</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – If a rule ends with a slash but the matched URL does not, redirect to the URL with a trailing slash.</li> <li>
+<strong>merge_slashes</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – Merge consecutive slashes when matching or building URLs. Matches will redirect to the normalized URL. Slashes in variable parts are not merged.</li> <li>
+<strong>redirect_defaults</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – This will redirect to the default rule if it wasn’t visited that way. This helps creating unique URLs.</li> <li>
+<strong>converters</strong> (<em>Optional</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Type</em><em>[</em><em>werkzeug.routing.BaseConverter</em><em>]</em><em>]</em><em>]</em>) – A dict of converters that adds additional converters to the list of converters. If you redefine one converter this will override the original one.</li> <li>
+<strong>sort_parameters</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – If set to <code>True</code> the url parameters are sorted. See <code>url_encode</code> for more details.</li> <li>
+<strong>sort_key</strong> (<em>Optional</em><em>[</em><em>Callable</em><em>[</em><em>[</em><em>Any</em><em>]</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – The sort key function for <code>url_encode</code>.</li> <li>
+<strong>encoding_errors</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – the error method to use for decoding</li> <li>
+<strong>host_matching</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – if set to <code>True</code> it enables the host matching feature and disables the subdomain one. If enabled the <code>host</code> parameter to rules is used instead of the <code>subdomain</code> one.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.0: </span>If <code>url_scheme</code> is <code>ws</code> or <code>wss</code>, only WebSocket rules will match.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.0: </span>Added <code>merge_slashes</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.7: </span>Added <code>encoding_errors</code> and <code>host_matching</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.5: </span>Added <code>sort_parameters</code> and <code>sort_key</code>.</p> </div> </details><dl class="py attribute"> <dt class="sig sig-object py" id="werkzeug.routing.Map.converters">
+<code>converters</code> </dt> <dd>
+<p>The dictionary of converters. This can be modified after the class was created, but will only affect rules added after the modification. If the rules are defined with the list passed to the class, the <code>converters</code> parameter to the constructor has to be used instead.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.add">
+<code>add(rulefactory)</code> </dt> <dd>
+<p>Add a new rule or factory to the map and bind it. Requires that the rule is not bound to another map.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>rulefactory</strong> (<a class="reference internal" href="#werkzeug.routing.RuleFactory" title="werkzeug.routing.RuleFactory">werkzeug.routing.RuleFactory</a>) – a <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule"><code>Rule</code></a> or <a class="reference internal" href="#werkzeug.routing.RuleFactory" title="werkzeug.routing.RuleFactory"><code>RuleFactory</code></a></p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.bind">
+<code>bind(server_name, script_name=None, subdomain=None, url_scheme='http', default_method='GET', path_info=None, query_args=None)</code> </dt> <dd>
+<p>Return a new <a class="reference internal" href="#werkzeug.routing.MapAdapter" title="werkzeug.routing.MapAdapter"><code>MapAdapter</code></a> with the details specified to the call. Note that <code>script_name</code> will default to <code>'/'</code> if not further specified or <code>None</code>. The <code>server_name</code> at least is a requirement because the HTTP RFC requires absolute URLs for redirects and so all redirect exceptions raised by Werkzeug will contain the full canonical URL.</p> <p>If no path_info is passed to <code>match()</code> it will use the default path info passed to bind. While this doesn’t really make sense for manual bind calls, it’s useful if you bind a map to a WSGI environment which already contains the path info.</p> <p><code>subdomain</code> will default to the <code>default_subdomain</code> for this map if no defined. If there is no <code>default_subdomain</code> you cannot use the subdomain feature.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.0: </span>If <code>url_scheme</code> is <code>ws</code> or <code>wss</code>, only WebSocket rules will match.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.15: </span><code>path_info</code> defaults to <code>'/'</code> if <code>None</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.8: </span><code>query_args</code> can be a string.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.7: </span>Added <code>query_args</code>.</p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>server_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>script_name</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>subdomain</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>url_scheme</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>default_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>path_info</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>query_args</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em><em>]</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#werkzeug.routing.MapAdapter" title="werkzeug.routing.MapAdapter">werkzeug.routing.MapAdapter</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.bind_to_environ">
+<code>bind_to_environ(environ, server_name=None, subdomain=None)</code> </dt> <dd>
+<p>Like <a class="reference internal" href="#werkzeug.routing.Map.bind" title="werkzeug.routing.Map.bind"><code>bind()</code></a> but you can pass it an WSGI environment and it will fetch the information from that dictionary. Note that because of limitations in the protocol there is no way to get the current subdomain and real <code>server_name</code> from the environment. If you don’t provide it, Werkzeug will use <code>SERVER_NAME</code> and <code>SERVER_PORT</code> (or <code>HTTP_HOST</code> if provided) as used <code>server_name</code> with disabled subdomain feature.</p> <p>If <code>subdomain</code> is <code>None</code> but an environment and a server name is provided it will calculate the current subdomain automatically. Example: <code>server_name</code> is <code>'example.com'</code> and the <code>SERVER_NAME</code> in the wsgi <code>environ</code> is <code>'staging.dev.example.com'</code> the calculated subdomain will be <code>'staging.dev'</code>.</p> <p>If the object passed as environ has an environ attribute, the value of this attribute is used instead. This allows you to pass request objects. Additionally <code>PATH_INFO</code> added as a default of the <a class="reference internal" href="#werkzeug.routing.MapAdapter" title="werkzeug.routing.MapAdapter"><code>MapAdapter</code></a> so that you don’t have to pass the path info to the match method.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.0.0: </span>If the passed server name specifies port 443, it will match if the incoming scheme is <code>https</code> without a port.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 1.0.0: </span>A warning is shown when the passed server name does not match the incoming WSGI server name.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.8: </span>This will no longer raise a ValueError when an unexpected server name was passed.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.5: </span>previously this method accepted a bogus <code>calculate_subdomain</code> parameter that did not have any effect. It was removed because of that.</p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>environ</strong> (<em>WSGIEnvironment</em>) – a WSGI environment.</li> <li>
+<strong>server_name</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – an optional server name hint (see above).</li> <li>
+<strong>subdomain</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – optionally the current subdomain (see above).</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference internal" href="#werkzeug.routing.MapAdapter" title="werkzeug.routing.MapAdapter">MapAdapter</a></p> </dd> </dl> </dd>
+</dl> <dl class="py attribute"> <dt class="sig sig-object py" id="werkzeug.routing.Map.default_converters">
+<code>default_converters = {'any': &lt;class 'werkzeug.routing.AnyConverter'&gt;, 'default': &lt;class 'werkzeug.routing.UnicodeConverter'&gt;, 'float': &lt;class 'werkzeug.routing.FloatConverter'&gt;, 'int': &lt;class 'werkzeug.routing.IntegerConverter'&gt;, 'path': &lt;class 'werkzeug.routing.PathConverter'&gt;, 'string': &lt;class 'werkzeug.routing.UnicodeConverter'&gt;, 'uuid': &lt;class 'werkzeug.routing.UUIDConverter'&gt;}</code> </dt> <dd>
+<p>A dict of default converters to be used.</p> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.is_endpoint_expecting">
+<code>is_endpoint_expecting(endpoint, *arguments)</code> </dt> <dd>
+<p>Iterate over all rules and check if the endpoint expects the arguments provided. This is for example useful if you have some URLs that expect a language code and others that do not and you want to wrap the builder a bit so that the current language code is automatically added if not provided but endpoints expect it.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>endpoint</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – the endpoint to check.</li> <li>
+<strong>arguments</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – this function accepts one or more arguments as positional arguments. Each one of them is checked.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.iter_rules">
+<code>iter_rules(endpoint=None)</code> </dt> <dd>
+<p>Iterate over all rules or the rules of an endpoint.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>endpoint</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – if provided only the rules for that endpoint are returned.</p> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>an iterator</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p>Iterator[<a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">werkzeug.routing.Rule</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.lock_class">
+<code>lock_class()</code> </dt> <dd>
+<p>The type of lock to use when updating.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 1.0.</span></p> </div> </details>
+</dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Map.update">
+<code>update()</code> </dt> <dd>
+<p>Called before matching and building to keep the compiled rules in the correct order after things changed.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter">
+<code>class werkzeug.routing.MapAdapter(map, server_name, script_name, subdomain, url_scheme, path_info, default_method, query_args=None)</code> </dt> <dd>
+<p>Returned by <a class="reference internal" href="#werkzeug.routing.Map.bind" title="werkzeug.routing.Map.bind"><code>Map.bind()</code></a> or <a class="reference internal" href="#werkzeug.routing.Map.bind_to_environ" title="werkzeug.routing.Map.bind_to_environ"><code>Map.bind_to_environ()</code></a> and does the URL matching and building based on runtime information.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">werkzeug.routing.Map</a>) – </li> <li>
+<strong>server_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>script_name</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>subdomain</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>url_scheme</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>path_info</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>default_method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>query_args</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em><em>]</em>) – </li> </ul> </dd> </dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.allowed_methods">
+<code>allowed_methods(path_info=None)</code> </dt> <dd>
+<p>Returns the valid methods that match for a given path.</p> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.7.</span></p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>path_info</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>Iterable[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.build">
+<code>build(endpoint, values=None, method=None, force_external=False, append_unknown=True, url_scheme=None)</code> </dt> <dd>
+<p>Building URLs works pretty much the other way round. Instead of <code>match</code> you call <code>build</code> and pass it the endpoint and a dict of arguments for the placeholders.</p> <p>The <code>build</code> function also accepts an argument called <code>force_external</code> which, if you set it to <code>True</code> will force external URLs. Per default external URLs (include the server name) will only be used if the target URL is on a different subdomain.</p> <pre data-language="python">&gt;&gt;&gt; m = Map([
+...     Rule('/', endpoint='index'),
+...     Rule('/downloads/', endpoint='downloads/index'),
+...     Rule('/downloads/&lt;int:id&gt;', endpoint='downloads/show')
+... ])
+&gt;&gt;&gt; urls = m.bind("example.com", "/")
+&gt;&gt;&gt; urls.build("index", {})
+'/'
+&gt;&gt;&gt; urls.build("downloads/show", {'id': 42})
+'/downloads/42'
+&gt;&gt;&gt; urls.build("downloads/show", {'id': 42}, force_external=True)
+'http://example.com/downloads/42'
+</pre> <p>Because URLs cannot contain non ASCII data you will always get bytes back. Non ASCII characters are urlencoded with the charset defined on the map instance.</p> <p>Additional values are converted to strings and appended to the URL as URL querystring parameters:</p> <pre data-language="python">&gt;&gt;&gt; urls.build("index", {'q': 'My Searchstring'})
+'/?q=My+Searchstring'
+</pre> <p>When processing those additional values, lists are furthermore interpreted as multiple values (as per <a class="reference internal" href="../datastructures/index#werkzeug.datastructures.MultiDict" title="werkzeug.datastructures.MultiDict"><code>werkzeug.datastructures.MultiDict</code></a>):</p> <pre data-language="python">&gt;&gt;&gt; urls.build("index", {'q': ['a', 'b', 'c']})
+'/?q=a&amp;q=b&amp;q=c'
+</pre> <p>Passing a <code>MultiDict</code> will also add multiple values:</p> <pre data-language="python">&gt;&gt;&gt; urls.build("index", MultiDict((('p', 'z'), ('q', 'a'), ('q', 'b'))))
+'/?p=z&amp;q=a&amp;q=b'
+</pre> <p>If a rule does not exist when building a <code>BuildError</code> exception is raised.</p> <p>The build method accepts an argument called <code>method</code> which allows you to specify the method you want to have an URL built for if you have different methods for the same endpoint specified.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>endpoint</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – the endpoint of the URL to build.</li> <li>
+<strong>values</strong> (<em>Optional</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – the values for the URL to build. Unhandled values are appended to the URL as query parameters.</li> <li>
+<strong>method</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the HTTP method for the rule if there are different URLs for different methods on the same endpoint.</li> <li>
+<strong>force_external</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – enforce full canonical external URLs. If the URL scheme is not provided, this will generate a protocol-relative URL.</li> <li>
+<strong>append_unknown</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – unknown parameters are appended to the generated URL as query string argument. Disable this if you want the builder to ignore those.</li> <li>
+<strong>url_scheme</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – Scheme to use in place of the bound <code>url_scheme</code>.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a></p> </dd> </dl> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 2.0: </span>Added the <code>url_scheme</code> parameter.</p> </div> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.6: </span>Added the <code>append_unknown</code> parameter.</p> </div> </details>
+</dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.dispatch">
+<code>dispatch(view_func, path_info=None, method=None, catch_http_exceptions=False)</code> </dt> <dd>
+<p>Does the complete dispatching process. <code>view_func</code> is called with the endpoint and a dict with the values for the view. It should look up the view function, call it, and return a response object or WSGI application. http exceptions are not caught by default so that applications can display nicer error messages by just catching them by hand. If you want to stick with the default error messages you can pass it <code>catch_http_exceptions=True</code> and it will catch the http exceptions.</p> <p>Here a small example for the dispatch usage:</p> <pre data-language="python">from werkzeug.wrappers import Request, Response
+from werkzeug.wsgi import responder
+from werkzeug.routing import Map, Rule
+
+def on_index(request):
+    return Response('Hello from the index')
+
+url_map = Map([Rule('/', endpoint='index')])
+views = {'index': on_index}
+
+@responder
+def application(environ, start_response):
+    request = Request(environ)
+    urls = url_map.bind_to_environ(environ)
+    return urls.dispatch(lambda e, v: views[e](request, **v),
+                         catch_http_exceptions=True)
+</pre> <p>Keep in mind that this method might return exception objects, too, so use <code>Response.force_type</code> to get a response object.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>view_func</strong> (<em>Callable</em><em>[</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>WSGIApplication</em><em>]</em>) – a function that is called with the endpoint as first argument and the value dict as second. Has to dispatch to the actual view function with this information. (see above)</li> <li>
+<strong>path_info</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the path info to use for matching. Overrides the path info specified on binding.</li> <li>
+<strong>method</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the HTTP method used for matching. Overrides the method specified on binding.</li> <li>
+<strong>catch_http_exceptions</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – set to <code>True</code> to catch any of the werkzeug <code>HTTPException</code>s.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>WSGIApplication</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.get_host">
+<code>get_host(domain_part)</code> </dt> <dd>
+<p>Figures out the full host name for the given domain part. The domain part is a subdomain in case host matching is disabled or a full host name.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>domain_part</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.make_alias_redirect_url">
+<code>make_alias_redirect_url(path, endpoint, values, method, query_args)</code> </dt> <dd>
+<p>Internally called to make an alias redirect URL.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>path</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>endpoint</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>values</strong> (<em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em>) – </li> <li>
+<strong>method</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>query_args</strong> (<em>Union</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a></p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.match">
+<code>match(path_info=None, method=None, return_rule=False, query_args=None, websocket=None)</code> </dt> <dd>
+<p>The usage is simple: you just pass the match method the current path info as well as the method (which defaults to <code>GET</code>). The following things can then happen:</p> <ul class="simple"> <li>you receive a <code>NotFound</code> exception that indicates that no URL is matching. A <code>NotFound</code> exception is also a WSGI application you can call to get a default page not found page (happens to be the same object as <code>werkzeug.exceptions.NotFound</code>)</li> <li>you receive a <code>MethodNotAllowed</code> exception that indicates that there is a match for this URL but not for the current request method. This is useful for RESTful applications.</li> <li>you receive a <code>RequestRedirect</code> exception with a <code>new_url</code> attribute. This exception is used to notify you about a request Werkzeug requests from your WSGI application. This is for example the case if you request <code>/foo</code> although the correct URL is <code>/foo/</code> You can use the <code>RequestRedirect</code> instance as response-like object similar to all other subclasses of <code>HTTPException</code>.</li> <li>you receive a <code>WebsocketMismatch</code> exception if the only match is a WebSocket rule but the bind is an HTTP request, or if the match is an HTTP rule but the bind is a WebSocket request.</li> <li>you get a tuple in the form <code>(endpoint, arguments)</code> if there is a match (unless <code>return_rule</code> is True, in which case you get a tuple in the form <code>(rule, arguments)</code>)</li> </ul> <p>If the path info is not passed to the match method the default path info of the map is used (defaults to the root URL if not defined explicitly).</p> <p>All of the exceptions raised are subclasses of <code>HTTPException</code> so they can be used as WSGI responses. They will all render generic error or redirect pages.</p> <p>Here is a small example for matching:</p> <pre data-language="python">&gt;&gt;&gt; m = Map([
+...     Rule('/', endpoint='index'),
+...     Rule('/downloads/', endpoint='downloads/index'),
+...     Rule('/downloads/&lt;int:id&gt;', endpoint='downloads/show')
+... ])
+&gt;&gt;&gt; urls = m.bind("example.com", "/")
+&gt;&gt;&gt; urls.match("/", "GET")
+('index', {})
+&gt;&gt;&gt; urls.match("/downloads/42")
+('downloads/show', {'id': 42})
+</pre> <p>And here is what happens on redirect and missing URLs:</p> <pre data-language="python">&gt;&gt;&gt; urls.match("/downloads")
+Traceback (most recent call last):
+  ...
+RequestRedirect: http://example.com/downloads/
+&gt;&gt;&gt; urls.match("/missing")
+Traceback (most recent call last):
+  ...
+NotFound: 404 Not Found
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>path_info</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the path info to use for matching. Overrides the path info specified on binding.</li> <li>
+<strong>method</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the HTTP method used for matching. Overrides the method specified on binding.</li> <li>
+<strong>return_rule</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – return the rule that matched instead of just the endpoint (defaults to <code>False</code>).</li> <li>
+<strong>query_args</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em><em>]</em>) – optional query arguments that are used for automatic redirects as string or dictionary. It’s currently not possible to use the query arguments for URL matching.</li> <li>
+<strong>websocket</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>]</em>) – Match WebSocket instead of HTTP requests. A websocket request has a <code>ws</code> or <code>wss</code> <code>url_scheme</code>. This overrides that detection.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>Tuple[Union[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>, <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">werkzeug.routing.Rule</a>], Mapping[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>, Any]]</p> </dd> </dl> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 1.0: </span>Added <code>websocket</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.8: </span><code>query_args</code> can be a string.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 0.7: </span>Added <code>query_args</code>.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 0.6: </span>Added <code>return_rule</code>.</p> </div> </details>
+</dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.MapAdapter.test">
+<code>test(path_info=None, method=None)</code> </dt> <dd>
+<p>Test if a rule would match. Works like <code>match</code> but returns <code>True</code> if the URL matches, or <code>False</code> if it does not exist.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>path_info</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the path info to use for matching. Overrides the path info specified on binding.</li> <li>
+<strong>method</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – the HTTP method used for matching. Overrides the method specified on binding.</li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.Rule">
+<code>class werkzeug.routing.Rule(string, defaults=None, subdomain=None, methods=None, build_only=False, endpoint=None, strict_slashes=None, merge_slashes=None, redirect_to=None, alias=False, host=None, websocket=False)</code> </dt> <dd>
+<p>A Rule represents one URL pattern. There are some options for <code>Rule</code> that change the way it behaves and are passed to the <code>Rule</code> constructor. Note that besides the rule-string all arguments <em>must</em> be keyword arguments in order to not break the application on Werkzeug upgrades.</p> <dl> <dt>
+<code>string</code> </dt>
+<dd>
+<p>Rule strings basically are just normal URL paths with placeholders in the format <code>&lt;converter(arguments):name&gt;</code> where the converter and the arguments are optional. If no converter is defined the <code>default</code> converter is used which means <code>string</code> in the normal configuration.</p> <p>URL rules that end with a slash are branch URLs, others are leaves. If you have <code>strict_slashes</code> enabled (which is the default), all branch URLs that are matched without a trailing slash will trigger a redirect to the same URL with the missing slash appended.</p> <p>The converters are defined on the <code>Map</code>.</p> </dd> <dt>
+<code>endpoint</code> </dt>
+<dd>
+<p>The endpoint for this rule. This can be anything. A reference to a function, a string, a number etc. The preferred way is using a string because the endpoint is used for URL generation.</p> </dd> <dt>
+<code>defaults</code> </dt>
+<dd>
+<p>An optional dict with defaults for other rules with the same endpoint. This is a bit tricky but useful if you want to have unique URLs:</p> <pre data-language="python">url_map = Map([
+    Rule('/all/', defaults={'page': 1}, endpoint='all_entries'),
+    Rule('/all/page/&lt;int:page&gt;', endpoint='all_entries')
+])
+</pre> <p>If a user now visits <code>http://example.com/all/page/1</code> he will be redirected to <code>http://example.com/all/</code>. If <code>redirect_defaults</code> is disabled on the <code>Map</code> instance this will only affect the URL generation.</p> </dd> <dt>
+<code>subdomain</code> </dt>
+<dd>
+<p>The subdomain rule string for this rule. If not specified the rule only matches for the <code>default_subdomain</code> of the map. If the map is not bound to a subdomain this feature is disabled.</p> <p>Can be useful if you want to have user profiles on different subdomains and all subdomains are forwarded to your application:</p> <pre data-language="python">url_map = Map([
+    Rule('/', subdomain='&lt;username&gt;', endpoint='user/homepage'),
+    Rule('/stats', subdomain='&lt;username&gt;', endpoint='user/stats')
+])
+</pre> </dd> <dt>
+<code>methods</code> </dt>
+<dd>
+<p>A sequence of http methods this rule applies to. If not specified, all methods are allowed. For example this can be useful if you want different endpoints for <code>POST</code> and <code>GET</code>. If methods are defined and the path matches but the method matched against is not in this list or in the list of another rule for that path the error raised is of the type <code>MethodNotAllowed</code> rather than <code>NotFound</code>. If <code>GET</code> is present in the list of methods and <code>HEAD</code> is not, <code>HEAD</code> is added automatically.</p> </dd> <dt>
+<code>strict_slashes</code> </dt>
+<dd>
+<p>Override the <code>Map</code> setting for <code>strict_slashes</code> only for this rule. If not specified the <code>Map</code> setting is used.</p> </dd> <dt>
+<code>merge_slashes</code> </dt>
+<dd>
+<p>Override <code>Map.merge_slashes</code> for this rule.</p> </dd> <dt>
+<code>build_only</code> </dt>
+<dd>
+<p>Set this to True and the rule will never match but will create a URL that can be build. This is useful if you have resources on a subdomain or folder that are not handled by the WSGI application (like static data)</p> </dd> <dt>
+<code>redirect_to</code> </dt>
+<dd>
+<p>If given this must be either a string or callable. In case of a callable it’s called with the url adapter that triggered the match and the values of the URL as keyword arguments and has to return the target for the redirect, otherwise it has to be a string with placeholders in rule syntax:</p> <pre data-language="python">def foo_with_slug(adapter, id):
+    # ask the database for the slug for the old id.  this of
+    # course has nothing to do with werkzeug.
+    return f'foo/{Foo.get_slug_for_id(id)}'
+
+url_map = Map([
+    Rule('/foo/&lt;slug&gt;', endpoint='foo'),
+    Rule('/some/old/url/&lt;slug&gt;', redirect_to='foo/&lt;slug&gt;'),
+    Rule('/other/old/url/&lt;int:id&gt;', redirect_to=foo_with_slug)
+])
+</pre> <p>When the rule is matched the routing system will raise a <code>RequestRedirect</code> exception with the target for the redirect.</p> <p>Keep in mind that the URL will be joined against the URL root of the script so don’t use a leading slash on the target URL unless you really mean root of that domain.</p> </dd> <dt>
+<code>alias</code> </dt>
+<dd>
+<p>If enabled this rule serves as an alias for another rule with the same endpoint and arguments.</p> </dd> <dt>
+<code>host</code> </dt>
+<dd>
+<p>If provided and the URL map has host matching enabled this can be used to provide a match rule for the whole host. This also means that the subdomain feature is disabled.</p> </dd> <dt>
+<code>websocket</code> </dt>
+<dd>
+<p>If <code>True</code>, this rule is only matches for WebSocket (<code>ws://</code>, <code>wss://</code>) requests. By default, rules will only match for HTTP requests.</p> </dd> </dl> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 1.0: </span>Added <code>websocket</code>.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 1.0: </span>Added <code>merge_slashes</code>.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 0.7: </span>Added <code>alias</code> and <code>host</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 0.6.1: </span><code>HEAD</code> is added to <code>methods</code> if <code>GET</code> is present.</p> </div> </details><dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>string</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>defaults</strong> (<em>Optional</em><em>[</em><em>Mapping</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Any</em><em>]</em><em>]</em>) – </li> <li>
+<strong>subdomain</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>methods</strong> (<em>Optional</em><em>[</em><em>Iterable</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em><em>]</em>) – </li> <li>
+<strong>build_only</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – </li> <li>
+<strong>endpoint</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>strict_slashes</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>]</em>) – </li> <li>
+<strong>merge_slashes</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a><em>]</em>) – </li> <li>
+<strong>redirect_to</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>, </em><em>Callable</em><em>[</em><em>[</em><em>...</em><em>]</em><em>, </em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em><em>]</em><em>]</em>) – </li> <li>
+<strong>alias</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – </li> <li>
+<strong>host</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a><em>]</em>) – </li> <li>
+<strong>websocket</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.9)">bool</a>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.Rule.empty">
+<code>empty()</code> </dt> <dd>
+<p>Return an unbound copy of this rule.</p> <p>This can be useful if want to reuse an already bound URL for another map. See <code>get_empty_kwargs</code> to override what keyword arguments are provided to the new copy.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">werkzeug.routing.Rule</a></p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> </section> <section id="rule-factories"> <h2>Rule Factories</h2> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.RuleFactory">
+<code>class werkzeug.routing.RuleFactory</code> </dt> <dd>
+<p>As soon as you have more complex URL setups it’s a good idea to use rule factories to avoid repetitive tasks. Some of them are builtin, others can be added by subclassing <code>RuleFactory</code> and overriding <code>get_rules</code>.</p> <dl class="py method"> <dt class="sig sig-object py" id="werkzeug.routing.RuleFactory.get_rules">
+<code>get_rules(map)</code> </dt> <dd>
+<p>Subclasses of <code>RuleFactory</code> have to override this method and return an iterable of rules.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>map</strong> (<a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map">werkzeug.routing.Map</a>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p>Iterable[<a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">werkzeug.routing.Rule</a>]</p> </dd> </dl> </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.Subdomain">
+<code>class werkzeug.routing.Subdomain(subdomain, rules)</code> </dt> <dd>
+<p>All URLs provided by this factory have the subdomain set to a specific domain. For example if you want to use the subdomain for the current language this can be a good setup:</p> <pre data-language="python">url_map = Map([
+    Rule('/', endpoint='#select_language'),
+    Subdomain('&lt;string(length=2):lang_code&gt;', [
+        Rule('/', endpoint='index'),
+        Rule('/about', endpoint='about'),
+        Rule('/help', endpoint='help')
+    ])
+])
+</pre> <p>All the rules except for the <code>'#select_language'</code> endpoint will now listen on a two letter long subdomain that holds the language code for the current request.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>subdomain</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>rules</strong> (<em>Iterable</em><em>[</em><a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">Rule</a><em>]</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.Submount">
+<code>class werkzeug.routing.Submount(path, rules)</code> </dt> <dd>
+<p>Like <code>Subdomain</code> but prefixes the URL rule with a given string:</p> <pre data-language="python">url_map = Map([
+    Rule('/', endpoint='index'),
+    Submount('/blog', [
+        Rule('/', endpoint='blog/index'),
+        Rule('/entry/&lt;entry_slug&gt;', endpoint='blog/show')
+    ])
+])
+</pre> <p>Now the rule <code>'blog/show'</code> matches <code>/blog/entry/&lt;entry_slug&gt;</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>path</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>rules</strong> (<em>Iterable</em><em>[</em><a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">Rule</a><em>]</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.EndpointPrefix">
+<code>class werkzeug.routing.EndpointPrefix(prefix, rules)</code> </dt> <dd>
+<p>Prefixes all endpoints (which must be strings for this factory) with another string. This can be useful for sub applications:</p> <pre data-language="python">url_map = Map([
+    Rule('/', endpoint='index'),
+    EndpointPrefix('blog/', [Submount('/blog', [
+        Rule('/', endpoint='index'),
+        Rule('/entry/&lt;entry_slug&gt;', endpoint='show')
+    ])])
+])
+</pre> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>prefix</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.9)">str</a>) – </li> <li>
+<strong>rules</strong> (<em>Iterable</em><em>[</em><a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">Rule</a><em>]</em>) – </li> </ul> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> </section> <section id="rule-templates"> <h2>Rule Templates</h2> <dl class="py class"> <dt class="sig sig-object py" id="werkzeug.routing.RuleTemplate">
+<code>class werkzeug.routing.RuleTemplate(rules)</code> </dt> <dd>
+<p>Returns copies of the rules wrapped and expands string templates in the endpoint, rule, defaults or subdomain sections.</p> <p>Here a small example for such a rule template:</p> <pre data-language="python">from werkzeug.routing import Map, Rule, RuleTemplate
+
+resource = RuleTemplate([
+    Rule('/$name/', endpoint='$name.list'),
+    Rule('/$name/&lt;int:id&gt;', endpoint='$name.show')
+])
+
+url_map = Map([resource(name='user'), resource(name='page')])
+</pre> <p>When a rule template is called the keyword arguments are used to replace the placeholders in all the string parameters.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>rules</strong> (<em>Iterable</em><em>[</em><a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule">Rule</a><em>]</em>) – </p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.9)">None</a></p> </dd> </dl> </dd>
+</dl> </section> <section id="custom-converters"> <h2>Custom Converters</h2> <p>You can add custom converters that add behaviors not provided by the built-in converters. To make a custom converter, subclass <code>BaseConverter</code> then pass the new class to the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a> <code>converters</code> parameter, or add it to <a class="reference internal" href="#werkzeug.routing.Map.converters" title="werkzeug.routing.Map.converters"><code>url_map.converters</code></a>.</p> <p>The converter should have a <code>regex</code> attribute with a regular expression to match with. If the converter can take arguments in a URL rule, it should accept them in its <code>__init__</code> method.</p> <p>It can implement a <code>to_python</code> method to convert the matched string to some other object. This can also do extra validation that wasn’t possible with the <code>regex</code> attribute, and should raise a <code>werkzeug.routing.ValidationError</code> in that case. Raising any other errors will cause a 500 error.</p> <p>It can implement a <code>to_url</code> method to convert a Python object to a string when building a URL. Any error raised here will be converted to a <code>werkzeug.routing.BuildError</code> and eventually cause a 500 error.</p> <p>This example implements a <code>BooleanConverter</code> that will match the strings <code>"yes"</code>, <code>"no"</code>, and <code>"maybe"</code>, returning a random value for <code>"maybe"</code>.</p> <pre data-language="python">from random import randrange
+from werkzeug.routing import BaseConverter, ValidationError
+
+class BooleanConverter(BaseConverter):
+    regex = r"(?:yes|no|maybe)"
+
+    def __init__(self, url_map, maybe=False):
+        super().__init__(url_map)
+        self.maybe = maybe
+
+    def to_python(self, value):
+        if value == "maybe":
+            if self.maybe:
+                return not randrange(2)
+            raise ValidationError
+        return value == 'yes'
+
+    def to_url(self, value):
+        return "yes" if value else "no"
+
+from werkzeug.routing import Map, Rule
+
+url_map = Map([
+    Rule("/vote/&lt;bool:werkzeug_rocks&gt;", endpoint="vote"),
+    Rule("/guess/&lt;bool(maybe=True):foo&gt;", endpoint="guess")
+], converters={'bool': BooleanConverter})
+</pre> <p>If you want to change the default converter, assign a different converter to the <code>"default"</code> key.</p> </section> <section id="host-matching"> <h2>Host Matching</h2> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 0.7.</span></p> </div> </details><p>Starting with Werkzeug 0.7 it’s also possible to do matching on the whole host names instead of just the subdomain. To enable this feature you need to pass <code>host_matching=True</code> to the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a> constructor and provide the <code>host</code> argument to all routes:</p> <pre data-language="python">url_map = Map([
+    Rule('/', endpoint='www_index', host='www.example.com'),
+    Rule('/', endpoint='help_index', host='help.example.com')
+], host_matching=True)
+</pre> <p>Variable parts are of course also possible in the host section:</p> <pre data-language="python">url_map = Map([
+    Rule('/', endpoint='www_index', host='www.example.com'),
+    Rule('/', endpoint='user_index', host='&lt;user&gt;.example.com')
+], host_matching=True)
+</pre> </section> <section id="websockets"> <h2>WebSockets</h2> <details class="changelog"> <summary>Changelog</summary><div class="versionadded"> <p><span class="versionmodified added">New in version 1.0.</span></p> </div> </details><p>If a <a class="reference internal" href="#werkzeug.routing.Rule" title="werkzeug.routing.Rule"><code>Rule</code></a> is created with <code>websocket=True</code>, it will only match if the <a class="reference internal" href="#werkzeug.routing.Map" title="werkzeug.routing.Map"><code>Map</code></a> is bound to a request with a <code>url_scheme</code> of <code>ws</code> or <code>wss</code>.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Werkzeug has no further WebSocket support beyond routing. This functionality is mostly of use to ASGI projects.</p> </div> <pre data-language="python">url_map = Map([
+    Rule("/ws", endpoint="comm", websocket=True),
+])
+adapter = map.bind("example.org", "/ws", url_scheme="ws")
+assert adapter.match() == ("comm", {})
+</pre> <p>If the only match is a WebSocket rule and the bind is HTTP (or the only match is HTTP and the bind is WebSocket) a <code>WebsocketMismatch</code> (derives from <a class="reference internal" href="../exceptions/index#werkzeug.exceptions.BadRequest" title="werkzeug.exceptions.BadRequest"><code>BadRequest</code></a>) exception is raised.</p> <p>As WebSocket URLs have a different scheme, rules are always built with a scheme and host, <code>force_external=True</code> is implied.</p> <pre data-language="python">url = adapter.build("comm")
+assert url == "ws://example.org/ws"
+</pre> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2007&ndash;2021 Pallets<br>Licensed under the BSD 3-clause License.<br>
+    <a href="https://werkzeug.palletsprojects.com/en/2.0.x/routing/" class="_attribution-link">https://werkzeug.palletsprojects.com/en/2.0.x/routing/</a>
+  </p>
+</div>

@@ -1,0 +1,94 @@
+<h1 id="expiration-timers">Expiration Timers</h1> <p id="module-torch.distributed.elastic.timer">Expiration timers are set up on the same process as the agent and used from your script to deal with stuck workers. When you go into a code-block that has the potential to get stuck you can acquire an expiration timer, which instructs the timer server to kill the process if it does not release the timer by the self-imposed expiration deadline.</p> <p>Usage:</p> <pre data-language="python">import torchelastic.timer as timer
+import torchelastic.agent.server as agent
+
+def main():
+    start_method = "spawn"
+    message_queue = mp.get_context(start_method).Queue()
+    server = timer.LocalTimerServer(message, max_interval=0.01)
+    server.start() # non-blocking
+
+    spec = WorkerSpec(
+                fn=trainer_func,
+                args=(message_queue,),
+                ...&lt;OTHER_PARAMS...&gt;)
+    agent = agent.LocalElasticAgent(spec, start_method)
+    agent.run()
+
+def trainer_func(message_queue):
+    timer.configure(timer.LocalTimerClient(message_queue))
+    with timer.expires(after=60): # 60 second expiry
+        # do some work
+</pre> <p>In the example above if <code>trainer_func</code> takes more than 60 seconds to complete, then the worker process is killed and the agent retries the worker group.</p>  <h2 id="client-methods">Client Methods</h2> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.configure">
+<code>torch.distributed.elastic.timer.configure(timer_client)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#configure"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Configures a timer client. Must be called before using <code>expires</code>.</p>  </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.expires">
+<code>torch.distributed.elastic.timer.expires(after, scope=None, client=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#expires"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Acquires a countdown timer that expires in <code>after</code> seconds from now, unless the code-block that it wraps is finished within the timeframe. When the timer expires, this worker is eligible to be reaped. The exact meaning of “reaped” depends on the client implementation. In most cases, reaping means to terminate the worker process. Note that the worker is NOT guaranteed to be reaped at exactly <code>time.now() + after</code>, but rather the worker is “eligible” for being reaped and the <code>TimerServer</code> that the client talks to will ultimately make the decision when and how to reap the workers with expired timers.</p> <p>Usage:</p> <pre data-language="python">torch.distributed.elastic.timer.configure(LocalTimerClient())
+with expires(after=10):
+    torch.distributed.all_reduce(...)
+</pre>  </dd>
+</dl>   <h2 id="server-client-implementations">Server/Client Implementations</h2> <p>Below are the timer server and client pairs that are provided by torchelastic.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Timer server and clients always have to be implemented and used in pairs since there is a messaging protocol between the server and client.</p> </div> <p>Below is a pair of timer server and client that is implemented based on a <code>multiprocess.Queue</code>.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.LocalTimerServer">
+<code>class torch.distributed.elastic.timer.LocalTimerServer(mp_queue, max_interval=60, daemon=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/local_timer.html#LocalTimerServer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Server that works with <code>LocalTimerClient</code>. Clients are expected to be subprocesses to the parent process that is running this server. Each host in the job is expected to start its own timer server locally and each server instance manages timers for local workers (running on processes on the same host).</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.LocalTimerClient">
+<code>class torch.distributed.elastic.timer.LocalTimerClient(mp_queue)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/local_timer.html#LocalTimerClient"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Client side of <code>LocalTimerServer</code>. This client is meant to be used on the same host that the <code>LocalTimerServer</code> is running on and uses pid to uniquely identify a worker. This is particularly useful in situations where one spawns a subprocess (trainer) per GPU on a host with multiple GPU devices.</p> </dd>
+</dl> <p>Below is another pair of timer server and client that is implemented based on a named pipe.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.FileTimerServer">
+<code>class torch.distributed.elastic.timer.FileTimerServer(file_path, max_interval=10, daemon=True, log_event=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/file_based_local_timer.html#FileTimerServer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Server that works with <code>FileTimerClient</code>. Clients are expected to be running on the same host as the process that is running this server. Each host in the job is expected to start its own timer server locally and each server instance manages timers for local workers (running on processes on the same host).</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>file_path</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – str, the path of a FIFO special file to be created.</li> <li>
+<strong>max_interval</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.12)">float</a>) – float, max interval in seconds for each watchdog loop.</li> <li>
+<strong>daemon</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a>) – bool, running the watchdog thread in daemon mode or not. A daemon thread will not block a process to stop.</li> <li>
+<strong>log_event</strong> (<a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Callable" title="(in Python v3.12)">Callable</a><em>[</em><em>[</em><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a><em>, </em><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Optional" title="(in Python v3.12)">Optional</a><em>[</em><em>FileTimerRequest</em><em>]</em><em>]</em><em>, </em><em>None</em><em>]</em><em>]</em>) – Callable[[Dict[str, str]], None], an optional callback for logging the events in JSON format.</li> </ul> </dd> </dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.FileTimerClient">
+<code>class torch.distributed.elastic.timer.FileTimerClient(file_path, signal=Signals.SIGKILL)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/file_based_local_timer.html#FileTimerClient"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Client side of <code>FileTimerServer</code>. This client is meant to be used on the same host that the <code>FileTimerServer</code> is running on and uses pid to uniquely identify a worker. This client uses a named_pipe to send timer requests to the <code>FileTimerServer</code>. This client is a producer while the <code>FileTimerServer</code> is a consumer. Multiple clients can work with the same <code>FileTimerServer</code>.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>file_path</strong> (<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>) – str, the path of a FIFO special file. <code>FileTimerServer</code> must have created it by calling os.mkfifo().</li> <li>
+<strong>signal</strong> – signal, the signal to use to kill the process. Using a negative or zero signal will not kill the process.</li> </ul> </dd> </dl> </dd>
+</dl>   <h2 id="writing-a-custom-timer-server-client">Writing a custom timer server/client</h2> <p>To write your own timer server and client extend the <code>torch.distributed.elastic.timer.TimerServer</code> for the server and <code>torch.distributed.elastic.timer.TimerClient</code> for the client. The <code>TimerRequest</code> object is used to pass messages between the server and client.</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerRequest">
+<code>class torch.distributed.elastic.timer.TimerRequest(worker_id, scope_id, expiration_time)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerRequest"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Data object representing a countdown timer acquisition and release that is used between the <code>TimerClient</code> and <code>TimerServer</code>. A negative <code>expiration_time</code> should be interpreted as a “release” request.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>the type of <code>worker_id</code> is implementation specific. It is whatever the TimerServer and TimerClient implementations have on to uniquely identify a worker.</p> </div>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerServer">
+<code>class torch.distributed.elastic.timer.TimerServer(request_queue, max_interval, daemon=True)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerServer"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Entity that monitors active timers and expires them in a timely fashion. This server is responsible for reaping workers that have expired timers.</p>  <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerServer.clear_timers">
+<code>abstract clear_timers(worker_ids)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerServer.clear_timers"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Clears all timers for the given <code>worker_ids</code>.</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerServer.get_expired_timers">
+<code>abstract get_expired_timers(deadline)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerServer.get_expired_timers"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Returns all expired timers for each worker_id. An expired timer is a timer for which the expiration_time is less than or equal to the provided deadline.</p> <dl class="field-list simple"> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Dict" title="(in Python v3.12)">Dict</a>[<a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.12)">str</a>, <a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.List" title="(in Python v3.12)">List</a>[<a class="reference internal" href="#torch.distributed.elastic.timer.TimerRequest" title="torch.distributed.elastic.timer.api.TimerRequest">TimerRequest</a>]]</p> </dd> </dl> </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerServer.register_timers">
+<code>abstract register_timers(timer_requests)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerServer.register_timers"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Processes the incoming timer requests and registers them with the server. The timer request can either be a acquire-timer or release-timer request. Timer requests with a negative expiration_time should be interpreted as a release-timer request.</p>  </dd>
+</dl> </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerClient">
+<code>class torch.distributed.elastic.timer.TimerClient</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerClient"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Client library to acquire and release countdown timers by communicating with the TimerServer.</p> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerClient.acquire">
+<code>abstract acquire(scope_id, expiration_time)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerClient.acquire"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Acquires a timer for the worker that holds this client object given the scope_id and expiration_time. Typically registers the timer with the TimerServer.</p>  </dd>
+</dl> <dl class="py method"> <dt class="sig sig-object py" id="torch.distributed.elastic.timer.TimerClient.release">
+<code>abstract release(scope_id)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/elastic/timer/api.html#TimerClient.release"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Releases the timer for the <code>scope_id</code> on the worker this client represents. After this method is called, the countdown timer on the scope is no longer in effect.</p>  </dd>
+</dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/elastic/timer.html" class="_attribution-link">https://pytorch.org/docs/2.1/elastic/timer.html</a>
+  </p>
+</div>

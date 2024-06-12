@@ -1,0 +1,1527 @@
+<h1>MultiIndex / advanced indexing</h1> <p>This section covers <a class="reference internal" href="#advanced-hierarchical"><span class="std std-ref">indexing with a MultiIndex</span></a> and <a class="reference internal" href="#advanced-index-types"><span class="std std-ref">other advanced indexing features</span></a>.</p> <p>See the <a class="reference internal" href="indexing#indexing"><span class="std std-ref">Indexing and Selecting Data</span></a> for general indexing documentation.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Whether a copy or a reference is returned for a setting operation may depend on the context. This is sometimes called <code class="docutils literal notranslate"><span class="pre">chained</span> <span class="pre">assignment</span></code> and should be avoided. See <a class="reference internal" href="indexing#indexing-view-versus-copy"><span class="std std-ref">Returning a View versus Copy</span></a>.</p> </div> <p>See the <a class="reference internal" href="cookbook#cookbook-selection"><span class="std std-ref">cookbook</span></a> for some advanced strategies.</p> <section id="hierarchical-indexing-multiindex"> <h2>Hierarchical indexing (MultiIndex)</h2> <p>Hierarchical / Multi-level indexing is very exciting as it opens the door to some quite sophisticated data analysis and manipulation, especially for working with higher dimensional data. In essence, it enables you to store and manipulate data with an arbitrary number of dimensions in lower dimensional data structures like <code class="docutils literal notranslate"><span class="pre">Series</span></code> (1d) and <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> (2d).</p> <p>In this section, we will show what exactly we mean by “hierarchical” indexing and how it integrates with all of the pandas indexing functionality described above and in prior sections. Later, when discussing <a class="reference internal" href="groupby#groupby"><span class="std std-ref">group by</span></a> and <a class="reference internal" href="reshaping#reshaping"><span class="std std-ref">pivoting and reshaping data</span></a>, we’ll show non-trivial applications to illustrate how it aids in structuring data for analysis.</p> <p>See the <a class="reference internal" href="cookbook#cookbook-multi-index"><span class="std std-ref">cookbook</span></a> for some advanced strategies.</p> <section id="creating-a-multiindex-hierarchical-index-object"> <h3>Creating a MultiIndex (hierarchical index) object</h3> <p>The <a class="reference internal" href="../reference/api/pandas.multiindex#pandas.MultiIndex" title="pandas.MultiIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">MultiIndex</span></code></a> object is the hierarchical analogue of the standard <a class="reference internal" href="../reference/api/pandas.index#pandas.Index" title="pandas.Index"><code class="xref py py-class docutils literal notranslate"><span class="pre">Index</span></code></a> object which typically stores the axis labels in pandas objects. You can think of <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> as an array of tuples where each tuple is unique. A <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> can be created from a list of arrays (using <a class="reference internal" href="../reference/api/pandas.multiindex.from_arrays#pandas.MultiIndex.from_arrays" title="pandas.MultiIndex.from_arrays"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_arrays()</span></code></a>), an array of tuples (using <a class="reference internal" href="../reference/api/pandas.multiindex.from_tuples#pandas.MultiIndex.from_tuples" title="pandas.MultiIndex.from_tuples"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_tuples()</span></code></a>), a crossed set of iterables (using <a class="reference internal" href="../reference/api/pandas.multiindex.from_product#pandas.MultiIndex.from_product" title="pandas.MultiIndex.from_product"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_product()</span></code></a>), or a <a class="reference internal" href="../reference/api/pandas.dataframe#pandas.DataFrame" title="pandas.DataFrame"><code class="xref py py-class docutils literal notranslate"><span class="pre">DataFrame</span></code></a> (using <a class="reference internal" href="../reference/api/pandas.multiindex.from_frame#pandas.MultiIndex.from_frame" title="pandas.MultiIndex.from_frame"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_frame()</span></code></a>). The <code class="docutils literal notranslate"><span class="pre">Index</span></code> constructor will attempt to return a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> when it is passed a list of tuples. The following examples demonstrate different ways to initialize MultiIndexes.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [1]: arrays = [
+   ...:     ["bar", "bar", "baz", "baz", "foo", "foo", "qux", "qux"],
+   ...:     ["one", "two", "one", "two", "one", "two", "one", "two"],
+   ...: ]
+   ...: 
+
+In [2]: tuples = list(zip(*arrays))
+
+In [3]: tuples
+Out[3]: 
+[('bar', 'one'),
+ ('bar', 'two'),
+ ('baz', 'one'),
+ ('baz', 'two'),
+ ('foo', 'one'),
+ ('foo', 'two'),
+ ('qux', 'one'),
+ ('qux', 'two')]
+
+In [4]: index = pd.MultiIndex.from_tuples(tuples, names=["first", "second"])
+
+In [5]: index
+Out[5]: 
+MultiIndex([('bar', 'one'),
+            ('bar', 'two'),
+            ('baz', 'one'),
+            ('baz', 'two'),
+            ('foo', 'one'),
+            ('foo', 'two'),
+            ('qux', 'one'),
+            ('qux', 'two')],
+           names=['first', 'second'])
+
+In [6]: s = pd.Series(np.random.randn(8), index=index)
+
+In [7]: s
+Out[7]: 
+first  second
+bar    one       0.469112
+       two      -0.282863
+baz    one      -1.509059
+       two      -1.135632
+foo    one       1.212112
+       two      -0.173215
+qux    one       0.119209
+       two      -1.044236
+dtype: float64
+</pre></div> </div> <p>When you want every pairing of the elements in two iterables, it can be easier to use the <a class="reference internal" href="../reference/api/pandas.multiindex.from_product#pandas.MultiIndex.from_product" title="pandas.MultiIndex.from_product"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_product()</span></code></a> method:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [8]: iterables = [["bar", "baz", "foo", "qux"], ["one", "two"]]
+
+In [9]: pd.MultiIndex.from_product(iterables, names=["first", "second"])
+Out[9]: 
+MultiIndex([('bar', 'one'),
+            ('bar', 'two'),
+            ('baz', 'one'),
+            ('baz', 'two'),
+            ('foo', 'one'),
+            ('foo', 'two'),
+            ('qux', 'one'),
+            ('qux', 'two')],
+           names=['first', 'second'])
+</pre></div> </div> <p>You can also construct a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> from a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> directly, using the method <a class="reference internal" href="../reference/api/pandas.multiindex.from_frame#pandas.MultiIndex.from_frame" title="pandas.MultiIndex.from_frame"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.from_frame()</span></code></a>. This is a complementary method to <a class="reference internal" href="../reference/api/pandas.multiindex.to_frame#pandas.MultiIndex.to_frame" title="pandas.MultiIndex.to_frame"><code class="xref py py-meth docutils literal notranslate"><span class="pre">MultiIndex.to_frame()</span></code></a>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [10]: df = pd.DataFrame(
+   ....:     [["bar", "one"], ["bar", "two"], ["foo", "one"], ["foo", "two"]],
+   ....:     columns=["first", "second"],
+   ....: )
+   ....: 
+
+In [11]: pd.MultiIndex.from_frame(df)
+Out[11]: 
+MultiIndex([('bar', 'one'),
+            ('bar', 'two'),
+            ('foo', 'one'),
+            ('foo', 'two')],
+           names=['first', 'second'])
+</pre></div> </div> <p>As a convenience, you can pass a list of arrays directly into <code class="docutils literal notranslate"><span class="pre">Series</span></code> or <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> to construct a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> automatically:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [12]: arrays = [
+   ....:     np.array(["bar", "bar", "baz", "baz", "foo", "foo", "qux", "qux"]),
+   ....:     np.array(["one", "two", "one", "two", "one", "two", "one", "two"]),
+   ....: ]
+   ....: 
+
+In [13]: s = pd.Series(np.random.randn(8), index=arrays)
+
+In [14]: s
+Out[14]: 
+bar  one   -0.861849
+     two   -2.104569
+baz  one   -0.494929
+     two    1.071804
+foo  one    0.721555
+     two   -0.706771
+qux  one   -1.039575
+     two    0.271860
+dtype: float64
+
+In [15]: df = pd.DataFrame(np.random.randn(8, 4), index=arrays)
+
+In [16]: df
+Out[16]: 
+                0         1         2         3
+bar one -0.424972  0.567020  0.276232 -1.087401
+    two -0.673690  0.113648 -1.478427  0.524988
+baz one  0.404705  0.577046 -1.715002 -1.039268
+    two -0.370647 -1.157892 -1.344312  0.844885
+foo one  1.075770 -0.109050  1.643563 -1.469388
+    two  0.357021 -0.674600 -1.776904 -0.968914
+qux one -1.294524  0.413738  0.276662 -0.472035
+    two -0.013960 -0.362543 -0.006154 -0.923061
+</pre></div> </div> <p>All of the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> constructors accept a <code class="docutils literal notranslate"><span class="pre">names</span></code> argument which stores string names for the levels themselves. If no names are provided, <code class="docutils literal notranslate"><span class="pre">None</span></code> will be assigned:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [17]: df.index.names
+Out[17]: FrozenList([None, None])
+</pre></div> </div> <p>This index can back any axis of a pandas object, and the number of <strong>levels</strong> of the index is up to you:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [18]: df = pd.DataFrame(np.random.randn(3, 8), index=["A", "B", "C"], columns=index)
+
+In [19]: df
+Out[19]: 
+first        bar                 baz                 foo                 qux          
+second       one       two       one       two       one       two       one       two
+A       0.895717  0.805244 -1.206412  2.565646  1.431256  1.340309 -1.170299 -0.226169
+B       0.410835  0.813850  0.132003 -0.827317 -0.076467 -1.187678  1.130127 -1.436737
+C      -1.413681  1.607920  1.024180  0.569605  0.875906 -2.211372  0.974466 -2.006747
+
+In [20]: pd.DataFrame(np.random.randn(6, 6), index=index[:6], columns=index[:6])
+Out[20]: 
+first              bar                 baz                 foo          
+second             one       two       one       two       one       two
+first second                                                            
+bar   one    -0.410001 -0.078638  0.545952 -1.219217 -1.226825  0.769804
+      two    -1.281247 -0.727707 -0.121306 -0.097883  0.695775  0.341734
+baz   one     0.959726 -1.110336 -0.619976  0.149748 -0.732339  0.687738
+      two     0.176444  0.403310 -0.154951  0.301624 -2.179861 -1.369849
+foo   one    -0.954208  1.462696 -1.743161 -0.826591 -0.345352  1.314232
+      two     0.690579  0.995761  2.396780  0.014871  3.357427 -0.317441
+</pre></div> </div> <p>We’ve “sparsified” the higher levels of the indexes to make the console output a bit easier on the eyes. Note that how the index is displayed can be controlled using the <code class="docutils literal notranslate"><span class="pre">multi_sparse</span></code> option in <code class="docutils literal notranslate"><span class="pre">pandas.set_options()</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [21]: with pd.option_context("display.multi_sparse", False):
+   ....:     df
+   ....: 
+</pre></div> </div> <p>It’s worth keeping in mind that there’s nothing preventing you from using tuples as atomic labels on an axis:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [22]: pd.Series(np.random.randn(8), index=tuples)
+Out[22]: 
+(bar, one)   -1.236269
+(bar, two)    0.896171
+(baz, one)   -0.487602
+(baz, two)   -0.082240
+(foo, one)   -2.182937
+(foo, two)    0.380396
+(qux, one)    0.084844
+(qux, two)    0.432390
+dtype: float64
+</pre></div> </div> <p>The reason that the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> matters is that it can allow you to do grouping, selection, and reshaping operations as we will describe below and in subsequent areas of the documentation. As you will see in later sections, you can find yourself working with hierarchically-indexed data without creating a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> explicitly yourself. However, when loading data from a file, you may wish to generate your own <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> when preparing the data set.</p> </section> <section id="reconstructing-the-level-labels"> <h3>Reconstructing the level labels</h3> <p>The method <a class="reference internal" href="../reference/api/pandas.multiindex.get_level_values#pandas.MultiIndex.get_level_values" title="pandas.MultiIndex.get_level_values"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get_level_values()</span></code></a> will return a vector of the labels for each location at a particular level:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [23]: index.get_level_values(0)
+Out[23]: Index(['bar', 'bar', 'baz', 'baz', 'foo', 'foo', 'qux', 'qux'], dtype='object', name='first')
+
+In [24]: index.get_level_values("second")
+Out[24]: Index(['one', 'two', 'one', 'two', 'one', 'two', 'one', 'two'], dtype='object', name='second')
+</pre></div> </div> </section> <section id="basic-indexing-on-axis-with-multiindex"> <h3>Basic indexing on axis with MultiIndex</h3> <p>One of the important features of hierarchical indexing is that you can select data by a “partial” label identifying a subgroup in the data. <strong>Partial</strong> selection “drops” levels of the hierarchical index in the result in a completely analogous way to selecting a column in a regular DataFrame:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [25]: df["bar"]
+Out[25]: 
+second       one       two
+A       0.895717  0.805244
+B       0.410835  0.813850
+C      -1.413681  1.607920
+
+In [26]: df["bar", "one"]
+Out[26]: 
+A    0.895717
+B    0.410835
+C   -1.413681
+Name: (bar, one), dtype: float64
+
+In [27]: df["bar"]["one"]
+Out[27]: 
+A    0.895717
+B    0.410835
+C   -1.413681
+Name: one, dtype: float64
+
+In [28]: s["qux"]
+Out[28]: 
+one   -1.039575
+two    0.271860
+dtype: float64
+</pre></div> </div> <p>See <a class="reference internal" href="#advanced-xs"><span class="std std-ref">Cross-section with hierarchical index</span></a> for how to select on a deeper level.</p> </section> <section id="defined-levels"> <h3>Defined levels</h3> <p>The <a class="reference internal" href="../reference/api/pandas.multiindex#pandas.MultiIndex" title="pandas.MultiIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">MultiIndex</span></code></a> keeps all the defined levels of an index, even if they are not actually used. When slicing an index, you may notice this. For example:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [29]: df.columns.levels  # original MultiIndex
+Out[29]: FrozenList([['bar', 'baz', 'foo', 'qux'], ['one', 'two']])
+
+In [30]: df[["foo","qux"]].columns.levels  # sliced
+Out[30]: FrozenList([['bar', 'baz', 'foo', 'qux'], ['one', 'two']])
+</pre></div> </div> <p>This is done to avoid a recomputation of the levels in order to make slicing highly performant. If you want to see only the used levels, you can use the <a class="reference internal" href="../reference/api/pandas.multiindex.get_level_values#pandas.MultiIndex.get_level_values" title="pandas.MultiIndex.get_level_values"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get_level_values()</span></code></a> method.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [31]: df[["foo", "qux"]].columns.to_numpy()
+Out[31]: 
+array([('foo', 'one'), ('foo', 'two'), ('qux', 'one'), ('qux', 'two')],
+      dtype=object)
+
+# for a specific level
+In [32]: df[["foo", "qux"]].columns.get_level_values(0)
+Out[32]: Index(['foo', 'foo', 'qux', 'qux'], dtype='object', name='first')
+</pre></div> </div> <p>To reconstruct the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> with only the used levels, the <a class="reference internal" href="../reference/api/pandas.multiindex.remove_unused_levels#pandas.MultiIndex.remove_unused_levels" title="pandas.MultiIndex.remove_unused_levels"><code class="xref py py-meth docutils literal notranslate"><span class="pre">remove_unused_levels()</span></code></a> method may be used.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [33]: new_mi = df[["foo", "qux"]].columns.remove_unused_levels()
+
+In [34]: new_mi.levels
+Out[34]: FrozenList([['foo', 'qux'], ['one', 'two']])
+</pre></div> </div> </section> <section id="data-alignment-and-using-reindex"> <h3>Data alignment and using <code class="docutils literal notranslate"><span class="pre">reindex</span></code>
+</h3> <p>Operations between differently-indexed objects having <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> on the axes will work as you expect; data alignment will work the same as an Index of tuples:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [35]: s + s[:-2]
+Out[35]: 
+bar  one   -1.723698
+     two   -4.209138
+baz  one   -0.989859
+     two    2.143608
+foo  one    1.443110
+     two   -1.413542
+qux  one         NaN
+     two         NaN
+dtype: float64
+
+In [36]: s + s[::2]
+Out[36]: 
+bar  one   -1.723698
+     two         NaN
+baz  one   -0.989859
+     two         NaN
+foo  one    1.443110
+     two         NaN
+qux  one   -2.079150
+     two         NaN
+dtype: float64
+</pre></div> </div> <p>The <a class="reference internal" href="../reference/api/pandas.dataframe.reindex#pandas.DataFrame.reindex" title="pandas.DataFrame.reindex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">reindex()</span></code></a> method of <code class="docutils literal notranslate"><span class="pre">Series</span></code>/<code class="docutils literal notranslate"><span class="pre">DataFrames</span></code> can be called with another <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>, or even a list or array of tuples:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [37]: s.reindex(index[:3])
+Out[37]: 
+first  second
+bar    one      -0.861849
+       two      -2.104569
+baz    one      -0.494929
+dtype: float64
+
+In [38]: s.reindex([("foo", "two"), ("bar", "one"), ("qux", "one"), ("baz", "one")])
+Out[38]: 
+foo  two   -0.706771
+bar  one   -0.861849
+qux  one   -1.039575
+baz  one   -0.494929
+dtype: float64
+</pre></div> </div> </section> </section> <section id="advanced-indexing-with-hierarchical-index"> <h2>Advanced indexing with hierarchical index</h2> <p>Syntactically integrating <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> in advanced indexing with <code class="docutils literal notranslate"><span class="pre">.loc</span></code> is a bit challenging, but we’ve made every effort to do so. In general, MultiIndex keys take the form of tuples. For example, the following works as you would expect:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [39]: df = df.T
+
+In [40]: df
+Out[40]: 
+                     A         B         C
+first second                              
+bar   one     0.895717  0.410835 -1.413681
+      two     0.805244  0.813850  1.607920
+baz   one    -1.206412  0.132003  1.024180
+      two     2.565646 -0.827317  0.569605
+foo   one     1.431256 -0.076467  0.875906
+      two     1.340309 -1.187678 -2.211372
+qux   one    -1.170299  1.130127  0.974466
+      two    -0.226169 -1.436737 -2.006747
+
+In [41]: df.loc[("bar", "two")]
+Out[41]: 
+A    0.805244
+B    0.813850
+C    1.607920
+Name: (bar, two), dtype: float64
+</pre></div> </div> <p>Note that <code class="docutils literal notranslate"><span class="pre">df.loc['bar',</span> <span class="pre">'two']</span></code> would also work in this example, but this shorthand notation can lead to ambiguity in general.</p> <p>If you also want to index a specific column with <code class="docutils literal notranslate"><span class="pre">.loc</span></code>, you must use a tuple like this:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [42]: df.loc[("bar", "two"), "A"]
+Out[42]: 0.8052440253863785
+</pre></div> </div> <p>You don’t have to specify all levels of the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> by passing only the first elements of the tuple. For example, you can use “partial” indexing to get all elements with <code class="docutils literal notranslate"><span class="pre">bar</span></code> in the first level as follows:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [43]: df.loc["bar"]
+Out[43]: 
+               A         B         C
+second                              
+one     0.895717  0.410835 -1.413681
+two     0.805244  0.813850  1.607920
+</pre></div> </div> <p>This is a shortcut for the slightly more verbose notation <code class="docutils literal notranslate"><span class="pre">df.loc[('bar',),]</span></code> (equivalent to <code class="docutils literal notranslate"><span class="pre">df.loc['bar',]</span></code> in this example).</p> <p>“Partial” slicing also works quite nicely.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [44]: df.loc["baz":"foo"]
+Out[44]: 
+                     A         B         C
+first second                              
+baz   one    -1.206412  0.132003  1.024180
+      two     2.565646 -0.827317  0.569605
+foo   one     1.431256 -0.076467  0.875906
+      two     1.340309 -1.187678 -2.211372
+</pre></div> </div> <p>You can slice with a ‘range’ of values, by providing a slice of tuples.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [45]: df.loc[("baz", "two"):("qux", "one")]
+Out[45]: 
+                     A         B         C
+first second                              
+baz   two     2.565646 -0.827317  0.569605
+foo   one     1.431256 -0.076467  0.875906
+      two     1.340309 -1.187678 -2.211372
+qux   one    -1.170299  1.130127  0.974466
+
+In [46]: df.loc[("baz", "two"):"foo"]
+Out[46]: 
+                     A         B         C
+first second                              
+baz   two     2.565646 -0.827317  0.569605
+foo   one     1.431256 -0.076467  0.875906
+      two     1.340309 -1.187678 -2.211372
+</pre></div> </div> <p>Passing a list of labels or tuples works similar to reindexing:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [47]: df.loc[[("bar", "two"), ("qux", "one")]]
+Out[47]: 
+                     A         B         C
+first second                              
+bar   two     0.805244  0.813850  1.607920
+qux   one    -1.170299  1.130127  0.974466
+</pre></div> </div> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is important to note that tuples and lists are not treated identically in pandas when it comes to indexing. Whereas a tuple is interpreted as one multi-level key, a list is used to specify several keys. Or in other words, tuples go horizontally (traversing levels), lists go vertically (scanning levels).</p> </div> <p>Importantly, a list of tuples indexes several complete <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> keys, whereas a tuple of lists refer to several values within a level:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [48]: s = pd.Series(
+   ....:     [1, 2, 3, 4, 5, 6],
+   ....:     index=pd.MultiIndex.from_product([["A", "B"], ["c", "d", "e"]]),
+   ....: )
+   ....: 
+
+In [49]: s.loc[[("A", "c"), ("B", "d")]]  # list of tuples
+Out[49]: 
+A  c    1
+B  d    5
+dtype: int64
+
+In [50]: s.loc[(["A", "B"], ["c", "d"])]  # tuple of lists
+Out[50]: 
+A  c    1
+   d    2
+B  c    4
+   d    5
+dtype: int64
+</pre></div> </div> <section id="using-slicers"> <h3>Using slicers</h3> <p>You can slice a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> by providing multiple indexers.</p> <p>You can provide any of the selectors as if you are indexing by label, see <a class="reference internal" href="indexing#indexing-label"><span class="std std-ref">Selection by Label</span></a>, including slices, lists of labels, labels, and boolean indexers.</p> <p>You can use <code class="docutils literal notranslate"><span class="pre">slice(None)</span></code> to select all the contents of <em>that</em> level. You do not need to specify all the <em>deeper</em> levels, they will be implied as <code class="docutils literal notranslate"><span class="pre">slice(None)</span></code>.</p> <p>As usual, <strong>both sides</strong> of the slicers are included as this is label indexing.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>You should specify all axes in the <code class="docutils literal notranslate"><span class="pre">.loc</span></code> specifier, meaning the indexer for the <strong>index</strong> and for the <strong>columns</strong>. There are some ambiguous cases where the passed indexer could be mis-interpreted as indexing <em>both</em> axes, rather than into say the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> for the rows.</p> <p>You should do this:</p> <div class="highlight-python notranslate">
+<div class="highlight"><pre data-language="python">df.loc[(slice("A1", "A3"), ...), :]  # noqa: E999
+</pre></div> </div> <p>You should <strong>not</strong> do this:</p> <div class="highlight-python notranslate">
+<div class="highlight"><pre data-language="python">df.loc[(slice("A1", "A3"), ...)]  # noqa: E999
+</pre></div> </div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [51]: def mklbl(prefix, n):
+   ....:     return ["%s%s" % (prefix, i) for i in range(n)]
+   ....: 
+
+In [52]: miindex = pd.MultiIndex.from_product(
+   ....:     [mklbl("A", 4), mklbl("B", 2), mklbl("C", 4), mklbl("D", 2)]
+   ....: )
+   ....: 
+
+In [53]: micolumns = pd.MultiIndex.from_tuples(
+   ....:     [("a", "foo"), ("a", "bar"), ("b", "foo"), ("b", "bah")], names=["lvl0", "lvl1"]
+   ....: )
+   ....: 
+
+In [54]: dfmi = (
+   ....:     pd.DataFrame(
+   ....:         np.arange(len(miindex) * len(micolumns)).reshape(
+   ....:             (len(miindex), len(micolumns))
+   ....:         ),
+   ....:         index=miindex,
+   ....:         columns=micolumns,
+   ....:     )
+   ....:     .sort_index()
+   ....:     .sort_index(axis=1)
+   ....: )
+   ....: 
+
+In [55]: dfmi
+Out[55]: 
+lvl0           a         b     
+lvl1         bar  foo  bah  foo
+A0 B0 C0 D0    1    0    3    2
+         D1    5    4    7    6
+      C1 D0    9    8   11   10
+         D1   13   12   15   14
+      C2 D0   17   16   19   18
+...          ...  ...  ...  ...
+A3 B1 C1 D1  237  236  239  238
+      C2 D0  241  240  243  242
+         D1  245  244  247  246
+      C3 D0  249  248  251  250
+         D1  253  252  255  254
+
+[64 rows x 4 columns]
+</pre></div> </div> <p>Basic MultiIndex slicing using slices, lists, and labels.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [56]: dfmi.loc[(slice("A1", "A3"), slice(None), ["C1", "C3"]), :]
+Out[56]: 
+lvl0           a         b     
+lvl1         bar  foo  bah  foo
+A1 B0 C1 D0   73   72   75   74
+         D1   77   76   79   78
+      C3 D0   89   88   91   90
+         D1   93   92   95   94
+   B1 C1 D0  105  104  107  106
+...          ...  ...  ...  ...
+A3 B0 C3 D1  221  220  223  222
+   B1 C1 D0  233  232  235  234
+         D1  237  236  239  238
+      C3 D0  249  248  251  250
+         D1  253  252  255  254
+
+[24 rows x 4 columns]
+</pre></div> </div> <p>You can use <a class="reference internal" href="../reference/api/pandas.indexslice#pandas.IndexSlice" title="pandas.IndexSlice"><code class="xref py py-class docutils literal notranslate"><span class="pre">pandas.IndexSlice</span></code></a> to facilitate a more natural syntax using <code class="docutils literal notranslate"><span class="pre">:</span></code>, rather than using <code class="docutils literal notranslate"><span class="pre">slice(None)</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [57]: idx = pd.IndexSlice
+
+In [58]: dfmi.loc[idx[:, :, ["C1", "C3"]], idx[:, "foo"]]
+Out[58]: 
+lvl0           a    b
+lvl1         foo  foo
+A0 B0 C1 D0    8   10
+         D1   12   14
+      C3 D0   24   26
+         D1   28   30
+   B1 C1 D0   40   42
+...          ...  ...
+A3 B0 C3 D1  220  222
+   B1 C1 D0  232  234
+         D1  236  238
+      C3 D0  248  250
+         D1  252  254
+
+[32 rows x 2 columns]
+</pre></div> </div> <p>It is possible to perform quite complicated selections using this method on multiple axes at the same time.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [59]: dfmi.loc["A1", (slice(None), "foo")]
+Out[59]: 
+lvl0        a    b
+lvl1      foo  foo
+B0 C0 D0   64   66
+      D1   68   70
+   C1 D0   72   74
+      D1   76   78
+   C2 D0   80   82
+...       ...  ...
+B1 C1 D1  108  110
+   C2 D0  112  114
+      D1  116  118
+   C3 D0  120  122
+      D1  124  126
+
+[16 rows x 2 columns]
+
+In [60]: dfmi.loc[idx[:, :, ["C1", "C3"]], idx[:, "foo"]]
+Out[60]: 
+lvl0           a    b
+lvl1         foo  foo
+A0 B0 C1 D0    8   10
+         D1   12   14
+      C3 D0   24   26
+         D1   28   30
+   B1 C1 D0   40   42
+...          ...  ...
+A3 B0 C3 D1  220  222
+   B1 C1 D0  232  234
+         D1  236  238
+      C3 D0  248  250
+         D1  252  254
+
+[32 rows x 2 columns]
+</pre></div> </div> <p>Using a boolean indexer you can provide selection related to the <em>values</em>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [61]: mask = dfmi[("a", "foo")] &gt; 200
+
+In [62]: dfmi.loc[idx[mask, :, ["C1", "C3"]], idx[:, "foo"]]
+Out[62]: 
+lvl0           a    b
+lvl1         foo  foo
+A3 B0 C1 D1  204  206
+      C3 D0  216  218
+         D1  220  222
+   B1 C1 D0  232  234
+         D1  236  238
+      C3 D0  248  250
+         D1  252  254
+</pre></div> </div> <p>You can also specify the <code class="docutils literal notranslate"><span class="pre">axis</span></code> argument to <code class="docutils literal notranslate"><span class="pre">.loc</span></code> to interpret the passed slicers on a single axis.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [63]: dfmi.loc(axis=0)[:, :, ["C1", "C3"]]
+Out[63]: 
+lvl0           a         b     
+lvl1         bar  foo  bah  foo
+A0 B0 C1 D0    9    8   11   10
+         D1   13   12   15   14
+      C3 D0   25   24   27   26
+         D1   29   28   31   30
+   B1 C1 D0   41   40   43   42
+...          ...  ...  ...  ...
+A3 B0 C3 D1  221  220  223  222
+   B1 C1 D0  233  232  235  234
+         D1  237  236  239  238
+      C3 D0  249  248  251  250
+         D1  253  252  255  254
+
+[32 rows x 4 columns]
+</pre></div> </div> <p>Furthermore, you can <em>set</em> the values using the following methods.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [64]: df2 = dfmi.copy()
+
+In [65]: df2.loc(axis=0)[:, :, ["C1", "C3"]] = -10
+
+In [66]: df2
+Out[66]: 
+lvl0           a         b     
+lvl1         bar  foo  bah  foo
+A0 B0 C0 D0    1    0    3    2
+         D1    5    4    7    6
+      C1 D0  -10  -10  -10  -10
+         D1  -10  -10  -10  -10
+      C2 D0   17   16   19   18
+...          ...  ...  ...  ...
+A3 B1 C1 D1  -10  -10  -10  -10
+      C2 D0  241  240  243  242
+         D1  245  244  247  246
+      C3 D0  -10  -10  -10  -10
+         D1  -10  -10  -10  -10
+
+[64 rows x 4 columns]
+</pre></div> </div> <p>You can use a right-hand-side of an alignable object as well.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [67]: df2 = dfmi.copy()
+
+In [68]: df2.loc[idx[:, :, ["C1", "C3"]], :] = df2 * 1000
+
+In [69]: df2
+Out[69]: 
+lvl0              a               b        
+lvl1            bar     foo     bah     foo
+A0 B0 C0 D0       1       0       3       2
+         D1       5       4       7       6
+      C1 D0    9000    8000   11000   10000
+         D1   13000   12000   15000   14000
+      C2 D0      17      16      19      18
+...             ...     ...     ...     ...
+A3 B1 C1 D1  237000  236000  239000  238000
+      C2 D0     241     240     243     242
+         D1     245     244     247     246
+      C3 D0  249000  248000  251000  250000
+         D1  253000  252000  255000  254000
+
+[64 rows x 4 columns]
+</pre></div> </div> </section> <section id="cross-section"> <h3>Cross-section</h3> <p>The <a class="reference internal" href="../reference/api/pandas.dataframe.xs#pandas.DataFrame.xs" title="pandas.DataFrame.xs"><code class="xref py py-meth docutils literal notranslate"><span class="pre">xs()</span></code></a> method of <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> additionally takes a level argument to make selecting data at a particular level of a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> easier.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [70]: df
+Out[70]: 
+                     A         B         C
+first second                              
+bar   one     0.895717  0.410835 -1.413681
+      two     0.805244  0.813850  1.607920
+baz   one    -1.206412  0.132003  1.024180
+      two     2.565646 -0.827317  0.569605
+foo   one     1.431256 -0.076467  0.875906
+      two     1.340309 -1.187678 -2.211372
+qux   one    -1.170299  1.130127  0.974466
+      two    -0.226169 -1.436737 -2.006747
+
+In [71]: df.xs("one", level="second")
+Out[71]: 
+              A         B         C
+first                              
+bar    0.895717  0.410835 -1.413681
+baz   -1.206412  0.132003  1.024180
+foo    1.431256 -0.076467  0.875906
+qux   -1.170299  1.130127  0.974466
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python"># using the slicers
+In [72]: df.loc[(slice(None), "one"), :]
+Out[72]: 
+                     A         B         C
+first second                              
+bar   one     0.895717  0.410835 -1.413681
+baz   one    -1.206412  0.132003  1.024180
+foo   one     1.431256 -0.076467  0.875906
+qux   one    -1.170299  1.130127  0.974466
+</pre></div> </div> <p>You can also select on the columns with <code class="docutils literal notranslate"><span class="pre">xs</span></code>, by providing the axis argument.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [73]: df = df.T
+
+In [74]: df.xs("one", level="second", axis=1)
+Out[74]: 
+first       bar       baz       foo       qux
+A      0.895717 -1.206412  1.431256 -1.170299
+B      0.410835  0.132003 -0.076467  1.130127
+C     -1.413681  1.024180  0.875906  0.974466
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python"># using the slicers
+In [75]: df.loc[:, (slice(None), "one")]
+Out[75]: 
+first        bar       baz       foo       qux
+second       one       one       one       one
+A       0.895717 -1.206412  1.431256 -1.170299
+B       0.410835  0.132003 -0.076467  1.130127
+C      -1.413681  1.024180  0.875906  0.974466
+</pre></div> </div> <p><code class="docutils literal notranslate"><span class="pre">xs</span></code> also allows selection with multiple keys.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [76]: df.xs(("one", "bar"), level=("second", "first"), axis=1)
+Out[76]: 
+first        bar
+second       one
+A       0.895717
+B       0.410835
+C      -1.413681
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python"># using the slicers
+In [77]: df.loc[:, ("bar", "one")]
+Out[77]: 
+A    0.895717
+B    0.410835
+C   -1.413681
+Name: (bar, one), dtype: float64
+</pre></div> </div> <p>You can pass <code class="docutils literal notranslate"><span class="pre">drop_level=False</span></code> to <code class="docutils literal notranslate"><span class="pre">xs</span></code> to retain the level that was selected.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [78]: df.xs("one", level="second", axis=1, drop_level=False)
+Out[78]: 
+first        bar       baz       foo       qux
+second       one       one       one       one
+A       0.895717 -1.206412  1.431256 -1.170299
+B       0.410835  0.132003 -0.076467  1.130127
+C      -1.413681  1.024180  0.875906  0.974466
+</pre></div> </div> <p>Compare the above with the result using <code class="docutils literal notranslate"><span class="pre">drop_level=True</span></code> (the default value).</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [79]: df.xs("one", level="second", axis=1, drop_level=True)
+Out[79]: 
+first       bar       baz       foo       qux
+A      0.895717 -1.206412  1.431256 -1.170299
+B      0.410835  0.132003 -0.076467  1.130127
+C     -1.413681  1.024180  0.875906  0.974466
+</pre></div> </div> </section> <section id="advanced-reindexing-and-alignment"> <h3>Advanced reindexing and alignment</h3> <p>Using the parameter <code class="docutils literal notranslate"><span class="pre">level</span></code> in the <a class="reference internal" href="../reference/api/pandas.dataframe.reindex#pandas.DataFrame.reindex" title="pandas.DataFrame.reindex"><code class="xref py py-meth docutils literal notranslate"><span class="pre">reindex()</span></code></a> and <a class="reference internal" href="../reference/api/pandas.dataframe.align#pandas.DataFrame.align" title="pandas.DataFrame.align"><code class="xref py py-meth docutils literal notranslate"><span class="pre">align()</span></code></a> methods of pandas objects is useful to broadcast values across a level. For instance:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [80]: midx = pd.MultiIndex(
+   ....:     levels=[["zero", "one"], ["x", "y"]], codes=[[1, 1, 0, 0], [1, 0, 1, 0]]
+   ....: )
+   ....: 
+
+In [81]: df = pd.DataFrame(np.random.randn(4, 2), index=midx)
+
+In [82]: df
+Out[82]: 
+               0         1
+one  y  1.519970 -0.493662
+     x  0.600178  0.274230
+zero y  0.132885 -0.023688
+     x  2.410179  1.450520
+
+In [83]: df2 = df.groupby(level=0).mean()
+
+In [84]: df2
+Out[84]: 
+             0         1
+one   1.060074 -0.109716
+zero  1.271532  0.713416
+
+In [85]: df2.reindex(df.index, level=0)
+Out[85]: 
+               0         1
+one  y  1.060074 -0.109716
+     x  1.060074 -0.109716
+zero y  1.271532  0.713416
+     x  1.271532  0.713416
+
+# aligning
+In [86]: df_aligned, df2_aligned = df.align(df2, level=0)
+
+In [87]: df_aligned
+Out[87]: 
+               0         1
+one  y  1.519970 -0.493662
+     x  0.600178  0.274230
+zero y  0.132885 -0.023688
+     x  2.410179  1.450520
+
+In [88]: df2_aligned
+Out[88]: 
+               0         1
+one  y  1.060074 -0.109716
+     x  1.060074 -0.109716
+zero y  1.271532  0.713416
+     x  1.271532  0.713416
+</pre></div> </div> </section> <section id="swapping-levels-with-swaplevel"> <h3>Swapping levels with <code class="docutils literal notranslate"><span class="pre">swaplevel</span></code>
+</h3> <p>The <a class="reference internal" href="../reference/api/pandas.multiindex.swaplevel#pandas.MultiIndex.swaplevel" title="pandas.MultiIndex.swaplevel"><code class="xref py py-meth docutils literal notranslate"><span class="pre">swaplevel()</span></code></a> method can switch the order of two levels:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [89]: df[:5]
+Out[89]: 
+               0         1
+one  y  1.519970 -0.493662
+     x  0.600178  0.274230
+zero y  0.132885 -0.023688
+     x  2.410179  1.450520
+
+In [90]: df[:5].swaplevel(0, 1, axis=0)
+Out[90]: 
+               0         1
+y one   1.519970 -0.493662
+x one   0.600178  0.274230
+y zero  0.132885 -0.023688
+x zero  2.410179  1.450520
+</pre></div> </div> </section> <section id="reordering-levels-with-reorder-levels"> <h3>Reordering levels with <code class="docutils literal notranslate"><span class="pre">reorder_levels</span></code>
+</h3> <p>The <a class="reference internal" href="../reference/api/pandas.multiindex.reorder_levels#pandas.MultiIndex.reorder_levels" title="pandas.MultiIndex.reorder_levels"><code class="xref py py-meth docutils literal notranslate"><span class="pre">reorder_levels()</span></code></a> method generalizes the <code class="docutils literal notranslate"><span class="pre">swaplevel</span></code> method, allowing you to permute the hierarchical index levels in one step:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [91]: df[:5].reorder_levels([1, 0], axis=0)
+Out[91]: 
+               0         1
+y one   1.519970 -0.493662
+x one   0.600178  0.274230
+y zero  0.132885 -0.023688
+x zero  2.410179  1.450520
+</pre></div> </div> </section> <section id="renaming-names-of-an-index-or-multiindex"> <h3>Renaming names of an <code class="docutils literal notranslate"><span class="pre">Index</span></code> or <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>
+</h3> <p>The <a class="reference internal" href="../reference/api/pandas.dataframe.rename#pandas.DataFrame.rename" title="pandas.DataFrame.rename"><code class="xref py py-meth docutils literal notranslate"><span class="pre">rename()</span></code></a> method is used to rename the labels of a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>, and is typically used to rename the columns of a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>. The <code class="docutils literal notranslate"><span class="pre">columns</span></code> argument of <code class="docutils literal notranslate"><span class="pre">rename</span></code> allows a dictionary to be specified that includes only the columns you wish to rename.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [92]: df.rename(columns={0: "col0", 1: "col1"})
+Out[92]: 
+            col0      col1
+one  y  1.519970 -0.493662
+     x  0.600178  0.274230
+zero y  0.132885 -0.023688
+     x  2.410179  1.450520
+</pre></div> </div> <p>This method can also be used to rename specific labels of the main index of the <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [93]: df.rename(index={"one": "two", "y": "z"})
+Out[93]: 
+               0         1
+two  z  1.519970 -0.493662
+     x  0.600178  0.274230
+zero z  0.132885 -0.023688
+     x  2.410179  1.450520
+</pre></div> </div> <p>The <a class="reference internal" href="../reference/api/pandas.dataframe.rename_axis#pandas.DataFrame.rename_axis" title="pandas.DataFrame.rename_axis"><code class="xref py py-meth docutils literal notranslate"><span class="pre">rename_axis()</span></code></a> method is used to rename the name of a <code class="docutils literal notranslate"><span class="pre">Index</span></code> or <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>. In particular, the names of the levels of a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> can be specified, which is useful if <code class="docutils literal notranslate"><span class="pre">reset_index()</span></code> is later used to move the values from the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> to a column.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [94]: df.rename_axis(index=["abc", "def"])
+Out[94]: 
+                 0         1
+abc  def                    
+one  y    1.519970 -0.493662
+     x    0.600178  0.274230
+zero y    0.132885 -0.023688
+     x    2.410179  1.450520
+</pre></div> </div> <p>Note that the columns of a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> are an index, so that using <code class="docutils literal notranslate"><span class="pre">rename_axis</span></code> with the <code class="docutils literal notranslate"><span class="pre">columns</span></code> argument will change the name of that index.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [95]: df.rename_axis(columns="Cols").columns
+Out[95]: RangeIndex(start=0, stop=2, step=1, name='Cols')
+</pre></div> </div> <p>Both <code class="docutils literal notranslate"><span class="pre">rename</span></code> and <code class="docutils literal notranslate"><span class="pre">rename_axis</span></code> support specifying a dictionary, <code class="docutils literal notranslate"><span class="pre">Series</span></code> or a mapping function to map labels/names to new values.</p> <p>When working with an <code class="docutils literal notranslate"><span class="pre">Index</span></code> object directly, rather than via a <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>, <a class="reference internal" href="../reference/api/pandas.index.set_names#pandas.Index.set_names" title="pandas.Index.set_names"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Index.set_names()</span></code></a> can be used to change the names.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [96]: mi = pd.MultiIndex.from_product([[1, 2], ["a", "b"]], names=["x", "y"])
+
+In [97]: mi.names
+Out[97]: FrozenList(['x', 'y'])
+
+In [98]: mi2 = mi.rename("new name", level=0)
+
+In [99]: mi2
+Out[99]: 
+MultiIndex([(1, 'a'),
+            (1, 'b'),
+            (2, 'a'),
+            (2, 'b')],
+           names=['new name', 'y'])
+</pre></div> </div> <p>You cannot set the names of the MultiIndex via a level.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [100]: mi.levels[0].name = "name via level"
+---------------------------------------------------------------------------
+RuntimeError                              Traceback (most recent call last)
+Input In [100], in &lt;module&gt;
+----&gt; 1 mi.levels[0].name = "name via level"
+
+File /pandas/pandas/core/indexes/base.py:1661, in Index.name(self, value)
+   1657 @name.setter
+   1658 def name(self, value: Hashable):
+   1659     if self._no_setting_name:
+   1660         # Used in MultiIndex.levels to avoid silently ignoring name updates.
+-&gt; 1661         raise RuntimeError(
+   1662             "Cannot set name on a level of a MultiIndex. Use "
+   1663             "'MultiIndex.set_names' instead."
+   1664         )
+   1665     maybe_extract_name(value, None, type(self))
+   1666     self._name = value
+
+RuntimeError: Cannot set name on a level of a MultiIndex. Use 'MultiIndex.set_names' instead.
+</pre></div> </div> <p>Use <a class="reference internal" href="../reference/api/pandas.index.set_names#pandas.Index.set_names" title="pandas.Index.set_names"><code class="xref py py-meth docutils literal notranslate"><span class="pre">Index.set_names()</span></code></a> instead.</p> </section> </section> <section id="sorting-a-multiindex"> <h2>Sorting a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>
+</h2> <p>For <a class="reference internal" href="../reference/api/pandas.multiindex#pandas.MultiIndex" title="pandas.MultiIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">MultiIndex</span></code></a>-ed objects to be indexed and sliced effectively, they need to be sorted. As with any index, you can use <a class="reference internal" href="../reference/api/pandas.dataframe.sort_index#pandas.DataFrame.sort_index" title="pandas.DataFrame.sort_index"><code class="xref py py-meth docutils literal notranslate"><span class="pre">sort_index()</span></code></a>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [101]: import random
+
+In [102]: random.shuffle(tuples)
+
+In [103]: s = pd.Series(np.random.randn(8), index=pd.MultiIndex.from_tuples(tuples))
+
+In [104]: s
+Out[104]: 
+baz  one    0.206053
+bar  two   -0.251905
+     one   -2.213588
+qux  two    1.063327
+baz  two    1.266143
+qux  one    0.299368
+foo  two   -0.863838
+     one    0.408204
+dtype: float64
+
+In [105]: s.sort_index()
+Out[105]: 
+bar  one   -2.213588
+     two   -0.251905
+baz  one    0.206053
+     two    1.266143
+foo  one    0.408204
+     two   -0.863838
+qux  one    0.299368
+     two    1.063327
+dtype: float64
+
+In [106]: s.sort_index(level=0)
+Out[106]: 
+bar  one   -2.213588
+     two   -0.251905
+baz  one    0.206053
+     two    1.266143
+foo  one    0.408204
+     two   -0.863838
+qux  one    0.299368
+     two    1.063327
+dtype: float64
+
+In [107]: s.sort_index(level=1)
+Out[107]: 
+bar  one   -2.213588
+baz  one    0.206053
+foo  one    0.408204
+qux  one    0.299368
+bar  two   -0.251905
+baz  two    1.266143
+foo  two   -0.863838
+qux  two    1.063327
+dtype: float64
+</pre></div> </div> <p id="advanced-sortlevel-byname">You may also pass a level name to <code class="docutils literal notranslate"><span class="pre">sort_index</span></code> if the <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> levels are named.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [108]: s.index.set_names(["L1", "L2"], inplace=True)
+
+In [109]: s.sort_index(level="L1")
+Out[109]: 
+L1   L2 
+bar  one   -2.213588
+     two   -0.251905
+baz  one    0.206053
+     two    1.266143
+foo  one    0.408204
+     two   -0.863838
+qux  one    0.299368
+     two    1.063327
+dtype: float64
+
+In [110]: s.sort_index(level="L2")
+Out[110]: 
+L1   L2 
+bar  one   -2.213588
+baz  one    0.206053
+foo  one    0.408204
+qux  one    0.299368
+bar  two   -0.251905
+baz  two    1.266143
+foo  two   -0.863838
+qux  two    1.063327
+dtype: float64
+</pre></div> </div> <p>On higher dimensional objects, you can sort any of the other axes by level if they have a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [111]: df.T.sort_index(level=1, axis=1)
+Out[111]: 
+        one      zero       one      zero
+          x         x         y         y
+0  0.600178  2.410179  1.519970  0.132885
+1  0.274230  1.450520 -0.493662 -0.023688
+</pre></div> </div> <p>Indexing will work even if the data are not sorted, but will be rather inefficient (and show a <code class="docutils literal notranslate"><span class="pre">PerformanceWarning</span></code>). It will also return a copy of the data rather than a view:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [112]: dfm = pd.DataFrame(
+   .....:     {"jim": [0, 0, 1, 1], "joe": ["x", "x", "z", "y"], "jolie": np.random.rand(4)}
+   .....: )
+   .....: 
+
+In [113]: dfm = dfm.set_index(["jim", "joe"])
+
+In [114]: dfm
+Out[114]: 
+            jolie
+jim joe          
+0   x    0.490671
+    x    0.120248
+1   z    0.537020
+    y    0.110968
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [4]: dfm.loc[(1, 'z')]
+PerformanceWarning: indexing past lexsort depth may impact performance.
+
+Out[4]:
+           jolie
+jim joe
+1   z    0.64094
+</pre></div> </div> <p id="advanced-unsorted">Furthermore, if you try to index something that is not fully lexsorted, this can raise:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [5]: dfm.loc[(0, 'y'):(1, 'z')]
+UnsortedIndexError: 'Key length (2) was greater than MultiIndex lexsort depth (1)'
+</pre></div> </div> <p>The <code class="xref py py-meth docutils literal notranslate"><span class="pre">is_monotonic_increasing()</span></code> method on a <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> shows if the index is sorted:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [115]: dfm.index.is_monotonic_increasing
+Out[115]: False
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [116]: dfm = dfm.sort_index()
+
+In [117]: dfm
+Out[117]: 
+            jolie
+jim joe          
+0   x    0.490671
+    x    0.120248
+1   y    0.110968
+    z    0.537020
+
+In [118]: dfm.index.is_monotonic_increasing
+Out[118]: True
+</pre></div> </div> <p>And now selection works as expected.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [119]: dfm.loc[(0, "y"):(1, "z")]
+Out[119]: 
+            jolie
+jim joe          
+1   y    0.110968
+    z    0.537020
+</pre></div> </div> </section> <section id="take-methods"> <h2>Take methods</h2> <p id="advanced-take">Similar to NumPy ndarrays, pandas <code class="docutils literal notranslate"><span class="pre">Index</span></code>, <code class="docutils literal notranslate"><span class="pre">Series</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> also provides the <a class="reference internal" href="../reference/api/pandas.dataframe.take#pandas.DataFrame.take" title="pandas.DataFrame.take"><code class="xref py py-meth docutils literal notranslate"><span class="pre">take()</span></code></a> method that retrieves elements along a given axis at the given indices. The given indices must be either a list or an ndarray of integer index positions. <code class="docutils literal notranslate"><span class="pre">take</span></code> will also accept negative integers as relative positions to the end of the object.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [120]: index = pd.Index(np.random.randint(0, 1000, 10))
+
+In [121]: index
+Out[121]: Int64Index([214, 502, 712, 567, 786, 175, 993, 133, 758, 329], dtype='int64')
+
+In [122]: positions = [0, 9, 3]
+
+In [123]: index[positions]
+Out[123]: Int64Index([214, 329, 567], dtype='int64')
+
+In [124]: index.take(positions)
+Out[124]: Int64Index([214, 329, 567], dtype='int64')
+
+In [125]: ser = pd.Series(np.random.randn(10))
+
+In [126]: ser.iloc[positions]
+Out[126]: 
+0   -0.179666
+9    1.824375
+3    0.392149
+dtype: float64
+
+In [127]: ser.take(positions)
+Out[127]: 
+0   -0.179666
+9    1.824375
+3    0.392149
+dtype: float64
+</pre></div> </div> <p>For DataFrames, the given indices should be a 1d list or ndarray that specifies row or column positions.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [128]: frm = pd.DataFrame(np.random.randn(5, 3))
+
+In [129]: frm.take([1, 4, 3])
+Out[129]: 
+          0         1         2
+1 -1.237881  0.106854 -1.276829
+4  0.629675 -1.425966  1.857704
+3  0.979542 -1.633678  0.615855
+
+In [130]: frm.take([0, 2], axis=1)
+Out[130]: 
+          0         2
+0  0.595974  0.601544
+1 -1.237881 -1.276829
+2 -0.767101  1.499591
+3  0.979542  0.615855
+4  0.629675  1.857704
+</pre></div> </div> <p>It is important to note that the <code class="docutils literal notranslate"><span class="pre">take</span></code> method on pandas objects are not intended to work on boolean indices and may return unexpected results.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [131]: arr = np.random.randn(10)
+
+In [132]: arr.take([False, False, True, True])
+Out[132]: array([-1.1935, -1.1935,  0.6775,  0.6775])
+
+In [133]: arr[[0, 1]]
+Out[133]: array([-1.1935,  0.6775])
+
+In [134]: ser = pd.Series(np.random.randn(10))
+
+In [135]: ser.take([False, False, True, True])
+Out[135]: 
+0    0.233141
+0    0.233141
+1   -0.223540
+1   -0.223540
+dtype: float64
+
+In [136]: ser.iloc[[0, 1]]
+Out[136]: 
+0    0.233141
+1   -0.223540
+dtype: float64
+</pre></div> </div> <p>Finally, as a small note on performance, because the <code class="docutils literal notranslate"><span class="pre">take</span></code> method handles a narrower range of inputs, it can offer performance that is a good deal faster than fancy indexing.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [137]: arr = np.random.randn(10000, 5)
+
+In [138]: indexer = np.arange(10000)
+
+In [139]: random.shuffle(indexer)
+
+In [140]: %timeit arr[indexer]
+   .....: %timeit arr.take(indexer, axis=0)
+   .....: 
+183 us +- 14.4 us per loop (mean +- std. dev. of 7 runs, 10,000 loops each)
+50.7 us +- 4.88 us per loop (mean +- std. dev. of 7 runs, 10,000 loops each)
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [141]: ser = pd.Series(arr[:, 0])
+
+In [142]: %timeit ser.iloc[indexer]
+   .....: %timeit ser.take(indexer)
+   .....: 
+85.9 us +- 5.47 us per loop (mean +- std. dev. of 7 runs, 10,000 loops each)
+71 us +- 7.64 us per loop (mean +- std. dev. of 7 runs, 10,000 loops each)
+</pre></div> </div> </section> <section id="index-types"> <h2>Index types</h2> <p>We have discussed <code class="docutils literal notranslate"><span class="pre">MultiIndex</span></code> in the previous sections pretty extensively. Documentation about <code class="docutils literal notranslate"><span class="pre">DatetimeIndex</span></code> and <code class="docutils literal notranslate"><span class="pre">PeriodIndex</span></code> are shown <a class="reference internal" href="timeseries#timeseries-overview"><span class="std std-ref">here</span></a>, and documentation about <code class="docutils literal notranslate"><span class="pre">TimedeltaIndex</span></code> is found <a class="reference internal" href="timedeltas#timedeltas-index"><span class="std std-ref">here</span></a>.</p> <p>In the following sub-sections we will highlight some other index types.</p> <section id="categoricalindex"> <h3>CategoricalIndex</h3> <p><a class="reference internal" href="../reference/api/pandas.categoricalindex#pandas.CategoricalIndex" title="pandas.CategoricalIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">CategoricalIndex</span></code></a> is a type of index that is useful for supporting indexing with duplicates. This is a container around a <a class="reference internal" href="../reference/api/pandas.categorical#pandas.Categorical" title="pandas.Categorical"><code class="xref py py-class docutils literal notranslate"><span class="pre">Categorical</span></code></a> and allows efficient indexing and storage of an index with a large number of duplicated elements.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [143]: from pandas.api.types import CategoricalDtype
+
+In [144]: df = pd.DataFrame({"A": np.arange(6), "B": list("aabbca")})
+
+In [145]: df["B"] = df["B"].astype(CategoricalDtype(list("cab")))
+
+In [146]: df
+Out[146]: 
+   A  B
+0  0  a
+1  1  a
+2  2  b
+3  3  b
+4  4  c
+5  5  a
+
+In [147]: df.dtypes
+Out[147]: 
+A       int64
+B    category
+dtype: object
+
+In [148]: df["B"].cat.categories
+Out[148]: Index(['c', 'a', 'b'], dtype='object')
+</pre></div> </div> <p>Setting the index will create a <code class="docutils literal notranslate"><span class="pre">CategoricalIndex</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [149]: df2 = df.set_index("B")
+
+In [150]: df2.index
+Out[150]: CategoricalIndex(['a', 'a', 'b', 'b', 'c', 'a'], categories=['c', 'a', 'b'], ordered=False, dtype='category', name='B')
+</pre></div> </div> <p>Indexing with <code class="docutils literal notranslate"><span class="pre">__getitem__/.iloc/.loc</span></code> works similarly to an <code class="docutils literal notranslate"><span class="pre">Index</span></code> with duplicates. The indexers <strong>must</strong> be in the category or the operation will raise a <code class="docutils literal notranslate"><span class="pre">KeyError</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [151]: df2.loc["a"]
+Out[151]: 
+   A
+B   
+a  0
+a  1
+a  5
+</pre></div> </div> <p>The <code class="docutils literal notranslate"><span class="pre">CategoricalIndex</span></code> is <strong>preserved</strong> after indexing:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [152]: df2.loc["a"].index
+Out[152]: CategoricalIndex(['a', 'a', 'a'], categories=['c', 'a', 'b'], ordered=False, dtype='category', name='B')
+</pre></div> </div> <p>Sorting the index will sort by the order of the categories (recall that we created the index with <code class="docutils literal notranslate"><span class="pre">CategoricalDtype(list('cab'))</span></code>, so the sorted order is <code class="docutils literal notranslate"><span class="pre">cab</span></code>).</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [153]: df2.sort_index()
+Out[153]: 
+   A
+B   
+c  4
+a  0
+a  1
+a  5
+b  2
+b  3
+</pre></div> </div> <p>Groupby operations on the index will preserve the index nature as well.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [154]: df2.groupby(level=0).sum()
+Out[154]: 
+   A
+B   
+c  4
+a  6
+b  5
+
+In [155]: df2.groupby(level=0).sum().index
+Out[155]: CategoricalIndex(['c', 'a', 'b'], categories=['c', 'a', 'b'], ordered=False, dtype='category', name='B')
+</pre></div> </div> <p>Reindexing operations will return a resulting index based on the type of the passed indexer. Passing a list will return a plain-old <code class="docutils literal notranslate"><span class="pre">Index</span></code>; indexing with a <code class="docutils literal notranslate"><span class="pre">Categorical</span></code> will return a <code class="docutils literal notranslate"><span class="pre">CategoricalIndex</span></code>, indexed according to the categories of the <strong>passed</strong> <code class="docutils literal notranslate"><span class="pre">Categorical</span></code> dtype. This allows one to arbitrarily index these even with values <strong>not</strong> in the categories, similarly to how you can reindex <strong>any</strong> pandas index.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [156]: df3 = pd.DataFrame(
+   .....:     {"A": np.arange(3), "B": pd.Series(list("abc")).astype("category")}
+   .....: )
+   .....: 
+
+In [157]: df3 = df3.set_index("B")
+
+In [158]: df3
+Out[158]: 
+   A
+B   
+a  0
+b  1
+c  2
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [159]: df3.reindex(["a", "e"])
+Out[159]: 
+     A
+B     
+a  0.0
+e  NaN
+
+In [160]: df3.reindex(["a", "e"]).index
+Out[160]: Index(['a', 'e'], dtype='object', name='B')
+
+In [161]: df3.reindex(pd.Categorical(["a", "e"], categories=list("abe")))
+Out[161]: 
+     A
+B     
+a  0.0
+e  NaN
+
+In [162]: df3.reindex(pd.Categorical(["a", "e"], categories=list("abe"))).index
+Out[162]: CategoricalIndex(['a', 'e'], categories=['a', 'b', 'e'], ordered=False, dtype='category', name='B')
+</pre></div> </div> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Reshaping and Comparison operations on a <code class="docutils literal notranslate"><span class="pre">CategoricalIndex</span></code> must have the same categories or a <code class="docutils literal notranslate"><span class="pre">TypeError</span></code> will be raised.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [163]: df4 = pd.DataFrame({"A": np.arange(2), "B": list("ba")})
+
+In [164]: df4["B"] = df4["B"].astype(CategoricalDtype(list("ab")))
+
+In [165]: df4 = df4.set_index("B")
+
+In [166]: df4.index
+Out[166]: CategoricalIndex(['b', 'a'], categories=['a', 'b'], ordered=False, dtype='category', name='B')
+
+In [167]: df5 = pd.DataFrame({"A": np.arange(2), "B": list("bc")})
+
+In [168]: df5["B"] = df5["B"].astype(CategoricalDtype(list("bc")))
+
+In [169]: df5 = df5.set_index("B")
+
+In [170]: df5.index
+Out[170]: CategoricalIndex(['b', 'c'], categories=['b', 'c'], ordered=False, dtype='category', name='B')
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [1]: pd.concat([df4, df5])
+TypeError: categories must match existing categories when appending
+</pre></div> </div> </div> </section> <section id="int64index-and-rangeindex"> <h3>Int64Index and RangeIndex</h3> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 1.4.0: </span>In pandas 2.0, <a class="reference internal" href="../reference/api/pandas.index#pandas.Index" title="pandas.Index"><code class="xref py py-class docutils literal notranslate"><span class="pre">Index</span></code></a> will become the default index type for numeric types instead of <code class="docutils literal notranslate"><span class="pre">Int64Index</span></code>, <code class="docutils literal notranslate"><span class="pre">Float64Index</span></code> and <code class="docutils literal notranslate"><span class="pre">UInt64Index</span></code> and those index types are therefore deprecated and will be removed in a futire version. <code class="docutils literal notranslate"><span class="pre">RangeIndex</span></code> will not be removed, as it represents an optimized version of an integer index.</p> </div> <p><a class="reference internal" href="../reference/api/pandas.int64index#pandas.Int64Index" title="pandas.Int64Index"><code class="xref py py-class docutils literal notranslate"><span class="pre">Int64Index</span></code></a> is a fundamental basic index in pandas. This is an immutable array implementing an ordered, sliceable set.</p> <p><a class="reference internal" href="../reference/api/pandas.rangeindex#pandas.RangeIndex" title="pandas.RangeIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">RangeIndex</span></code></a> is a sub-class of <code class="docutils literal notranslate"><span class="pre">Int64Index</span></code> that provides the default index for all <code class="docutils literal notranslate"><span class="pre">NDFrame</span></code> objects. <code class="docutils literal notranslate"><span class="pre">RangeIndex</span></code> is an optimized version of <code class="docutils literal notranslate"><span class="pre">Int64Index</span></code> that can represent a monotonic ordered set. These are analogous to Python <a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#typesseq-range">range types</a>.</p> </section> <section id="float64index"> <h3>Float64Index</h3> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 1.4.0: </span><a class="reference internal" href="../reference/api/pandas.index#pandas.Index" title="pandas.Index"><code class="xref py py-class docutils literal notranslate"><span class="pre">Index</span></code></a> will become the default index type for numeric types in the future instead of <code class="docutils literal notranslate"><span class="pre">Int64Index</span></code>, <code class="docutils literal notranslate"><span class="pre">Float64Index</span></code> and <code class="docutils literal notranslate"><span class="pre">UInt64Index</span></code> and those index types are therefore deprecated and will be removed in a future version of Pandas. <code class="docutils literal notranslate"><span class="pre">RangeIndex</span></code> will not be removed as it represents an optimized version of an integer index.</p> </div> <p>By default a <a class="reference internal" href="../reference/api/pandas.float64index#pandas.Float64Index" title="pandas.Float64Index"><code class="xref py py-class docutils literal notranslate"><span class="pre">Float64Index</span></code></a> will be automatically created when passing floating, or mixed-integer-floating values in index creation. This enables a pure label-based slicing paradigm that makes <code class="docutils literal notranslate"><span class="pre">[],ix,loc</span></code> for scalar indexing and slicing work exactly the same.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [171]: indexf = pd.Index([1.5, 2, 3, 4.5, 5])
+
+In [172]: indexf
+Out[172]: Float64Index([1.5, 2.0, 3.0, 4.5, 5.0], dtype='float64')
+
+In [173]: sf = pd.Series(range(5), index=indexf)
+
+In [174]: sf
+Out[174]: 
+1.5    0
+2.0    1
+3.0    2
+4.5    3
+5.0    4
+dtype: int64
+</pre></div> </div> <p>Scalar selection for <code class="docutils literal notranslate"><span class="pre">[],.loc</span></code> will always be label based. An integer will match an equal float index (e.g. <code class="docutils literal notranslate"><span class="pre">3</span></code> is equivalent to <code class="docutils literal notranslate"><span class="pre">3.0</span></code>).</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [175]: sf[3]
+Out[175]: 2
+
+In [176]: sf[3.0]
+Out[176]: 2
+
+In [177]: sf.loc[3]
+Out[177]: 2
+
+In [178]: sf.loc[3.0]
+Out[178]: 2
+</pre></div> </div> <p>The only positional indexing is via <code class="docutils literal notranslate"><span class="pre">iloc</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [179]: sf.iloc[3]
+Out[179]: 3
+</pre></div> </div> <p>A scalar index that is not found will raise a <code class="docutils literal notranslate"><span class="pre">KeyError</span></code>. Slicing is primarily on the values of the index when using <code class="docutils literal notranslate"><span class="pre">[],ix,loc</span></code>, and <strong>always</strong> positional when using <code class="docutils literal notranslate"><span class="pre">iloc</span></code>. The exception is when the slice is boolean, in which case it will always be positional.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [180]: sf[2:4]
+Out[180]: 
+2.0    1
+3.0    2
+dtype: int64
+
+In [181]: sf.loc[2:4]
+Out[181]: 
+2.0    1
+3.0    2
+dtype: int64
+
+In [182]: sf.iloc[2:4]
+Out[182]: 
+3.0    2
+4.5    3
+dtype: int64
+</pre></div> </div> <p>In float indexes, slicing using floats is allowed.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [183]: sf[2.1:4.6]
+Out[183]: 
+3.0    2
+4.5    3
+dtype: int64
+
+In [184]: sf.loc[2.1:4.6]
+Out[184]: 
+3.0    2
+4.5    3
+dtype: int64
+</pre></div> </div> <p>In non-float indexes, slicing using floats will raise a <code class="docutils literal notranslate"><span class="pre">TypeError</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [1]: pd.Series(range(5))[3.5]
+TypeError: the label [3.5] is not a proper indexer for this index type (Int64Index)
+
+In [1]: pd.Series(range(5))[3.5:4.5]
+TypeError: the slice start [3.5] is not a proper indexer for this index type (Int64Index)
+</pre></div> </div> <p>Here is a typical use-case for using this type of indexing. Imagine that you have a somewhat irregular timedelta-like indexing scheme, but the data is recorded as floats. This could, for example, be millisecond offsets.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [185]: dfir = pd.concat(
+   .....:     [
+   .....:         pd.DataFrame(
+   .....:             np.random.randn(5, 2), index=np.arange(5) * 250.0, columns=list("AB")
+   .....:         ),
+   .....:         pd.DataFrame(
+   .....:             np.random.randn(6, 2),
+   .....:             index=np.arange(4, 10) * 250.1,
+   .....:             columns=list("AB"),
+   .....:         ),
+   .....:     ]
+   .....: )
+   .....: 
+
+In [186]: dfir
+Out[186]: 
+               A         B
+0.0    -0.435772 -1.188928
+250.0  -0.808286 -0.284634
+500.0  -1.815703  1.347213
+750.0  -0.243487  0.514704
+1000.0  1.162969 -0.287725
+1000.4 -0.179734  0.993962
+1250.5 -0.212673  0.909872
+1500.6 -0.733333 -0.349893
+1750.7  0.456434 -0.306735
+2000.8  0.553396  0.166221
+2250.9 -0.101684 -0.734907
+</pre></div> </div> <p>Selection operations then will always work on a value basis, for all selection operators.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [187]: dfir[0:1000.4]
+Out[187]: 
+               A         B
+0.0    -0.435772 -1.188928
+250.0  -0.808286 -0.284634
+500.0  -1.815703  1.347213
+750.0  -0.243487  0.514704
+1000.0  1.162969 -0.287725
+1000.4 -0.179734  0.993962
+
+In [188]: dfir.loc[0:1001, "A"]
+Out[188]: 
+0.0      -0.435772
+250.0    -0.808286
+500.0    -1.815703
+750.0    -0.243487
+1000.0    1.162969
+1000.4   -0.179734
+Name: A, dtype: float64
+
+In [189]: dfir.loc[1000.4]
+Out[189]: 
+A   -0.179734
+B    0.993962
+Name: 1000.4, dtype: float64
+</pre></div> </div> <p>You could retrieve the first 1 second (1000 ms) of data as such:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [190]: dfir[0:1000]
+Out[190]: 
+               A         B
+0.0    -0.435772 -1.188928
+250.0  -0.808286 -0.284634
+500.0  -1.815703  1.347213
+750.0  -0.243487  0.514704
+1000.0  1.162969 -0.287725
+</pre></div> </div> <p>If you need integer based selection, you should use <code class="docutils literal notranslate"><span class="pre">iloc</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [191]: dfir.iloc[0:5]
+Out[191]: 
+               A         B
+0.0    -0.435772 -1.188928
+250.0  -0.808286 -0.284634
+500.0  -1.815703  1.347213
+750.0  -0.243487  0.514704
+1000.0  1.162969 -0.287725
+</pre></div> </div> </section> <section id="intervalindex"> <h3>IntervalIndex</h3> <p><a class="reference internal" href="../reference/api/pandas.intervalindex#pandas.IntervalIndex" title="pandas.IntervalIndex"><code class="xref py py-class docutils literal notranslate"><span class="pre">IntervalIndex</span></code></a> together with its own dtype, <code class="xref py py-class docutils literal notranslate"><span class="pre">IntervalDtype</span></code> as well as the <a class="reference internal" href="../reference/api/pandas.interval#pandas.Interval" title="pandas.Interval"><code class="xref py py-class docutils literal notranslate"><span class="pre">Interval</span></code></a> scalar type, allow first-class support in pandas for interval notation.</p> <p>The <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> allows some unique indexing and is also used as a return type for the categories in <a class="reference internal" href="../reference/api/pandas.cut#pandas.cut" title="pandas.cut"><code class="xref py py-func docutils literal notranslate"><span class="pre">cut()</span></code></a> and <a class="reference internal" href="../reference/api/pandas.qcut#pandas.qcut" title="pandas.qcut"><code class="xref py py-func docutils literal notranslate"><span class="pre">qcut()</span></code></a>.</p> <section id="indexing-with-an-intervalindex"> <h4>Indexing with an <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code>
+</h4> <p>An <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> can be used in <code class="docutils literal notranslate"><span class="pre">Series</span></code> and in <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> as the index.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [192]: df = pd.DataFrame(
+   .....:     {"A": [1, 2, 3, 4]}, index=pd.IntervalIndex.from_breaks([0, 1, 2, 3, 4])
+   .....: )
+   .....: 
+
+In [193]: df
+Out[193]: 
+        A
+(0, 1]  1
+(1, 2]  2
+(2, 3]  3
+(3, 4]  4
+</pre></div> </div> <p>Label based indexing via <code class="docutils literal notranslate"><span class="pre">.loc</span></code> along the edges of an interval works as you would expect, selecting that particular interval.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [194]: df.loc[2]
+Out[194]: 
+A    2
+Name: (1, 2], dtype: int64
+
+In [195]: df.loc[[2, 3]]
+Out[195]: 
+        A
+(1, 2]  2
+(2, 3]  3
+</pre></div> </div> <p>If you select a label <em>contained</em> within an interval, this will also select the interval.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [196]: df.loc[2.5]
+Out[196]: 
+A    3
+Name: (2, 3], dtype: int64
+
+In [197]: df.loc[[2.5, 3.5]]
+Out[197]: 
+        A
+(2, 3]  3
+(3, 4]  4
+</pre></div> </div> <p>Selecting using an <code class="docutils literal notranslate"><span class="pre">Interval</span></code> will only return exact matches (starting from pandas 0.25.0).</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [198]: df.loc[pd.Interval(1, 2)]
+Out[198]: 
+A    2
+Name: (1, 2], dtype: int64
+</pre></div> </div> <p>Trying to select an <code class="docutils literal notranslate"><span class="pre">Interval</span></code> that is not exactly contained in the <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> will raise a <code class="docutils literal notranslate"><span class="pre">KeyError</span></code>.</p> <div class="highlight-python notranslate">
+<div class="highlight"><pre data-language="python">In [7]: df.loc[pd.Interval(0.5, 2.5)]
+---------------------------------------------------------------------------
+KeyError: Interval(0.5, 2.5, closed='right')
+</pre></div> </div> <p>Selecting all <code class="docutils literal notranslate"><span class="pre">Intervals</span></code> that overlap a given <code class="docutils literal notranslate"><span class="pre">Interval</span></code> can be performed using the <a class="reference internal" href="../reference/api/pandas.intervalindex.overlaps#pandas.IntervalIndex.overlaps" title="pandas.IntervalIndex.overlaps"><code class="xref py py-meth docutils literal notranslate"><span class="pre">overlaps()</span></code></a> method to create a boolean indexer.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [199]: idxr = df.index.overlaps(pd.Interval(0.5, 2.5))
+
+In [200]: idxr
+Out[200]: array([ True,  True,  True, False])
+
+In [201]: df[idxr]
+Out[201]: 
+        A
+(0, 1]  1
+(1, 2]  2
+(2, 3]  3
+</pre></div> </div> </section> <section id="binning-data-with-cut-and-qcut"> <h4>Binning data with <code class="docutils literal notranslate"><span class="pre">cut</span></code> and <code class="docutils literal notranslate"><span class="pre">qcut</span></code>
+</h4> <p><a class="reference internal" href="../reference/api/pandas.cut#pandas.cut" title="pandas.cut"><code class="xref py py-func docutils literal notranslate"><span class="pre">cut()</span></code></a> and <a class="reference internal" href="../reference/api/pandas.qcut#pandas.qcut" title="pandas.qcut"><code class="xref py py-func docutils literal notranslate"><span class="pre">qcut()</span></code></a> both return a <code class="docutils literal notranslate"><span class="pre">Categorical</span></code> object, and the bins they create are stored as an <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> in its <code class="docutils literal notranslate"><span class="pre">.categories</span></code> attribute.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [202]: c = pd.cut(range(4), bins=2)
+
+In [203]: c
+Out[203]: 
+[(-0.003, 1.5], (-0.003, 1.5], (1.5, 3.0], (1.5, 3.0]]
+Categories (2, interval[float64, right]): [(-0.003, 1.5] &lt; (1.5, 3.0]]
+
+In [204]: c.categories
+Out[204]: IntervalIndex([(-0.003, 1.5], (1.5, 3.0]], dtype='interval[float64, right]')
+</pre></div> </div> <p><a class="reference internal" href="../reference/api/pandas.cut#pandas.cut" title="pandas.cut"><code class="xref py py-func docutils literal notranslate"><span class="pre">cut()</span></code></a> also accepts an <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> for its <code class="docutils literal notranslate"><span class="pre">bins</span></code> argument, which enables a useful pandas idiom. First, We call <a class="reference internal" href="../reference/api/pandas.cut#pandas.cut" title="pandas.cut"><code class="xref py py-func docutils literal notranslate"><span class="pre">cut()</span></code></a> with some data and <code class="docutils literal notranslate"><span class="pre">bins</span></code> set to a fixed number, to generate the bins. Then, we pass the values of <code class="docutils literal notranslate"><span class="pre">.categories</span></code> as the <code class="docutils literal notranslate"><span class="pre">bins</span></code> argument in subsequent calls to <a class="reference internal" href="../reference/api/pandas.cut#pandas.cut" title="pandas.cut"><code class="xref py py-func docutils literal notranslate"><span class="pre">cut()</span></code></a>, supplying new data which will be binned into the same bins.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [205]: pd.cut([0, 3, 5, 1], bins=c.categories)
+Out[205]: 
+[(-0.003, 1.5], (1.5, 3.0], NaN, (-0.003, 1.5]]
+Categories (2, interval[float64, right]): [(-0.003, 1.5] &lt; (1.5, 3.0]]
+</pre></div> </div> <p>Any value which falls outside all bins will be assigned a <code class="docutils literal notranslate"><span class="pre">NaN</span></code> value.</p> </section> <section id="generating-ranges-of-intervals"> <h4>Generating ranges of intervals</h4> <p>If we need intervals on a regular frequency, we can use the <a class="reference internal" href="../reference/api/pandas.interval_range#pandas.interval_range" title="pandas.interval_range"><code class="xref py py-func docutils literal notranslate"><span class="pre">interval_range()</span></code></a> function to create an <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code> using various combinations of <code class="docutils literal notranslate"><span class="pre">start</span></code>, <code class="docutils literal notranslate"><span class="pre">end</span></code>, and <code class="docutils literal notranslate"><span class="pre">periods</span></code>. The default frequency for <code class="docutils literal notranslate"><span class="pre">interval_range</span></code> is a 1 for numeric intervals, and calendar day for datetime-like intervals:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [206]: pd.interval_range(start=0, end=5)
+Out[206]: IntervalIndex([(0, 1], (1, 2], (2, 3], (3, 4], (4, 5]], dtype='interval[int64, right]')
+
+In [207]: pd.interval_range(start=pd.Timestamp("2017-01-01"), periods=4)
+Out[207]: IntervalIndex([(2017-01-01, 2017-01-02], (2017-01-02, 2017-01-03], (2017-01-03, 2017-01-04], (2017-01-04, 2017-01-05]], dtype='interval[datetime64[ns], right]')
+
+In [208]: pd.interval_range(end=pd.Timedelta("3 days"), periods=3)
+Out[208]: IntervalIndex([(0 days 00:00:00, 1 days 00:00:00], (1 days 00:00:00, 2 days 00:00:00], (2 days 00:00:00, 3 days 00:00:00]], dtype='interval[timedelta64[ns], right]')
+</pre></div> </div> <p>The <code class="docutils literal notranslate"><span class="pre">freq</span></code> parameter can used to specify non-default frequencies, and can utilize a variety of <a class="reference internal" href="timeseries#timeseries-offset-aliases"><span class="std std-ref">frequency aliases</span></a> with datetime-like intervals:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [209]: pd.interval_range(start=0, periods=5, freq=1.5)
+Out[209]: IntervalIndex([(0.0, 1.5], (1.5, 3.0], (3.0, 4.5], (4.5, 6.0], (6.0, 7.5]], dtype='interval[float64, right]')
+
+In [210]: pd.interval_range(start=pd.Timestamp("2017-01-01"), periods=4, freq="W")
+Out[210]: IntervalIndex([(2017-01-01, 2017-01-08], (2017-01-08, 2017-01-15], (2017-01-15, 2017-01-22], (2017-01-22, 2017-01-29]], dtype='interval[datetime64[ns], right]')
+
+In [211]: pd.interval_range(start=pd.Timedelta("0 days"), periods=3, freq="9H")
+Out[211]: IntervalIndex([(0 days 00:00:00, 0 days 09:00:00], (0 days 09:00:00, 0 days 18:00:00], (0 days 18:00:00, 1 days 03:00:00]], dtype='interval[timedelta64[ns], right]')
+</pre></div> </div> <p>Additionally, the <code class="docutils literal notranslate"><span class="pre">closed</span></code> parameter can be used to specify which side(s) the intervals are closed on. Intervals are closed on the right side by default.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [212]: pd.interval_range(start=0, end=4, closed="both")
+Out[212]: IntervalIndex([[0, 1], [1, 2], [2, 3], [3, 4]], dtype='interval[int64, both]')
+
+In [213]: pd.interval_range(start=0, end=4, closed="neither")
+Out[213]: IntervalIndex([(0, 1), (1, 2), (2, 3), (3, 4)], dtype='interval[int64, neither]')
+</pre></div> </div> <p>Specifying <code class="docutils literal notranslate"><span class="pre">start</span></code>, <code class="docutils literal notranslate"><span class="pre">end</span></code>, and <code class="docutils literal notranslate"><span class="pre">periods</span></code> will generate a range of evenly spaced intervals from <code class="docutils literal notranslate"><span class="pre">start</span></code> to <code class="docutils literal notranslate"><span class="pre">end</span></code> inclusively, with <code class="docutils literal notranslate"><span class="pre">periods</span></code> number of elements in the resulting <code class="docutils literal notranslate"><span class="pre">IntervalIndex</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [214]: pd.interval_range(start=0, end=6, periods=4)
+Out[214]: IntervalIndex([(0.0, 1.5], (1.5, 3.0], (3.0, 4.5], (4.5, 6.0]], dtype='interval[float64, right]')
+
+In [215]: pd.interval_range(pd.Timestamp("2018-01-01"), pd.Timestamp("2018-02-28"), periods=3)
+Out[215]: IntervalIndex([(2018-01-01, 2018-01-20 08:00:00], (2018-01-20 08:00:00, 2018-02-08 16:00:00], (2018-02-08 16:00:00, 2018-02-28]], dtype='interval[datetime64[ns], right]')
+</pre></div> </div> </section> </section> </section> <section id="miscellaneous-indexing-faq"> <h2>Miscellaneous indexing FAQ</h2> <section id="integer-indexing"> <h3>Integer indexing</h3> <p>Label-based indexing with integer axis labels is a thorny topic. It has been discussed heavily on mailing lists and among various members of the scientific Python community. In pandas, our general viewpoint is that labels matter more than integer locations. Therefore, with an integer axis index <em>only</em> label-based indexing is possible with the standard tools like <code class="docutils literal notranslate"><span class="pre">.loc</span></code>. The following code will generate exceptions:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [216]: s = pd.Series(range(5))
+
+In [217]: s[-1]
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+File /pandas/pandas/core/indexes/range.py:385, in RangeIndex.get_loc(self, key, method, tolerance)
+    384 try:
+--&gt; 385     return self._range.index(new_key)
+    386 except ValueError as err:
+
+ValueError: -1 is not in range
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+Input In [217], in &lt;module&gt;
+----&gt; 1 s[-1]
+
+File /pandas/pandas/core/series.py:959, in Series.__getitem__(self, key)
+    956     return self._values[key]
+    958 elif key_is_scalar:
+--&gt; 959     return self._get_value(key)
+    961 if is_hashable(key):
+    962     # Otherwise index.get_value will raise InvalidIndexError
+    963     try:
+    964         # For labels that don't resolve as scalars like tuples and frozensets
+
+File /pandas/pandas/core/series.py:1070, in Series._get_value(self, label, takeable)
+   1067     return self._values[label]
+   1069 # Similar to Index.get_value, but we do not fall back to positional
+-&gt; 1070 loc = self.index.get_loc(label)
+   1071 return self.index._get_values_for_loc(self, loc, label)
+
+File /pandas/pandas/core/indexes/range.py:387, in RangeIndex.get_loc(self, key, method, tolerance)
+    385         return self._range.index(new_key)
+    386     except ValueError as err:
+--&gt; 387         raise KeyError(key) from err
+    388 self._check_indexing_error(key)
+    389 raise KeyError(key)
+
+KeyError: -1
+
+In [218]: df = pd.DataFrame(np.random.randn(5, 4))
+
+In [219]: df
+Out[219]: 
+          0         1         2         3
+0 -0.130121 -0.476046  0.759104  0.213379
+1 -0.082641  0.448008  0.656420 -1.051443
+2  0.594956 -0.151360 -0.069303  1.221431
+3 -0.182832  0.791235  0.042745  2.069775
+4  1.446552  0.019814 -1.389212 -0.702312
+
+In [220]: df.loc[-2:]
+Out[220]: 
+          0         1         2         3
+0 -0.130121 -0.476046  0.759104  0.213379
+1 -0.082641  0.448008  0.656420 -1.051443
+2  0.594956 -0.151360 -0.069303  1.221431
+3 -0.182832  0.791235  0.042745  2.069775
+4  1.446552  0.019814 -1.389212 -0.702312
+</pre></div> </div> <p>This deliberate decision was made to prevent ambiguities and subtle bugs (many users reported finding bugs when the API change was made to stop “falling back” on position-based indexing).</p> </section> <section id="non-monotonic-indexes-require-exact-matches"> <h3>Non-monotonic indexes require exact matches</h3> <p>If the index of a <code class="docutils literal notranslate"><span class="pre">Series</span></code> or <code class="docutils literal notranslate"><span class="pre">DataFrame</span></code> is monotonically increasing or decreasing, then the bounds of a label-based slice can be outside the range of the index, much like slice indexing a normal Python <code class="docutils literal notranslate"><span class="pre">list</span></code>. Monotonicity of an index can be tested with the <a class="reference internal" href="../reference/api/pandas.index.is_monotonic_increasing#pandas.Index.is_monotonic_increasing" title="pandas.Index.is_monotonic_increasing"><code class="xref py py-meth docutils literal notranslate"><span class="pre">is_monotonic_increasing()</span></code></a> and <a class="reference internal" href="../reference/api/pandas.index.is_monotonic_decreasing#pandas.Index.is_monotonic_decreasing" title="pandas.Index.is_monotonic_decreasing"><code class="xref py py-meth docutils literal notranslate"><span class="pre">is_monotonic_decreasing()</span></code></a> attributes.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [221]: df = pd.DataFrame(index=[2, 3, 3, 4, 5], columns=["data"], data=list(range(5)))
+
+In [222]: df.index.is_monotonic_increasing
+Out[222]: True
+
+# no rows 0 or 1, but still returns rows 2, 3 (both of them), and 4:
+In [223]: df.loc[0:4, :]
+Out[223]: 
+   data
+2     0
+3     1
+3     2
+4     3
+
+# slice is are outside the index, so empty DataFrame is returned
+In [224]: df.loc[13:15, :]
+Out[224]: 
+Empty DataFrame
+Columns: [data]
+Index: []
+</pre></div> </div> <p>On the other hand, if the index is not monotonic, then both slice bounds must be <em>unique</em> members of the index.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [225]: df = pd.DataFrame(index=[2, 3, 1, 4, 3, 5], columns=["data"], data=list(range(6)))
+
+In [226]: df.index.is_monotonic_increasing
+Out[226]: False
+
+# OK because 2 and 4 are in the index
+In [227]: df.loc[2:4, :]
+Out[227]: 
+   data
+2     0
+3     1
+1     2
+4     3
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python"># 0 is not in the index
+In [9]: df.loc[0:4, :]
+KeyError: 0
+
+# 3 is not a unique label
+In [11]: df.loc[2:3, :]
+KeyError: 'Cannot get right slice bound for non-unique label: 3'
+</pre></div> </div> <p><code class="docutils literal notranslate"><span class="pre">Index.is_monotonic_increasing</span></code> and <code class="docutils literal notranslate"><span class="pre">Index.is_monotonic_decreasing</span></code> only check that an index is weakly monotonic. To check for strict monotonicity, you can combine one of those with the <a class="reference internal" href="../reference/api/pandas.index.is_unique#pandas.Index.is_unique" title="pandas.Index.is_unique"><code class="xref py py-meth docutils literal notranslate"><span class="pre">is_unique()</span></code></a> attribute.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [228]: weakly_monotonic = pd.Index(["a", "b", "c", "c"])
+
+In [229]: weakly_monotonic
+Out[229]: Index(['a', 'b', 'c', 'c'], dtype='object')
+
+In [230]: weakly_monotonic.is_monotonic_increasing
+Out[230]: True
+
+In [231]: weakly_monotonic.is_monotonic_increasing &amp; weakly_monotonic.is_unique
+Out[231]: False
+</pre></div> </div> </section> <section id="endpoints-are-inclusive"> <h3>Endpoints are inclusive</h3> <p>Compared with standard Python sequence slicing in which the slice endpoint is not inclusive, label-based slicing in pandas <strong>is inclusive</strong>. The primary reason for this is that it is often not possible to easily determine the “successor” or next element after a particular label in an index. For example, consider the following <code class="docutils literal notranslate"><span class="pre">Series</span></code>:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [232]: s = pd.Series(np.random.randn(6), index=list("abcdef"))
+
+In [233]: s
+Out[233]: 
+a    0.301379
+b    1.240445
+c   -0.846068
+d   -0.043312
+e   -1.658747
+f   -0.819549
+dtype: float64
+</pre></div> </div> <p>Suppose we wished to slice from <code class="docutils literal notranslate"><span class="pre">c</span></code> to <code class="docutils literal notranslate"><span class="pre">e</span></code>, using integers this would be accomplished as such:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [234]: s[2:5]
+Out[234]: 
+c   -0.846068
+d   -0.043312
+e   -1.658747
+dtype: float64
+</pre></div> </div> <p>However, if you only had <code class="docutils literal notranslate"><span class="pre">c</span></code> and <code class="docutils literal notranslate"><span class="pre">e</span></code>, determining the next element in the index can be somewhat complicated. For example, the following does not work:</p> <div class="highlight-default notranslate">
+<div class="highlight"><pre data-language="python">s.loc['c':'e' + 1]
+</pre></div> </div> <p>A very common use case is to limit a time series to start and end at two specific dates. To enable this, we made the design choice to make label-based slicing include both endpoints:</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [235]: s.loc["c":"e"]
+Out[235]: 
+c   -0.846068
+d   -0.043312
+e   -1.658747
+dtype: float64
+</pre></div> </div> <p>This is most definitely a “practicality beats purity” sort of thing, but it is something to watch out for if you expect label-based slicing to behave exactly in the way that standard Python integer slicing works.</p> </section> <section id="indexing-potentially-changes-underlying-series-dtype"> <h3>Indexing potentially changes underlying Series dtype</h3> <p>The different indexing operation can potentially change the dtype of a <code class="docutils literal notranslate"><span class="pre">Series</span></code>.</p> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [236]: series1 = pd.Series([1, 2, 3])
+
+In [237]: series1.dtype
+Out[237]: dtype('int64')
+
+In [238]: res = series1.reindex([0, 4])
+
+In [239]: res.dtype
+Out[239]: dtype('float64')
+
+In [240]: res
+Out[240]: 
+0    1.0
+4    NaN
+dtype: float64
+</pre></div> </div> <div class="highlight-ipython notranslate">
+<div class="highlight"><pre data-language="python">In [241]: series2 = pd.Series([True])
+
+In [242]: series2.dtype
+Out[242]: dtype('bool')
+
+In [243]: res = series2.reindex_like(series1)
+
+In [244]: res.dtype
+Out[244]: dtype('O')
+
+In [245]: res
+Out[245]: 
+0    True
+1     NaN
+2     NaN
+dtype: object
+</pre></div> </div> <p>This is because the (re)indexing operations above silently inserts <code class="docutils literal notranslate"><span class="pre">NaNs</span></code> and the <code class="docutils literal notranslate"><span class="pre">dtype</span></code> changes accordingly. This can cause some issues when using <code class="docutils literal notranslate"><span class="pre">numpy</span></code> <code class="docutils literal notranslate"><span class="pre">ufuncs</span></code> such as <code class="docutils literal notranslate"><span class="pre">numpy.logical_and</span></code>.</p> <p>See the <a class="reference external" href="https://github.com/pandas-dev/pandas/issues/2388">GH2388</a> for a more detailed discussion.</p> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2008&ndash;2022, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/advanced.html" class="_attribution-link">https://pandas.pydata.org/pandas-docs/version/1.4.0/user_guide/advanced.html</a>
+  </p>
+</div>

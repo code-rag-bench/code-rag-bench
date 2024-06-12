@@ -1,0 +1,152 @@
+<h1 id="tensor-parallelism-torch-distributed-tensor-parallel">Tensor Parallelism - torch.distributed.tensor.parallel</h1> <p>Tensor Parallelism(TP) is built on top of the PyTorch DistributedTensor (<a class="reference external" href="https://github.com/pytorch/pytorch/blob/main/torch/distributed/_tensor/README.md">DTensor</a>) and provides several parallelism styles: Rowwise, Colwise and Pairwise Parallelism.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Tensor Parallelism APIs are experimental and subject to change.</p> </div> <p>The entrypoint to parallelize your <code>nn.Module</code> using Tensor Parallelism is:</p> <dl class="py function" id="module-torch.distributed.tensor.parallel"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.parallelize_module">
+<code>torch.distributed.tensor.parallel.parallelize_module(module, device_mesh, parallelize_plan, tp_mesh_dim=0)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/api.html#parallelize_module"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>The API to apply Tensor Parallelism (TP) in PyTorch. We parallelize module or sub_modules based on a parallelize_plan. The parallelize_plan contains <code>ParallelStyle</code>, which indicates how user wants the module or sub_module to be parallelized.</p> <p>User can also specify different parallel style per module fully qualified name (FQN). The API supports 2D parallelism natively by accepting an n-dimension device_mesh and users just need to specify the dimension where we perform tensor parallelism on.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>module</strong> (<code>nn.Module</code>) – Module to be parallelized.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>) – Object which describes the mesh topology of devices for the DTensor.</li> <li>
+<strong>parallelize_plan</strong> (Union[<code>ParallelStyle</code>, Dict[str, <code>ParallelStyle</code>]]) – The plan used to parallelize the module. It can be either a <code>ParallelStyle</code> object which contains how we prepare input/output for Tensor Parallelism or it can be a dict of module FQN and its corresponding <code>ParallelStyle</code> object.</li> <li>
+<strong>tp_mesh_dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – The dimension of <code>device_mesh</code> where we perform Tensor Parallelism on.</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>nn.Module</code> object parallelized.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+
+
+<a class="reference internal" href="generated/torch.nn.module#torch.nn.Module" title="torch.nn.modules.module.Module">Module</a> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; from torch.distributed.tensor.parallel import parallelize_module, PairwiseParallel
+&gt;&gt;&gt;
+&gt;&gt;&gt; # Define the module.
+&gt;&gt;&gt; m = Model(...)
+&gt;&gt;&gt; m = parallelize_module(m, PairwiseParallel())
+&gt;&gt;&gt;
+</pre> </dd> </dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p><code>PairwiseParallel</code> comes with constraints for now. If you need finer granularity, you need to pass in a dict of module FQN and parallel style instead.</p> </div> </dd>
+</dl> <p>Tensor Parallelism supports the following parallel styles:</p> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.RowwiseParallel">
+<code>class torch.distributed.tensor.parallel.style.RowwiseParallel(_prepare_input=&lt;function make_input_shard_1d_last_dim&gt;, _prepare_output=&lt;function make_output_tensor&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#RowwiseParallel"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Partitioning the row of a module. We assume the input to be a sharded <code>DTensor</code> and output to be a <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.ColwiseParallel">
+<code>class torch.distributed.tensor.parallel.style.ColwiseParallel(_prepare_input=&lt;function make_input_replicate_1d&gt;, _prepare_output=&lt;function make_sharded_output_tensor&gt;)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#ColwiseParallel"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Partitioning the column of a tensor or module. We assume the input to be a replicated <code>DTensor</code> and output to be a sharded <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>.</p>  </dd>
+</dl> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.PairwiseParallel">
+<code>class torch.distributed.tensor.parallel.style.PairwiseParallel(_prepare_input=None, _prepare_output=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#PairwiseParallel"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>PairwiseParallel concatenate colwise and rowwise styles as a fixed pair like what Megatron-LM(<a class="reference external" href="https://arxiv.org/abs/1909.08053">https://arxiv.org/abs/1909.08053</a>) is doing. We assume both input and output need to be replicate DTensors.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>PairwiseParallel does not support <code>nn.MultiheadAttention</code>, <code>nn.Transformer</code> well at this moment. One workaround is to apply <code>ColwiseParallel</code> and <code>RowwiseParallel</code> to the components of transformer. We recommend to use <code>PairwiseParallel</code> only for even-number-layer MLP for now.</p> </div>  </dd>
+</dl> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>Sequence Parallelism are still in experimental and no evaluation has been done.</p> </div> <dl class="py class"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.SequenceParallel">
+<code>class torch.distributed.tensor.parallel.style.SequenceParallel</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#SequenceParallel"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>SequenceParallel concatenate colwise and rowwise styles as a fixed pair together with sequence parallel like what Megatron-LM Sequence parallel (<a class="reference external" href="https://arxiv.org/pdf/2205.05198.pdf">https://arxiv.org/pdf/2205.05198.pdf</a>) is doing. We assume both input and output need to be sharded DTensors.</p> <div class="admonition warning"> <p class="admonition-title">Warning</p> <p>SequenceParallel does not support <code>nn.MultiheadAttention</code>, <code>nn.Transformer</code> well at this moment. One workaround is to apply <code>ColwiseParallel</code> and <code>RowwiseParallel</code> to the components of transformer. We recommend to use <code>SequenceParallel</code> only for even-number-layer MLP for now.</p> </div>  </dd>
+</dl> <p>Since Tensor Parallelism is built on top of DTensor, we need to specify the input and output placement of the module with DTensors so it can expectedly interacts with the module before and after. The followings are functions used for input/output preparation:</p> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_input_replicate_1d">
+<code>torch.distributed.tensor.parallel.style.make_input_replicate_1d(input, device_mesh=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_input_replicate_1d"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Replicate input tensor over an 1-D device mesh. This function will be used in ParallelStyle.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (Union[<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>, <code>DTensor</code>]) – This input tensor will be replicated over the 1-D <code>DeviceMesh</code>.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – The 1-D device mesh where <code>input</code> will be replicated. If no <code>DeviceMesh</code> is passed and <code>input</code> is a <code>DTensor</code>, <code>input.device_mesh</code> will be used. If <code>DeviceMesh</code> is not 1-D, an exception will be thrown. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>DTensor</code> replicated over <code>device_mesh</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_input_reshard_replicate">
+<code>torch.distributed.tensor.parallel.style.make_input_reshard_replicate(input, device_mesh)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_input_reshard_replicate"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>To construct a Sharded DTensor from a tensor on different ranks and then convert to a replicate DTensor.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>) – The input tensor on each rank which consists of a global DTensor sharded on dimension <code>0</code> over the 1-D <code>DeviceMesh</code> and then the sharded DTensor is converted to a replicate DTensor.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – The 1-D device mesh where <code>input</code> will be sharded. If <code>DeviceMesh</code> is not 1-D, an exception will be thrown. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+
+<dl class="simple"> <dt>
+<code>A DTensor sharded on dimension 0 over device_mesh</code> </dt>
+<dd>
+<p>and then converted to replicate.</p> </dd> </dl> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_input_shard_1d">
+<code>torch.distributed.tensor.parallel.style.make_input_shard_1d(input, device_mesh=None, dim=0)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_input_shard_1d"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Shard input tensor on <code>dim</code> over an 1-D device mesh. This function will be used in ParallelStyle.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (Union[<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>, <code>DTensor</code>]) – Single tensor will be sharded on dimension <code>dim</code> over the 1-D <code>DeviceMesh</code>.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – The 1-D device mesh where <code>input</code> will be sharded. If no <code>DeviceMesh</code> is passed and <code>input</code> is a <code>DTensor</code>, <code>input.device_mesh</code> will be used. If <code>DeviceMesh</code> is not 1-D, an exception will be thrown. Default: <code>None</code>
+</li> <li>
+<strong>dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a><em>, </em><em>optional</em>) – The sharding dimension of <code>input</code> tensor. Default: 0</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>DTensor</code> sharded on dimension <code>dim</code> over <code>device_mesh</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_input_shard_1d_last_dim">
+<code>torch.distributed.tensor.parallel.style.make_input_shard_1d_last_dim(input, device_mesh=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_input_shard_1d_last_dim"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Wrapper func of <code>make_input_shard_1d</code> with <code>dim</code> = -1.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>input</strong> (Union[<a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a>, <code>DTensor</code>]) – This single tensor will be sharded on the last dimension over the 1-D <code>DeviceMesh</code>.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – The 1-D device mesh where <code>input</code> will be sharded. If no <code>DeviceMesh</code> is passed and <code>input</code> is a <code>DTensor</code>, <code>input.device_mesh</code> will be used. If <code>DeviceMesh</code> is not 1-D, an exception will be thrown. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>DTensor</code> sharded on the last dimension over <code>device_mesh</code>.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_output_replicate_1d">
+<code>torch.distributed.tensor.parallel.style.make_output_replicate_1d(output, device_mesh=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_output_replicate_1d"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Convert Output DTensor to a replicated DTensor. This will be used in ParallelStyle.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output</strong> (<code>DTensor</code>) – Output of module to be converted.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – Object needed to replicate the output and it needs to be a 1D <code>device_mesh</code> and we will throw exceptions if a non-1D <code>device_mesh</code> is passed in. If no <code>device_mesh</code> is passed in, we will reuse the one from output. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>DTensor</code> object made replicate.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_output_reshard_tensor">
+<code>torch.distributed.tensor.parallel.style.make_output_reshard_tensor(output, device_mesh=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_output_reshard_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Convert Output DTensor to a sharded DTensor and return the local tensor.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output</strong> (<code>DTensor</code>) – Output of module to be converted.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – Object needed to shard the output and it needs to be a 1D <code>device_mesh</code> and we will throw exceptions if a non-1D <code>device_mesh</code> is passed in. If no <code>device_mesh</code> is passed in, we will reuse the one from output. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> object converted from output DTensor.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_output_shard_1d">
+<code>torch.distributed.tensor.parallel.style.make_output_shard_1d(output, device_mesh=None, dim=0)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_output_shard_1d"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Convert Output DTensor to a sharded DTensor. This will be used in ParallelStyle.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output</strong> (<code>DTensor</code>) – Output of module to be converted.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – Object needed to shard the output and it needs to be a 1D <code>device_mesh</code> and we will throw exceptions if a non-1D <code>device_mesh</code> is passed in. If no <code>device_mesh</code> is passed in, we will reuse the one from output. Default: <code>None</code>
+</li> <li>
+<strong>dim</strong> (<a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.12)">int</a>) – Sharding dim for output. Default: 0</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <code>DTensor</code> object sharded on the given dim.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><em>DTensor</em></p> </dd> </dl> </dd>
+</dl> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.style.make_output_tensor">
+<code>torch.distributed.tensor.parallel.style.make_output_tensor(output, device_mesh=None)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/style.html#make_output_tensor"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Convert Output DTensor to a replicated DTensor first and then convert it to Tensor.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<ul class="simple"> <li>
+<strong>output</strong> (<code>DTensor</code>) – Output of module to be converted.</li> <li>
+<strong>device_mesh</strong> (<code>DeviceMesh</code>, optional) – Object which is needed to replicate the output and it needs to be a 1D <code>device_mesh</code> and we will throw exceptions if a non-1D <code>device_mesh</code> is passed in. If no <code>device_mesh</code> is passed in, we will reuse the one from output. Default: <code>None</code>
+</li> </ul> </dd> <dt class="field-even">Returns</dt> <dd class="field-even">
+<p>A <a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor"><code>torch.Tensor</code></a> object converted from output DTensor.</p> </dd> <dt class="field-odd">Return type</dt> <dd class="field-odd">
+<p><a class="reference internal" href="tensors#torch.Tensor" title="torch.Tensor">Tensor</a></p> </dd> </dl> </dd>
+</dl> <p>Currently, there are some constraints which makes it hard for the <code>MultiheadAttention</code> module to work out of box for Tensor Parallelism, so we recommend users to try <code>ColwiseParallel</code> and <code>RowwiseParallel</code> for each parameter. There might be some code changes needed now since we are parallelizing on the head dim of the <code>MultiheadAttention</code> module.</p> <p>We also support 2D parallelism, where we compose tensor parallelism with data parallelism. To integrate with <code>FullyShardedDataParallel</code>, users just need to call the following API explicitly:</p> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.fsdp.enable_2d_with_fsdp">
+<code>torch.distributed.tensor.parallel.fsdp.enable_2d_with_fsdp()</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/fsdp.html#enable_2d_with_fsdp"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>The API registers the extension which is needed for Tensor Parallelism (TP) to work with FullyShardedDataParallel (FSDP). We first parallelize parameters within one module or sub_modules based on a parallelize_plan and will let FSDP reshard the local tensor of distributed parameter which is essentially a DTensor.</p> <dl class="field-list simple"> <dt class="field-odd">Returns</dt> <dd class="field-odd">
+<p>A <code>bool</code> indicated whether extension registration succeeds or not.</p> </dd> <dt class="field-even">Return type</dt> <dd class="field-even">
+<p><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.12)">bool</a></p> </dd> </dl> </dd>
+</dl> <p>To integrate with <code>DistributedDataParallel</code>, users just need to call the following API explicitly:</p> <dl class="py function"> <dt class="sig sig-object py" id="torch.distributed.tensor.parallel.ddp.pre_dp_module_transform">
+<code>torch.distributed.tensor.parallel.ddp.pre_dp_module_transform(module)</code> <a class="reference internal" href="https://pytorch.org/docs/2.1/_modules/torch/distributed/tensor/parallel/ddp.html#pre_dp_module_transform"><span class="viewcode-link">[source]</span></a>
+</dt> <dd>
+<p>Enable the composability between Tensor Parallelism (TP) and Data Parallelism(DP) in PyTorch when using DDP. We need to convert Parameters which are DTensors to local tensors before wrapping with data parallelism API. We then register two hooks, one for converting local tensors back to DTensor preforward and one to convert DTensors back to tensors after Forward. By integrating this way, we avoid any special handling of DTensor parameters by DDP and get DTensor’s gradients propagated back to DP, e.g. gradient buckets of DDP.</p> <p>For now, this API only works with <code>DistributedDataParallel</code>. It will later support other DP methods such as FSDP.</p> <dl class="field-list simple"> <dt class="field-odd">Parameters</dt> <dd class="field-odd">
+<p><strong>module</strong> (<code>nn.Module</code>) – Module which has been applied TP on.</p> </dd> </dl> <dl> <dt>Example::</dt>
+<dd>
+<pre data-language="python">&gt;&gt;&gt; from torch.distributed.tensor.parallel import parallelize_module, PairwiseParallel
+&gt;&gt;&gt; from torch.nn.parallel import DistributedDataParallel as DDP
+&gt;&gt;&gt; from torch.distributed.tensor.parallel.ddp import pre_dp_module_transform
+&gt;&gt;&gt;
+&gt;&gt;&gt; # Define the module.
+&gt;&gt;&gt; m = module(...)
+&gt;&gt;&gt; parallelize_module(m, PairwiseParallel())
+&gt;&gt;&gt; m = pre_dp_module_transform(m)
+&gt;&gt;&gt; m = DDP(m)
+&gt;&gt;&gt;
+</pre> </dd> </dl> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2024, PyTorch Contributors<br>PyTorch has a BSD-style license, as found in the <a href="https://github.com/pytorch/pytorch/blob/main/LICENSE">LICENSE</a> file.<br>
+    <a href="https://pytorch.org/docs/2.1/distributed.tensor.parallel.html" class="_attribution-link">https://pytorch.org/docs/2.1/distributed.tensor.parallel.html</a>
+  </p>
+</div>

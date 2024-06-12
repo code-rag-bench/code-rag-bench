@@ -1,0 +1,681 @@
+<h1 id="typing-support-for-type-hints">typing — Support for type hints</h1> <div class="versionadded" id="module-typing"> <p><span class="versionmodified added">New in version 3.5.</span></p> </div> <p><strong>Source code:</strong> <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/typing.py">Lib/typing.py</a></p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The Python runtime does not enforce function and variable type annotations. They can be used by third party tools such as type checkers, IDEs, linters, etc.</p> </div>  <p>This module provides runtime support for type hints as specified by <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-0"><strong>PEP 484</strong></a>, <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0526" id="index-1"><strong>PEP 526</strong></a>, <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0544" id="index-2"><strong>PEP 544</strong></a>, <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0586" id="index-3"><strong>PEP 586</strong></a>, <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0589" id="index-4"><strong>PEP 589</strong></a>, and <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0591" id="index-5"><strong>PEP 591</strong></a>. The most fundamental support consists of the types <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>, <a class="reference internal" href="#typing.Union" title="typing.Union"><code>Union</code></a>, <a class="reference internal" href="#typing.Tuple" title="typing.Tuple"><code>Tuple</code></a>, <a class="reference internal" href="#typing.Callable" title="typing.Callable"><code>Callable</code></a>, <a class="reference internal" href="#typing.TypeVar" title="typing.TypeVar"><code>TypeVar</code></a>, and <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a>. For full specification please see <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-6"><strong>PEP 484</strong></a>. For a simplified introduction to type hints see <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0483" id="index-7"><strong>PEP 483</strong></a>.</p> <p>The function below takes and returns a string and is annotated as follows:</p> <pre data-language="python">def greeting(name: str) -&gt; str:
+    return 'Hello ' + name
+</pre> <p>In the function <code>greeting</code>, the argument <code>name</code> is expected to be of type <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a> and the return type <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a>. Subtypes are accepted as arguments.</p>  <h2 id="type-aliases">Type aliases</h2> <p>A type alias is defined by assigning the type to the alias. In this example, <code>Vector</code> and <code>list[float]</code> will be treated as interchangeable synonyms:</p> <pre data-language="python">Vector = list[float]
+
+def scale(scalar: float, vector: Vector) -&gt; Vector:
+    return [scalar * num for num in vector]
+
+# typechecks; a list of floats qualifies as a Vector.
+new_vector = scale(2.0, [1.0, -4.2, 5.4])
+</pre> <p>Type aliases are useful for simplifying complex type signatures. For example:</p> <pre data-language="python">from collections.abc import Sequence
+
+ConnectionOptions = dict[str, str]
+Address = tuple[str, int]
+Server = tuple[Address, ConnectionOptions]
+
+def broadcast_message(message: str, servers: Sequence[Server]) -&gt; None:
+    ...
+
+# The static type checker will treat the previous type signature as
+# being exactly equivalent to this one.
+def broadcast_message(
+        message: str,
+        servers: Sequence[tuple[tuple[str, int], dict[str, str]]]) -&gt; None:
+    ...
+</pre> <p>Note that <code>None</code> as a type hint is a special case and is replaced by <code>type(None)</code>.</p>   <h2 id="distinct">NewType</h2> <p id="newtype">Use the <a class="reference internal" href="#typing.NewType" title="typing.NewType"><code>NewType()</code></a> helper function to create distinct types:</p> <pre data-language="python">from typing import NewType
+
+UserId = NewType('UserId', int)
+some_id = UserId(524313)
+</pre> <p>The static type checker will treat the new type as if it were a subclass of the original type. This is useful in helping catch logical errors:</p> <pre data-language="python">def get_user_name(user_id: UserId) -&gt; str:
+    ...
+
+# typechecks
+user_a = get_user_name(UserId(42351))
+
+# does not typecheck; an int is not a UserId
+user_b = get_user_name(-1)
+</pre> <p>You may still perform all <code>int</code> operations on a variable of type <code>UserId</code>, but the result will always be of type <code>int</code>. This lets you pass in a <code>UserId</code> wherever an <code>int</code> might be expected, but will prevent you from accidentally creating a <code>UserId</code> in an invalid way:</p> <pre data-language="python"># 'output' is of type 'int', not 'UserId'
+output = UserId(23413) + UserId(54341)
+</pre> <p>Note that these checks are enforced only by the static type checker. At runtime, the statement <code>Derived = NewType('Derived', Base)</code> will make <code>Derived</code> a function that immediately returns whatever parameter you pass it. That means the expression <code>Derived(some_value)</code> does not create a new class or introduce any overhead beyond that of a regular function call.</p> <p>More precisely, the expression <code>some_value is Derived(some_value)</code> is always true at runtime.</p> <p>This also means that it is not possible to create a subtype of <code>Derived</code> since it is an identity function at runtime, not an actual type:</p> <pre data-language="python">from typing import NewType
+
+UserId = NewType('UserId', int)
+
+# Fails at runtime and does not typecheck
+class AdminUserId(UserId): pass
+</pre> <p>However, it is possible to create a <a class="reference internal" href="#typing.NewType" title="typing.NewType"><code>NewType()</code></a> based on a ‘derived’ <code>NewType</code>:</p> <pre data-language="python">from typing import NewType
+
+UserId = NewType('UserId', int)
+
+ProUserId = NewType('ProUserId', UserId)
+</pre> <p>and typechecking for <code>ProUserId</code> will work as expected.</p> <p>See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-8"><strong>PEP 484</strong></a> for more details.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>Recall that the use of a type alias declares two types to be <em>equivalent</em> to one another. Doing <code>Alias = Original</code> will make the static type checker treat <code>Alias</code> as being <em>exactly equivalent</em> to <code>Original</code> in all cases. This is useful when you want to simplify complex type signatures.</p> <p>In contrast, <code>NewType</code> declares one type to be a <em>subtype</em> of another. Doing <code>Derived = NewType('Derived', Original)</code> will make the static type checker treat <code>Derived</code> as a <em>subclass</em> of <code>Original</code>, which means a value of type <code>Original</code> cannot be used in places where a value of type <code>Derived</code> is expected. This is useful when you want to prevent logic errors with minimal runtime cost.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div>   <h2 id="callable">Callable</h2> <p>Frameworks expecting callback functions of specific signatures might be type hinted using <code>Callable[[Arg1Type, Arg2Type], ReturnType]</code>.</p> <p>For example:</p> <pre data-language="python">from collections.abc import Callable
+
+def feeder(get_next_item: Callable[[], str]) -&gt; None:
+    # Body
+
+def async_query(on_success: Callable[[int], None],
+                on_error: Callable[[int, Exception], None]) -&gt; None:
+    # Body
+</pre> <p>It is possible to declare the return type of a callable without specifying the call signature by substituting a literal ellipsis for the list of arguments in the type hint: <code>Callable[..., ReturnType]</code>.</p>   <h2 id="id1">Generics</h2> <p id="generics">Since type information about objects kept in containers cannot be statically inferred in a generic way, abstract base classes have been extended to support subscription to denote expected types for container elements.</p> <pre data-language="python">from collections.abc import Mapping, Sequence
+
+def notify_by_email(employees: Sequence[Employee],
+                    overrides: Mapping[str, str]) -&gt; None: ...
+</pre> <p>Generics can be parameterized by using a new factory available in typing called <a class="reference internal" href="#typing.TypeVar" title="typing.TypeVar"><code>TypeVar</code></a>.</p> <pre data-language="python">from collections.abc import Sequence
+from typing import TypeVar
+
+T = TypeVar('T')      # Declare type variable
+
+def first(l: Sequence[T]) -&gt; T:   # Generic function
+    return l[0]
+</pre>   <h2 id="user-defined-generic-types">User-defined generic types</h2> <p>A user-defined class can be defined as a generic class.</p> <pre data-language="python">from typing import TypeVar, Generic
+from logging import Logger
+
+T = TypeVar('T')
+
+class LoggedVar(Generic[T]):
+    def __init__(self, value: T, name: str, logger: Logger) -&gt; None:
+        self.name = name
+        self.logger = logger
+        self.value = value
+
+    def set(self, new: T) -&gt; None:
+        self.log('Set ' + repr(self.value))
+        self.value = new
+
+    def get(self) -&gt; T:
+        self.log('Get ' + repr(self.value))
+        return self.value
+
+    def log(self, message: str) -&gt; None:
+        self.logger.info('%s: %s', self.name, message)
+</pre> <p><code>Generic[T]</code> as a base class defines that the class <code>LoggedVar</code> takes a single type parameter <code>T</code> . This also makes <code>T</code> valid as a type within the class body.</p> <p>The <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a> base class defines <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__class_getitem__" title="object.__class_getitem__"><code>__class_getitem__()</code></a> so that <code>LoggedVar[t]</code> is valid as a type:</p> <pre data-language="python">from collections.abc import Iterable
+
+def zero_all_vars(vars: Iterable[LoggedVar[int]]) -&gt; None:
+    for var in vars:
+        var.set(0)
+</pre> <p>A generic type can have any number of type variables, and type variables may be constrained:</p> <pre data-language="python">from typing import TypeVar, Generic
+...
+
+T = TypeVar('T')
+S = TypeVar('S', int, str)
+
+class StrangePair(Generic[T, S]):
+    ...
+</pre> <p>Each type variable argument to <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a> must be distinct. This is thus invalid:</p> <pre data-language="python">from typing import TypeVar, Generic
+...
+
+T = TypeVar('T')
+
+class Pair(Generic[T, T]):   # INVALID
+    ...
+</pre> <p>You can use multiple inheritance with <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a>:</p> <pre data-language="python">from collections.abc import Sized
+from typing import TypeVar, Generic
+
+T = TypeVar('T')
+
+class LinkedList(Sized, Generic[T]):
+    ...
+</pre> <p>When inheriting from generic classes, some type variables could be fixed:</p> <pre data-language="python">from collections.abc import Mapping
+from typing import TypeVar
+
+T = TypeVar('T')
+
+class MyDict(Mapping[str, T]):
+    ...
+</pre> <p>In this case <code>MyDict</code> has a single parameter, <code>T</code>.</p> <p>Using a generic class without specifying type parameters assumes <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> for each position. In the following example, <code>MyIterable</code> is not generic but implicitly inherits from <code>Iterable[Any]</code>:</p> <pre data-language="python">from collections.abc import Iterable
+
+class MyIterable(Iterable): # Same as Iterable[Any]
+</pre> <p>User defined generic type aliases are also supported. Examples:</p> <pre data-language="python">from collections.abc import Iterable
+from typing import TypeVar, Union
+S = TypeVar('S')
+Response = Union[Iterable[S], int]
+
+# Return type here is same as Union[Iterable[str], int]
+def response(query: str) -&gt; Response[str]:
+    ...
+
+T = TypeVar('T', int, float, complex)
+Vec = Iterable[tuple[T, T]]
+
+def inproduct(v: Vec[T]) -&gt; T: # Same as Iterable[tuple[T, T]]
+    return sum(x*y for x, y in v)
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span><a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a> no longer has a custom metaclass.</p> </div> <p>A user-defined generic class can have ABCs as base classes without a metaclass conflict. Generic metaclasses are not supported. The outcome of parameterizing generics is cached, and most types in the typing module are hashable and comparable for equality.</p>   <h2 id="the-any-type">The Any type</h2> <p>A special kind of type is <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>. A static type checker will treat every type as being compatible with <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> and <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> as being compatible with every type.</p> <p>This means that it is possible to perform any operation or method call on a value of type <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> and assign it to any variable:</p> <pre data-language="python">from typing import Any
+
+a = None    # type: Any
+a = []      # OK
+a = 2       # OK
+
+s = ''      # type: str
+s = a       # OK
+
+def foo(item: Any) -&gt; int:
+    # Typechecks; 'item' could be any type,
+    # and that type might have a 'bar' method
+    item.bar()
+    ...
+</pre> <p>Notice that no typechecking is performed when assigning a value of type <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> to a more precise type. For example, the static type checker did not report an error when assigning <code>a</code> to <code>s</code> even though <code>s</code> was declared to be of type <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a> and receives an <a class="reference internal" href="functions#int" title="int"><code>int</code></a> value at runtime!</p> <p>Furthermore, all functions without a return type or parameter types will implicitly default to using <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>:</p> <pre data-language="python">def legacy_parser(text):
+    ...
+    return data
+
+# A static type checker will treat the above
+# as having the same signature as:
+def legacy_parser(text: Any) -&gt; Any:
+    ...
+    return data
+</pre> <p>This behavior allows <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> to be used as an <em>escape hatch</em> when you need to mix dynamically and statically typed code.</p> <p>Contrast the behavior of <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> with the behavior of <a class="reference internal" href="functions#object" title="object"><code>object</code></a>. Similar to <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>, every type is a subtype of <a class="reference internal" href="functions#object" title="object"><code>object</code></a>. However, unlike <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>, the reverse is not true: <a class="reference internal" href="functions#object" title="object"><code>object</code></a> is <em>not</em> a subtype of every other type.</p> <p>That means when the type of a value is <a class="reference internal" href="functions#object" title="object"><code>object</code></a>, a type checker will reject almost all operations on it, and assigning it to a variable (or using it as a return value) of a more specialized type is a type error. For example:</p> <pre data-language="python">def hash_a(item: object) -&gt; int:
+    # Fails; an object does not have a 'magic' method.
+    item.magic()
+    ...
+
+def hash_b(item: Any) -&gt; int:
+    # Typechecks
+    item.magic()
+    ...
+
+# Typechecks, since ints and strs are subclasses of object
+hash_a(42)
+hash_a("foo")
+
+# Typechecks, since Any is compatible with all types
+hash_b(42)
+hash_b("foo")
+</pre> <p>Use <a class="reference internal" href="functions#object" title="object"><code>object</code></a> to indicate that a value could be any type in a typesafe manner. Use <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> to indicate that a value is dynamically typed.</p>   <h2 id="nominal-vs-structural-subtyping">Nominal vs structural subtyping</h2> <p>Initially <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-9"><strong>PEP 484</strong></a> defined Python static type system as using <em>nominal subtyping</em>. This means that a class <code>A</code> is allowed where a class <code>B</code> is expected if and only if <code>A</code> is a subclass of <code>B</code>.</p> <p>This requirement previously also applied to abstract base classes, such as <a class="reference internal" href="collections.abc#collections.abc.Iterable" title="collections.abc.Iterable"><code>Iterable</code></a>. The problem with this approach is that a class had to be explicitly marked to support them, which is unpythonic and unlike what one would normally do in idiomatic dynamically typed Python code. For example, this conforms to <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-10"><strong>PEP 484</strong></a>:</p> <pre data-language="python">from collections.abc import Sized, Iterable, Iterator
+
+class Bucket(Sized, Iterable[int]):
+    ...
+    def __len__(self) -&gt; int: ...
+    def __iter__(self) -&gt; Iterator[int]: ...
+</pre> <p><a class="pep reference external" href="https://www.python.org/dev/peps/pep-0544" id="index-11"><strong>PEP 544</strong></a> allows to solve this problem by allowing users to write the above code without explicit base classes in the class definition, allowing <code>Bucket</code> to be implicitly considered a subtype of both <code>Sized</code> and <code>Iterable[int]</code> by static type checkers. This is known as <em>structural subtyping</em> (or static duck-typing):</p> <pre data-language="python">from collections.abc import Iterator, Iterable
+
+class Bucket:  # Note: no base classes
+    ...
+    def __len__(self) -&gt; int: ...
+    def __iter__(self) -&gt; Iterator[int]: ...
+
+def collect(items: Iterable[int]) -&gt; int: ...
+result = collect(Bucket())  # Passes type check
+</pre> <p>Moreover, by subclassing a special class <a class="reference internal" href="#typing.Protocol" title="typing.Protocol"><code>Protocol</code></a>, a user can define new custom protocols to fully enjoy structural subtyping (see examples below).</p>   <h2 id="module-contents">Module contents</h2> <p>The module defines the following classes, functions and decorators.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>This module defines several types that are subclasses of pre-existing standard library classes which also extend <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a> to support type variables inside <code>[]</code>. These types became redundant in Python 3.9 when the corresponding pre-existing classes were enhanced to support <code>[]</code>.</p> <p>The redundant types are deprecated as of Python 3.9 but no deprecation warnings will be issued by the interpreter. It is expected that type checkers will flag the deprecated types when the checked program targets Python 3.9 or newer.</p> <p>The deprecated types will be removed from the <a class="reference internal" href="#module-typing" title="typing: Support for type hints (see :pep:`484`)."><code>typing</code></a> module in the first Python version released 5 years after the release of Python 3.9.0. See details in <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-12"><strong>PEP 585</strong></a>—<em>Type Hinting Generics In Standard Collections</em>.</p> </div>  <h3 id="special-typing-primitives">Special typing primitives</h3>  <h4 id="special-types">Special types</h4> <p>These can be used as types in annotations and do not support <code>[]</code>.</p> <dl class="data"> <dt id="typing.Any">
+<code>typing.Any</code> </dt> <dd>
+<p>Special type indicating an unconstrained type.</p> <ul class="simple"> <li>Every type is compatible with <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>.</li> <li>
+<a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a> is compatible with every type.</li> </ul> </dd>
+</dl> <dl class="data"> <dt id="typing.NoReturn">
+<code>typing.NoReturn</code> </dt> <dd>
+<p>Special type indicating that a function never returns. For example:</p> <pre data-language="python">from typing import NoReturn
+
+def stop() -&gt; NoReturn:
+    raise RuntimeError('no way')
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.2.</span></p> </div> </dd>
+</dl>   <h4 id="special-forms">Special forms</h4> <p>These can be used as types in annotations using <code>[]</code>, each having a unique syntax.</p> <dl class="data"> <dt id="typing.Tuple">
+<code>typing.Tuple</code> </dt> <dd>
+<p>Tuple type; <code>Tuple[X, Y]</code> is the type of a tuple of two items with the first item of type X and the second of type Y. The type of the empty tuple can be written as <code>Tuple[()]</code>.</p> <p>Example: <code>Tuple[T1, T2]</code> is a tuple of two elements corresponding to type variables T1 and T2. <code>Tuple[int, float, str]</code> is a tuple of an int, a float and a string.</p> <p>To specify a variable-length tuple of homogeneous type, use literal ellipsis, e.g. <code>Tuple[int, ...]</code>. A plain <a class="reference internal" href="#typing.Tuple" title="typing.Tuple"><code>Tuple</code></a> is equivalent to <code>Tuple[Any, ...]</code>, and in turn to <a class="reference internal" href="stdtypes#tuple" title="tuple"><code>tuple</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="stdtypes#tuple" title="tuple"><code>builtins.tuple</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-13"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.Union">
+<code>typing.Union</code> </dt> <dd>
+<p>Union type; <code>Union[X, Y]</code> means either X or Y.</p> <p>To define a union, use e.g. <code>Union[int, str]</code>. Details:</p> <ul> <li>The arguments must be types and there must be at least one.</li> <li>
+<p>Unions of unions are flattened, e.g.:</p> <pre data-language="python">Union[Union[int, str], float] == Union[int, str, float]
+</pre> </li> <li>
+<p>Unions of a single argument vanish, e.g.:</p> <pre data-language="python">Union[int] == int  # The constructor actually returns int
+</pre> </li> <li>
+<p>Redundant arguments are skipped, e.g.:</p> <pre data-language="python">Union[int, str, int] == Union[int, str]
+</pre> </li> <li>
+<p>When comparing unions, the argument order is ignored, e.g.:</p> <pre data-language="python">Union[int, str] == Union[str, int]
+</pre> </li> <li>You cannot subclass or instantiate a union.</li> <li>You cannot write <code>Union[X][Y]</code>.</li> <li>You can use <code>Optional[X]</code> as a shorthand for <code>Union[X, None]</code>.</li> </ul> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Don’t remove explicit subclasses from unions at runtime.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.Optional">
+<code>typing.Optional</code> </dt> <dd>
+<p>Optional type.</p> <p><code>Optional[X]</code> is equivalent to <code>Union[X, None]</code>.</p> <p>Note that this is not the same concept as an optional argument, which is one that has a default. An optional argument with a default does not require the <code>Optional</code> qualifier on its type annotation just because it is optional. For example:</p> <pre data-language="python">def foo(arg: int = 0) -&gt; None:
+    ...
+</pre> <p>On the other hand, if an explicit value of <code>None</code> is allowed, the use of <code>Optional</code> is appropriate, whether the argument is optional or not. For example:</p> <pre data-language="python">def foo(arg: Optional[int] = None) -&gt; None:
+    ...
+</pre> </dd>
+</dl> <dl class="data"> <dt id="typing.Callable">
+<code>typing.Callable</code> </dt> <dd>
+<p>Callable type; <code>Callable[[int], str]</code> is a function of (int) -&gt; str.</p> <p>The subscription syntax must always be used with exactly two values: the argument list and the return type. The argument list must be a list of types or an ellipsis; the return type must be a single type.</p> <p>There is no syntax to indicate optional or keyword arguments; such function types are rarely used as callback types. <code>Callable[..., ReturnType]</code> (literal ellipsis) can be used to type hint a callable taking any number of arguments and returning <code>ReturnType</code>. A plain <a class="reference internal" href="#typing.Callable" title="typing.Callable"><code>Callable</code></a> is equivalent to <code>Callable[..., Any]</code>, and in turn to <a class="reference internal" href="collections.abc#collections.abc.Callable" title="collections.abc.Callable"><code>collections.abc.Callable</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Callable" title="collections.abc.Callable"><code>collections.abc.Callable</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-14"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Type">
+<code>class typing.Type(Generic[CT_co])</code> </dt> <dd>
+<p>A variable annotated with <code>C</code> may accept a value of type <code>C</code>. In contrast, a variable annotated with <code>Type[C]</code> may accept values that are classes themselves – specifically, it will accept the <em>class object</em> of <code>C</code>. For example:</p> <pre data-language="python">a = 3         # Has type 'int'
+b = int       # Has type 'Type[int]'
+c = type(a)   # Also has type 'Type[int]'
+</pre> <p>Note that <code>Type[C]</code> is covariant:</p> <pre data-language="python">class User: ...
+class BasicUser(User): ...
+class ProUser(User): ...
+class TeamUser(User): ...
+
+# Accepts User, BasicUser, ProUser, TeamUser, ...
+def make_new_user(user_class: Type[User]) -&gt; User:
+    # ...
+    return user_class()
+</pre> <p>The fact that <code>Type[C]</code> is covariant implies that all subclasses of <code>C</code> should implement the same constructor signature and class method signatures as <code>C</code>. The type checker should flag violations of this, but should also allow constructor calls in subclasses that match the constructor calls in the indicated base class. How the type checker is required to handle this particular case may change in future revisions of <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-15"><strong>PEP 484</strong></a>.</p> <p>The only legal parameters for <a class="reference internal" href="#typing.Type" title="typing.Type"><code>Type</code></a> are classes, <a class="reference internal" href="#typing.Any" title="typing.Any"><code>Any</code></a>, <a class="reference internal" href="#generics"><span class="std std-ref">type variables</span></a>, and unions of any of these types. For example:</p> <pre data-language="python">def new_non_team_user(user_class: Type[Union[BasicUser, ProUser]]): ...
+</pre> <p><code>Type[Any]</code> is equivalent to <code>Type</code> which in turn is equivalent to <code>type</code>, which is the root of Python’s metaclass hierarchy.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="functions#type" title="type"><code>builtins.type</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-16"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.Literal">
+<code>typing.Literal</code> </dt> <dd>
+<p>A type that can be used to indicate to type checkers that the corresponding variable or function parameter has a value equivalent to the provided literal (or one of several literals). For example:</p> <pre data-language="python">def validate_simple(data: Any) -&gt; Literal[True]:  # always returns True
+    ...
+
+MODE = Literal['r', 'rb', 'w', 'wb']
+def open_helper(file: str, mode: MODE) -&gt; str:
+    ...
+
+open_helper('/some/path', 'r')  # Passes type check
+open_helper('/other/path', 'typo')  # Error in type checker
+</pre> <p><code>Literal[...]</code> cannot be subclassed. At runtime, an arbitrary value is allowed as type argument to <code>Literal[...]</code>, but type checkers may impose restrictions. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0586" id="index-17"><strong>PEP 586</strong></a> for more details about literal types.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.9.1: </span><code>Literal</code> now de-duplicates parameters. Equality comparison of <code>Literal</code> objects are no longer order dependent. <code>Literal</code> objects will now raise a <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a> exception during equality comparisons if one of their parameters are not <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-immutable"><span class="xref std std-term">immutable</span></a>.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.ClassVar">
+<code>typing.ClassVar</code> </dt> <dd>
+<p>Special type construct to mark class variables.</p> <p>As introduced in <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0526" id="index-18"><strong>PEP 526</strong></a>, a variable annotation wrapped in ClassVar indicates that a given attribute is intended to be used as a class variable and should not be set on instances of that class. Usage:</p> <pre data-language="python">class Starship:
+    stats: ClassVar[dict[str, int]] = {} # class variable
+    damage: int = 10                     # instance variable
+</pre> <p><a class="reference internal" href="#typing.ClassVar" title="typing.ClassVar"><code>ClassVar</code></a> accepts only types and cannot be further subscribed.</p> <p><a class="reference internal" href="#typing.ClassVar" title="typing.ClassVar"><code>ClassVar</code></a> is not a class itself, and should not be used with <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> or <a class="reference internal" href="functions#issubclass" title="issubclass"><code>issubclass()</code></a>. <a class="reference internal" href="#typing.ClassVar" title="typing.ClassVar"><code>ClassVar</code></a> does not change Python runtime behavior, but it can be used by third-party type checkers. For example, a type checker might flag the following code as an error:</p> <pre data-language="python">enterprise_d = Starship(3000)
+enterprise_d.stats = {} # Error, setting class variable on instance
+Starship.stats = {}     # This is OK
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.3.</span></p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.Final">
+<code>typing.Final</code> </dt> <dd>
+<p>A special typing construct to indicate to type checkers that a name cannot be re-assigned or overridden in a subclass. For example:</p> <pre data-language="python">MAX_SIZE: Final = 9000
+MAX_SIZE += 1  # Error reported by type checker
+
+class Connection:
+    TIMEOUT: Final[int] = 10
+
+class FastConnector(Connection):
+    TIMEOUT = 1  # Error reported by type checker
+</pre> <p>There is no runtime checking of these properties. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0591" id="index-19"><strong>PEP 591</strong></a> for more details.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="data"> <dt id="typing.Annotated">
+<code>typing.Annotated</code> </dt> <dd>
+<p>A type, introduced in <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0593" id="index-20"><strong>PEP 593</strong></a> (<code>Flexible function and variable
+annotations</code>), to decorate existing types with context-specific metadata (possibly multiple pieces of it, as <code>Annotated</code> is variadic). Specifically, a type <code>T</code> can be annotated with metadata <code>x</code> via the typehint <code>Annotated[T, x]</code>. This metadata can be used for either static analysis or at runtime. If a library (or tool) encounters a typehint <code>Annotated[T, x]</code> and has no special logic for metadata <code>x</code>, it should ignore it and simply treat the type as <code>T</code>. Unlike the <code>no_type_check</code> functionality that currently exists in the <code>typing</code> module which completely disables typechecking annotations on a function or a class, the <code>Annotated</code> type allows for both static typechecking of <code>T</code> (e.g., via mypy or Pyre, which can safely ignore <code>x</code>) together with runtime access to <code>x</code> within a specific application.</p> <p>Ultimately, the responsibility of how to interpret the annotations (if at all) is the responsibility of the tool or library encountering the <code>Annotated</code> type. A tool or library encountering an <code>Annotated</code> type can scan through the annotations to determine if they are of interest (e.g., using <code>isinstance()</code>).</p> <p>When a tool or a library does not support annotations or encounters an unknown annotation it should just ignore it and treat annotated type as the underlying type.</p> <p>It’s up to the tool consuming the annotations to decide whether the client is allowed to have several annotations on one type and how to merge those annotations.</p> <p>Since the <code>Annotated</code> type allows you to put several annotations of the same (or different) type(s) on any node, the tools or libraries consuming those annotations are in charge of dealing with potential duplicates. For example, if you are doing value range analysis you might allow this:</p> <pre data-language="python">T1 = Annotated[int, ValueRange(-10, 5)]
+T2 = Annotated[T1, ValueRange(-20, 3)]
+</pre> <p>Passing <code>include_extras=True</code> to <a class="reference internal" href="#typing.get_type_hints" title="typing.get_type_hints"><code>get_type_hints()</code></a> lets one access the extra annotations at runtime.</p> <p>The details of the syntax:</p> <ul> <li>The first argument to <code>Annotated</code> must be a valid type</li> <li>
+<p>Multiple type annotations are supported (<code>Annotated</code> supports variadic arguments):</p> <pre data-language="python">Annotated[int, ValueRange(3, 10), ctype("char")]
+</pre> </li> <li>
+<code>Annotated</code> must be called with at least two arguments ( <code>Annotated[int]</code> is not valid)</li> <li>
+<p>The order of the annotations is preserved and matters for equality checks:</p> <pre data-language="python">Annotated[int, ValueRange(3, 10), ctype("char")] != Annotated[
+    int, ctype("char"), ValueRange(3, 10)
+]
+</pre> </li> <li>
+<p>Nested <code>Annotated</code> types are flattened, with metadata ordered starting with the innermost annotation:</p> <pre data-language="python">Annotated[Annotated[int, ValueRange(3, 10)], ctype("char")] == Annotated[
+    int, ValueRange(3, 10), ctype("char")
+]
+</pre> </li> <li>
+<p>Duplicated annotations are not removed:</p> <pre data-language="python">Annotated[int, ValueRange(3, 10)] != Annotated[
+    int, ValueRange(3, 10), ValueRange(3, 10)
+]
+</pre> </li> <li>
+<p><code>Annotated</code> can be used with nested and generic aliases:</p> <pre data-language="python">T = TypeVar('T')
+Vec = Annotated[list[tuple[T, T]], MaxLen(10)]
+V = Vec[int]
+
+V == Annotated[list[tuple[int, int]], MaxLen(10)]
+</pre> </li> </ul> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.9.</span></p> </div> </dd>
+</dl>   <h4 id="building-generic-types">Building generic types</h4> <p>These are not used in annotations. They are building blocks for creating generic types.</p> <dl class="class"> <dt id="typing.Generic">
+<code>class typing.Generic</code> </dt> <dd>
+<p>Abstract base class for generic types.</p> <p>A generic type is typically declared by inheriting from an instantiation of this class with one or more type variables. For example, a generic mapping type might be defined as:</p> <pre data-language="python">class Mapping(Generic[KT, VT]):
+    def __getitem__(self, key: KT) -&gt; VT:
+        ...
+        # Etc.
+</pre> <p>This class can then be used as follows:</p> <pre data-language="python">X = TypeVar('X')
+Y = TypeVar('Y')
+
+def lookup_name(mapping: Mapping[X, Y], key: X, default: Y) -&gt; Y:
+    try:
+        return mapping[key]
+    except KeyError:
+        return default
+</pre> </dd>
+</dl> <dl class="class"> <dt id="typing.TypeVar">
+<code>class typing.TypeVar</code> </dt> <dd>
+<p>Type variable.</p> <p>Usage:</p> <pre data-language="python">T = TypeVar('T')  # Can be anything
+A = TypeVar('A', str, bytes)  # Must be str or bytes
+</pre> <p>Type variables exist primarily for the benefit of static type checkers. They serve as the parameters for generic types as well as for generic function definitions. See <a class="reference internal" href="#typing.Generic" title="typing.Generic"><code>Generic</code></a> for more information on generic types. Generic functions work as follows:</p> <pre data-language="python">def repeat(x: T, n: int) -&gt; Sequence[T]:
+    """Return a list containing n references to x."""
+    return [x]*n
+
+def longest(x: A, y: A) -&gt; A:
+    """Return the longest of two strings."""
+    return x if len(x) &gt;= len(y) else y
+</pre> <p>The latter example’s signature is essentially the overloading of <code>(str, str) -&gt; str</code> and <code>(bytes, bytes) -&gt; bytes</code>. Also note that if the arguments are instances of some subclass of <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a>, the return type is still plain <a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a>.</p> <p>At runtime, <code>isinstance(x, T)</code> will raise <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a>. In general, <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> and <a class="reference internal" href="functions#issubclass" title="issubclass"><code>issubclass()</code></a> should not be used with types.</p> <p>Type variables may be marked covariant or contravariant by passing <code>covariant=True</code> or <code>contravariant=True</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-21"><strong>PEP 484</strong></a> for more details. By default type variables are invariant. Alternatively, a type variable may specify an upper bound using <code>bound=&lt;type&gt;</code>. This means that an actual type substituted (explicitly or implicitly) for the type variable must be a subclass of the boundary type, see <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-22"><strong>PEP 484</strong></a>.</p> </dd>
+</dl> <dl class="data"> <dt id="typing.AnyStr">
+<code>typing.AnyStr</code> </dt> <dd>
+<p><code>AnyStr</code> is a type variable defined as <code>AnyStr = TypeVar('AnyStr', str, bytes)</code>.</p> <p>It is meant to be used for functions that may accept any kind of string without allowing different kinds of strings to mix. For example:</p> <pre data-language="python">def concat(a: AnyStr, b: AnyStr) -&gt; AnyStr:
+    return a + b
+
+concat(u"foo", u"bar")  # Ok, output has type 'unicode'
+concat(b"foo", b"bar")  # Ok, output has type 'bytes'
+concat(u"foo", b"bar")  # Error, cannot mix unicode and bytes
+</pre> </dd>
+</dl> <dl class="class"> <dt id="typing.Protocol">
+<code>class typing.Protocol(Generic)</code> </dt> <dd>
+<p>Base class for protocol classes. Protocol classes are defined like this:</p> <pre data-language="python">class Proto(Protocol):
+    def meth(self) -&gt; int:
+        ...
+</pre> <p>Such classes are primarily used with static type checkers that recognize structural subtyping (static duck-typing), for example:</p> <pre data-language="python">class C:
+    def meth(self) -&gt; int:
+        return 0
+
+def func(x: Proto) -&gt; int:
+    return x.meth()
+
+func(C())  # Passes static type check
+</pre> <p>See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0544" id="index-23"><strong>PEP 544</strong></a> for details. Protocol classes decorated with <a class="reference internal" href="#typing.runtime_checkable" title="typing.runtime_checkable"><code>runtime_checkable()</code></a> (described later) act as simple-minded runtime protocols that check only the presence of given attributes, ignoring their type signatures.</p> <p>Protocol classes can be generic, for example:</p> <pre data-language="python">class GenProto(Protocol[T]):
+    def meth(self) -&gt; T:
+        ...
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="function"> <dt id="typing.runtime_checkable">
+<code>@typing.runtime_checkable</code> </dt> <dd>
+<p>Mark a protocol class as a runtime protocol.</p> <p>Such a protocol can be used with <a class="reference internal" href="functions#isinstance" title="isinstance"><code>isinstance()</code></a> and <a class="reference internal" href="functions#issubclass" title="issubclass"><code>issubclass()</code></a>. This raises <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a> when applied to a non-protocol class. This allows a simple-minded structural check, very similar to “one trick ponies” in <a class="reference internal" href="collections.abc#module-collections.abc" title="collections.abc: Abstract base classes for containers"><code>collections.abc</code></a> such as <a class="reference internal" href="collections.abc#collections.abc.Iterable" title="collections.abc.Iterable"><code>Iterable</code></a>. For example:</p> <pre data-language="python">@runtime_checkable
+class Closable(Protocol):
+    def close(self): ...
+
+assert isinstance(open('/some/file'), Closable)
+</pre> <div class="admonition note"> <p class="admonition-title">Note</p> <p><a class="reference internal" href="#typing.runtime_checkable" title="typing.runtime_checkable"><code>runtime_checkable()</code></a> will check only the presence of the required methods, not their type signatures! For example, <a class="reference internal" href="functions#complex" title="complex"><code>builtins.complex</code></a> implements <a class="reference internal" href="https://docs.python.org/3.9/reference/datamodel.html#object.__float__" title="object.__float__"><code>__float__()</code></a>, therefore it passes an <a class="reference internal" href="functions#issubclass" title="issubclass"><code>issubclass()</code></a> check against <a class="reference internal" href="#typing.SupportsFloat" title="typing.SupportsFloat"><code>SupportsFloat</code></a>. However, the <code>complex.__float__</code> method exists only to raise a <a class="reference internal" href="exceptions#TypeError" title="TypeError"><code>TypeError</code></a> with a more informative message.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl>   <h4 id="other-special-directives">Other special directives</h4> <p>These are not used in annotations. They are building blocks for declaring types.</p> <dl class="class"> <dt id="typing.NamedTuple">
+<code>class typing.NamedTuple</code> </dt> <dd>
+<p>Typed version of <a class="reference internal" href="collections#collections.namedtuple" title="collections.namedtuple"><code>collections.namedtuple()</code></a>.</p> <p>Usage:</p> <pre data-language="python">class Employee(NamedTuple):
+    name: str
+    id: int
+</pre> <p>This is equivalent to:</p> <pre data-language="python">Employee = collections.namedtuple('Employee', ['name', 'id'])
+</pre> <p>To give a field a default value, you can assign to it in the class body:</p> <pre data-language="python">class Employee(NamedTuple):
+    name: str
+    id: int = 3
+
+employee = Employee('Guido')
+assert employee.id == 3
+</pre> <p>Fields with a default value must come after any fields without a default.</p> <p>The resulting class has an extra attribute <code>__annotations__</code> giving a dict that maps the field names to the field types. (The field names are in the <code>_fields</code> attribute and the default values are in the <code>_field_defaults</code> attribute both of which are part of the namedtuple API.)</p> <p><code>NamedTuple</code> subclasses can also have docstrings and methods:</p> <pre data-language="python">class Employee(NamedTuple):
+    """Represents an employee."""
+    name: str
+    id: int = 3
+
+    def __repr__(self) -&gt; str:
+        return f'&lt;Employee {self.name}, id={self.id}&gt;'
+</pre> <p>Backward-compatible usage:</p> <pre data-language="python">Employee = NamedTuple('Employee', [('name', str), ('id', int)])
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>Added support for <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0526" id="index-24"><strong>PEP 526</strong></a> variable annotation syntax.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6.1: </span>Added support for default values, methods, and docstrings.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>The <code>_field_types</code> and <code>__annotations__</code> attributes are now regular dictionaries instead of instances of <code>OrderedDict</code>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.9: </span>Removed the <code>_field_types</code> attribute in favor of the more standard <code>__annotations__</code> attribute which has the same information.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="typing.NewType">
+<code>typing.NewType(name, tp)</code> </dt> <dd>
+<p>A helper function to indicate a distinct type to a typechecker, see <a class="reference internal" href="#distinct"><span class="std std-ref">NewType</span></a>. At runtime it returns a function that returns its argument. Usage:</p> <pre data-language="python">UserId = NewType('UserId', int)
+first_user = UserId(1)
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.TypedDict">
+<code>class typing.TypedDict(dict)</code> </dt> <dd>
+<p>Special construct to add type hints to a dictionary. At runtime it is a plain <a class="reference internal" href="stdtypes#dict" title="dict"><code>dict</code></a>.</p> <p><code>TypedDict</code> declares a dictionary type that expects all of its instances to have a certain set of keys, where each key is associated with a value of a consistent type. This expectation is not checked at runtime but is only enforced by type checkers. Usage:</p> <pre data-language="python">class Point2D(TypedDict):
+    x: int
+    y: int
+    label: str
+
+a: Point2D = {'x': 1, 'y': 2, 'label': 'good'}  # OK
+b: Point2D = {'z': 3, 'label': 'bad'}           # Fails type check
+
+assert Point2D(x=1, y=2, label='first') == dict(x=1, y=2, label='first')
+</pre> <p>The type info for introspection can be accessed via <code>Point2D.__annotations__</code> and <code>Point2D.__total__</code>. To allow using this feature with older versions of Python that do not support <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0526" id="index-25"><strong>PEP 526</strong></a>, <code>TypedDict</code> supports two additional equivalent syntactic forms:</p> <pre data-language="python">Point2D = TypedDict('Point2D', x=int, y=int, label=str)
+Point2D = TypedDict('Point2D', {'x': int, 'y': int, 'label': str})
+</pre> <p>By default, all keys must be present in a TypedDict. It is possible to override this by specifying totality. Usage:</p> <pre data-language="python">class point2D(TypedDict, total=False):
+    x: int
+    y: int
+</pre> <p>This means that a point2D TypedDict can have any of the keys omitted. A type checker is only expected to support a literal False or True as the value of the total argument. True is the default, and makes all items defined in the class body be required.</p> <p>See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0589" id="index-26"><strong>PEP 589</strong></a> for more examples and detailed rules of using <code>TypedDict</code>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl>    <h3 id="generic-concrete-collections">Generic concrete collections</h3>  <h4 id="corresponding-to-built-in-types">Corresponding to built-in types</h4> <dl class="class"> <dt id="typing.Dict">
+<code>class typing.Dict(dict, MutableMapping[KT, VT])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="stdtypes#dict" title="dict"><code>dict</code></a>. Useful for annotating return types. To annotate arguments it is preferred to use an abstract collection type such as <a class="reference internal" href="#typing.Mapping" title="typing.Mapping"><code>Mapping</code></a>.</p> <p>This type can be used as follows:</p> <pre data-language="python">def count_words(text: str) -&gt; Dict[str, int]:
+    ...
+</pre> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="stdtypes#dict" title="dict"><code>builtins.dict</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-27"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.List">
+<code>class typing.List(list, MutableSequence[T])</code> </dt> <dd>
+<p>Generic version of <a class="reference internal" href="stdtypes#list" title="list"><code>list</code></a>. Useful for annotating return types. To annotate arguments it is preferred to use an abstract collection type such as <a class="reference internal" href="#typing.Sequence" title="typing.Sequence"><code>Sequence</code></a> or <a class="reference internal" href="#typing.Iterable" title="typing.Iterable"><code>Iterable</code></a>.</p> <p>This type may be used as follows:</p> <pre data-language="python">T = TypeVar('T', int, float)
+
+def vec2(x: T, y: T) -&gt; List[T]:
+    return [x, y]
+
+def keep_positives(vector: Sequence[T]) -&gt; List[T]:
+    return [item for item in vector if item &gt; 0]
+</pre> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="stdtypes#list" title="list"><code>builtins.list</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-28"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Set">
+<code>class typing.Set(set, MutableSet[T])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="stdtypes#set" title="set"><code>builtins.set</code></a>. Useful for annotating return types. To annotate arguments it is preferred to use an abstract collection type such as <a class="reference internal" href="#typing.AbstractSet" title="typing.AbstractSet"><code>AbstractSet</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="stdtypes#set" title="set"><code>builtins.set</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-29"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.FrozenSet">
+<code>class typing.FrozenSet(frozenset, AbstractSet[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="stdtypes#frozenset" title="frozenset"><code>builtins.frozenset</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="stdtypes#frozenset" title="frozenset"><code>builtins.frozenset</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-30"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <div class="admonition note"> <p class="admonition-title">Note</p> <p><a class="reference internal" href="#typing.Tuple" title="typing.Tuple"><code>Tuple</code></a> is a special form.</p> </div>   <h4 id="corresponding-to-types-in-collections">Corresponding to types in <a class="reference internal" href="collections#module-collections" title="collections: Container datatypes"><code>collections</code></a>
+</h4> <dl class="class"> <dt id="typing.DefaultDict">
+<code>class typing.DefaultDict(collections.defaultdict, MutableMapping[KT, VT])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections#collections.defaultdict" title="collections.defaultdict"><code>collections.defaultdict</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections#collections.defaultdict" title="collections.defaultdict"><code>collections.defaultdict</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-31"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.OrderedDict">
+<code>class typing.OrderedDict(collections.OrderedDict, MutableMapping[KT, VT])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections#collections.OrderedDict" title="collections.OrderedDict"><code>collections.OrderedDict</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections#collections.OrderedDict" title="collections.OrderedDict"><code>collections.OrderedDict</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-32"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.ChainMap">
+<code>class typing.ChainMap(collections.ChainMap, MutableMapping[KT, VT])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections#collections.ChainMap" title="collections.ChainMap"><code>collections.ChainMap</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.1.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections#collections.ChainMap" title="collections.ChainMap"><code>collections.ChainMap</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-33"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Counter">
+<code>class typing.Counter(collections.Counter, Dict[T, int])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections#collections.Counter" title="collections.Counter"><code>collections.Counter</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.1.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections#collections.Counter" title="collections.Counter"><code>collections.Counter</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-34"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Deque">
+<code>class typing.Deque(deque, MutableSequence[T])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections#collections.deque" title="collections.deque"><code>collections.deque</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.1.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections#collections.deque" title="collections.deque"><code>collections.deque</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-35"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl>   <h4 id="other-concrete-types">Other concrete types</h4> <dl class="class"> <dt id="typing.IO">
+<code>class typing.IO</code> </dt> <dt id="typing.TextIO">
+<code>class typing.TextIO</code> </dt> <dt id="typing.BinaryIO">
+<code>class typing.BinaryIO</code> </dt> <dd>
+<p>Generic type <code>IO[AnyStr]</code> and its subclasses <code>TextIO(IO[str])</code> and <code>BinaryIO(IO[bytes])</code> represent the types of I/O streams such as returned by <a class="reference internal" href="functions#open" title="open"><code>open()</code></a>. These types are also in the <code>typing.io</code> namespace.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.Pattern">
+<code>class typing.Pattern</code> </dt> <dt id="typing.Match">
+<code>class typing.Match</code> </dt> <dd>
+<p>These type aliases correspond to the return types from <a class="reference internal" href="re#re.compile" title="re.compile"><code>re.compile()</code></a> and <a class="reference internal" href="re#re.match" title="re.match"><code>re.match()</code></a>. These types (and the corresponding functions) are generic in <code>AnyStr</code> and can be made specific by writing <code>Pattern[str]</code>, <code>Pattern[bytes]</code>, <code>Match[str]</code>, or <code>Match[bytes]</code>. These types are also in the <code>typing.re</code> namespace.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span>Classes <code>Pattern</code> and <code>Match</code> from <a class="reference internal" href="re#module-re" title="re: Regular expression operations."><code>re</code></a> now support <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-36"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Text">
+<code>class typing.Text</code> </dt> <dd>
+<p><code>Text</code> is an alias for <code>str</code>. It is provided to supply a forward compatible path for Python 2 code: in Python 2, <code>Text</code> is an alias for <code>unicode</code>.</p> <p>Use <code>Text</code> to indicate that a value must contain a unicode string in a manner that is compatible with both Python 2 and Python 3:</p> <pre data-language="python">def add_unicode_checkmark(text: Text) -&gt; Text:
+    return text + u' \u2713'
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> </dd>
+</dl>    <h3 id="abstract-base-classes">Abstract Base Classes</h3>  <h4 id="corresponding-to-collections-in-collections-abc">Corresponding to collections in <a class="reference internal" href="collections.abc#module-collections.abc" title="collections.abc: Abstract base classes for containers"><code>collections.abc</code></a>
+</h4> <dl class="class"> <dt id="typing.AbstractSet">
+<code>class typing.AbstractSet(Sized, Collection[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Set" title="collections.abc.Set"><code>collections.abc.Set</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Set" title="collections.abc.Set"><code>collections.abc.Set</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-37"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.ByteString">
+<code>class typing.ByteString(Sequence[int])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.ByteString" title="collections.abc.ByteString"><code>collections.abc.ByteString</code></a>.</p> <p>This type represents the types <a class="reference internal" href="stdtypes#bytes" title="bytes"><code>bytes</code></a>, <a class="reference internal" href="stdtypes#bytearray" title="bytearray"><code>bytearray</code></a>, and <a class="reference internal" href="stdtypes#memoryview" title="memoryview"><code>memoryview</code></a> of byte sequences.</p> <p>As a shorthand for this type, <a class="reference internal" href="stdtypes#bytes" title="bytes"><code>bytes</code></a> can be used to annotate arguments of any of the types mentioned above.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.ByteString" title="collections.abc.ByteString"><code>collections.abc.ByteString</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-38"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Collection">
+<code>class typing.Collection(Sized, Iterable[T_co], Container[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Collection" title="collections.abc.Collection"><code>collections.abc.Collection</code></a></p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.0.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Collection" title="collections.abc.Collection"><code>collections.abc.Collection</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-39"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Container">
+<code>class typing.Container(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Container" title="collections.abc.Container"><code>collections.abc.Container</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Container" title="collections.abc.Container"><code>collections.abc.Container</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-40"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.ItemsView">
+<code>class typing.ItemsView(MappingView, Generic[KT_co, VT_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.ItemsView" title="collections.abc.ItemsView"><code>collections.abc.ItemsView</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.ItemsView" title="collections.abc.ItemsView"><code>collections.abc.ItemsView</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-41"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.KeysView">
+<code>class typing.KeysView(MappingView[KT_co], AbstractSet[KT_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.KeysView" title="collections.abc.KeysView"><code>collections.abc.KeysView</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.KeysView" title="collections.abc.KeysView"><code>collections.abc.KeysView</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-42"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Mapping">
+<code>class typing.Mapping(Sized, Collection[KT], Generic[VT_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Mapping" title="collections.abc.Mapping"><code>collections.abc.Mapping</code></a>. This type can be used as follows:</p> <pre data-language="python">def get_position_in_index(word_list: Mapping[str, int], word: str) -&gt; int:
+    return word_list[word]
+</pre> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Mapping" title="collections.abc.Mapping"><code>collections.abc.Mapping</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-43"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.MappingView">
+<code>class typing.MappingView(Sized, Iterable[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.MappingView" title="collections.abc.MappingView"><code>collections.abc.MappingView</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.MappingView" title="collections.abc.MappingView"><code>collections.abc.MappingView</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-44"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.MutableMapping">
+<code>class typing.MutableMapping(Mapping[KT, VT])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.MutableMapping" title="collections.abc.MutableMapping"><code>collections.abc.MutableMapping</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.MutableMapping" title="collections.abc.MutableMapping"><code>collections.abc.MutableMapping</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-45"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.MutableSequence">
+<code>class typing.MutableSequence(Sequence[T])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.MutableSequence" title="collections.abc.MutableSequence"><code>collections.abc.MutableSequence</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.MutableSequence" title="collections.abc.MutableSequence"><code>collections.abc.MutableSequence</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-46"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.MutableSet">
+<code>class typing.MutableSet(AbstractSet[T])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.MutableSet" title="collections.abc.MutableSet"><code>collections.abc.MutableSet</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.MutableSet" title="collections.abc.MutableSet"><code>collections.abc.MutableSet</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-47"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Sequence">
+<code>class typing.Sequence(Reversible[T_co], Collection[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Sequence" title="collections.abc.Sequence"><code>collections.abc.Sequence</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Sequence" title="collections.abc.Sequence"><code>collections.abc.Sequence</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-48"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.ValuesView">
+<code>class typing.ValuesView(MappingView[VT_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.ValuesView" title="collections.abc.ValuesView"><code>collections.abc.ValuesView</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.ValuesView" title="collections.abc.ValuesView"><code>collections.abc.ValuesView</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-49"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl>   <h4 id="corresponding-to-other-types-in-collections-abc">Corresponding to other types in <a class="reference internal" href="collections.abc#module-collections.abc" title="collections.abc: Abstract base classes for containers"><code>collections.abc</code></a>
+</h4> <dl class="class"> <dt id="typing.Iterable">
+<code>class typing.Iterable(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Iterable" title="collections.abc.Iterable"><code>collections.abc.Iterable</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Iterable" title="collections.abc.Iterable"><code>collections.abc.Iterable</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-50"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Iterator">
+<code>class typing.Iterator(Iterable[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Iterator" title="collections.abc.Iterator"><code>collections.abc.Iterator</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Iterator" title="collections.abc.Iterator"><code>collections.abc.Iterator</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-51"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Generator">
+<code>class typing.Generator(Iterator[T_co], Generic[T_co, T_contra, V_co])</code> </dt> <dd>
+<p>A generator can be annotated by the generic type <code>Generator[YieldType, SendType, ReturnType]</code>. For example:</p> <pre data-language="python">def echo_round() -&gt; Generator[int, float, str]:
+    sent = yield 0
+    while sent &gt;= 0:
+        sent = yield round(sent)
+    return 'Done'
+</pre> <p>Note that unlike many other generics in the typing module, the <code>SendType</code> of <a class="reference internal" href="#typing.Generator" title="typing.Generator"><code>Generator</code></a> behaves contravariantly, not covariantly or invariantly.</p> <p>If your generator will only yield values, set the <code>SendType</code> and <code>ReturnType</code> to <code>None</code>:</p> <pre data-language="python">def infinite_stream(start: int) -&gt; Generator[int, None, None]:
+    while True:
+        yield start
+        start += 1
+</pre> <p>Alternatively, annotate your generator as having a return type of either <code>Iterable[YieldType]</code> or <code>Iterator[YieldType]</code>:</p> <pre data-language="python">def infinite_stream(start: int) -&gt; Iterator[int]:
+    while True:
+        yield start
+        start += 1
+</pre> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Generator" title="collections.abc.Generator"><code>collections.abc.Generator</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-52"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Hashable">
+<code>class typing.Hashable</code> </dt> <dd>
+<p>An alias to <a class="reference internal" href="collections.abc#collections.abc.Hashable" title="collections.abc.Hashable"><code>collections.abc.Hashable</code></a></p> </dd>
+</dl> <dl class="class"> <dt id="typing.Reversible">
+<code>class typing.Reversible(Iterable[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Reversible" title="collections.abc.Reversible"><code>collections.abc.Reversible</code></a>.</p> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Reversible" title="collections.abc.Reversible"><code>collections.abc.Reversible</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-53"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Sized">
+<code>class typing.Sized</code> </dt> <dd>
+<p>An alias to <a class="reference internal" href="collections.abc#collections.abc.Sized" title="collections.abc.Sized"><code>collections.abc.Sized</code></a></p> </dd>
+</dl>   <h4 id="asynchronous-programming">Asynchronous programming</h4> <dl class="class"> <dt id="typing.Coroutine">
+<code>class typing.Coroutine(Awaitable[V_co], Generic[T_co, T_contra, V_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Coroutine" title="collections.abc.Coroutine"><code>collections.abc.Coroutine</code></a>. The variance and order of type variables correspond to those of <a class="reference internal" href="#typing.Generator" title="typing.Generator"><code>Generator</code></a>, for example:</p> <pre data-language="python">from collections.abc import Coroutine
+c = None # type: Coroutine[list[str], str, int]
+...
+x = c.send('hi') # type: list[str]
+async def bar() -&gt; None:
+    x = await c # type: int
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.3.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Coroutine" title="collections.abc.Coroutine"><code>collections.abc.Coroutine</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-54"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.AsyncGenerator">
+<code>class typing.AsyncGenerator(AsyncIterator[T_co], Generic[T_co, T_contra])</code> </dt> <dd>
+<p>An async generator can be annotated by the generic type <code>AsyncGenerator[YieldType, SendType]</code>. For example:</p> <pre data-language="python">async def echo_round() -&gt; AsyncGenerator[int, float]:
+    sent = yield 0
+    while sent &gt;= 0.0:
+        rounded = await round(sent)
+        sent = yield rounded
+</pre> <p>Unlike normal generators, async generators cannot return a value, so there is no <code>ReturnType</code> type parameter. As with <a class="reference internal" href="#typing.Generator" title="typing.Generator"><code>Generator</code></a>, the <code>SendType</code> behaves contravariantly.</p> <p>If your generator will only yield values, set the <code>SendType</code> to <code>None</code>:</p> <pre data-language="python">async def infinite_stream(start: int) -&gt; AsyncGenerator[int, None]:
+    while True:
+        yield start
+        start = await increment(start)
+</pre> <p>Alternatively, annotate your generator as having a return type of either <code>AsyncIterable[YieldType]</code> or <code>AsyncIterator[YieldType]</code>:</p> <pre data-language="python">async def infinite_stream(start: int) -&gt; AsyncIterator[int]:
+    while True:
+        yield start
+        start = await increment(start)
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.1.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.AsyncGenerator" title="collections.abc.AsyncGenerator"><code>collections.abc.AsyncGenerator</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-55"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.AsyncIterable">
+<code>class typing.AsyncIterable(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.AsyncIterable" title="collections.abc.AsyncIterable"><code>collections.abc.AsyncIterable</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.AsyncIterable" title="collections.abc.AsyncIterable"><code>collections.abc.AsyncIterable</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-56"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.AsyncIterator">
+<code>class typing.AsyncIterator(AsyncIterable[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.AsyncIterator" title="collections.abc.AsyncIterator"><code>collections.abc.AsyncIterator</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.AsyncIterator" title="collections.abc.AsyncIterator"><code>collections.abc.AsyncIterator</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-57"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.Awaitable">
+<code>class typing.Awaitable(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="collections.abc#collections.abc.Awaitable" title="collections.abc.Awaitable"><code>collections.abc.Awaitable</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="collections.abc#collections.abc.Awaitable" title="collections.abc.Awaitable"><code>collections.abc.Awaitable</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-58"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl>   <h4 id="context-manager-types">Context manager types</h4> <dl class="class"> <dt id="typing.ContextManager">
+<code>class typing.ContextManager(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="contextlib#contextlib.AbstractContextManager" title="contextlib.AbstractContextManager"><code>contextlib.AbstractContextManager</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.0.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="contextlib#contextlib.AbstractContextManager" title="contextlib.AbstractContextManager"><code>contextlib.AbstractContextManager</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-59"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.AsyncContextManager">
+<code>class typing.AsyncContextManager(Generic[T_co])</code> </dt> <dd>
+<p>A generic version of <a class="reference internal" href="contextlib#contextlib.AbstractAsyncContextManager" title="contextlib.AbstractAsyncContextManager"><code>contextlib.AbstractAsyncContextManager</code></a>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.4.</span></p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.2.</span></p> </div> <div class="deprecated"> <p><span class="versionmodified deprecated">Deprecated since version 3.9: </span><a class="reference internal" href="contextlib#contextlib.AbstractAsyncContextManager" title="contextlib.AbstractAsyncContextManager"><code>contextlib.AbstractAsyncContextManager</code></a> now supports <code>[]</code>. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-60"><strong>PEP 585</strong></a> and <a class="reference internal" href="stdtypes#types-genericalias"><span class="std std-ref">Generic Alias Type</span></a>.</p> </div> </dd>
+</dl>    <h3 id="protocols">Protocols</h3> <p>These protocols are decorated with <a class="reference internal" href="#typing.runtime_checkable" title="typing.runtime_checkable"><code>runtime_checkable()</code></a>.</p> <dl class="class"> <dt id="typing.SupportsAbs">
+<code>class typing.SupportsAbs</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__abs__</code> that is covariant in its return type.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsBytes">
+<code>class typing.SupportsBytes</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__bytes__</code>.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsComplex">
+<code>class typing.SupportsComplex</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__complex__</code>.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsFloat">
+<code>class typing.SupportsFloat</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__float__</code>.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsIndex">
+<code>class typing.SupportsIndex</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__index__</code>.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsInt">
+<code>class typing.SupportsInt</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__int__</code>.</p> </dd>
+</dl> <dl class="class"> <dt id="typing.SupportsRound">
+<code>class typing.SupportsRound</code> </dt> <dd>
+<p>An ABC with one abstract method <code>__round__</code> that is covariant in its return type.</p> </dd>
+</dl>   <h3 id="functions-and-decorators">Functions and decorators</h3> <dl class="function"> <dt id="typing.cast">
+<code>typing.cast(typ, val)</code> </dt> <dd>
+<p>Cast a value to a type.</p> <p>This returns the value unchanged. To the type checker this signals that the return value has the designated type, but at runtime we intentionally don’t check anything (we want this to be as fast as possible).</p> </dd>
+</dl> <dl class="function"> <dt id="typing.overload">
+<code>@typing.overload</code> </dt> <dd>
+<p>The <code>@overload</code> decorator allows describing functions and methods that support multiple different combinations of argument types. A series of <code>@overload</code>-decorated definitions must be followed by exactly one non-<code>@overload</code>-decorated definition (for the same function/method). The <code>@overload</code>-decorated definitions are for the benefit of the type checker only, since they will be overwritten by the non-<code>@overload</code>-decorated definition, while the latter is used at runtime but should be ignored by a type checker. At runtime, calling a <code>@overload</code>-decorated function directly will raise <a class="reference internal" href="exceptions#NotImplementedError" title="NotImplementedError"><code>NotImplementedError</code></a>. An example of overload that gives a more precise type than can be expressed using a union or a type variable:</p> <pre data-language="python">@overload
+def process(response: None) -&gt; None:
+    ...
+@overload
+def process(response: int) -&gt; tuple[int, str]:
+    ...
+@overload
+def process(response: bytes) -&gt; str:
+    ...
+def process(response):
+    &lt;actual implementation&gt;
+</pre> <p>See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0484" id="index-61"><strong>PEP 484</strong></a> for details and comparison with other typing semantics.</p> </dd>
+</dl> <dl class="function"> <dt id="typing.final">
+<code>@typing.final</code> </dt> <dd>
+<p>A decorator to indicate to type checkers that the decorated method cannot be overridden, and the decorated class cannot be subclassed. For example:</p> <pre data-language="python">class Base:
+    @final
+    def done(self) -&gt; None:
+        ...
+class Sub(Base):
+    def done(self) -&gt; None:  # Error reported by type checker
+          ...
+
+@final
+class Leaf:
+    ...
+class Other(Leaf):  # Error reported by type checker
+    ...
+</pre> <p>There is no runtime checking of these properties. See <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0591" id="index-62"><strong>PEP 591</strong></a> for more details.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="function"> <dt id="typing.no_type_check">
+<code>@typing.no_type_check</code> </dt> <dd>
+<p>Decorator to indicate that annotations are not type hints.</p> <p>This works as class or function <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-decorator"><span class="xref std std-term">decorator</span></a>. With a class, it applies recursively to all methods defined in that class (but not to methods defined in its superclasses or subclasses).</p> <p>This mutates the function(s) in place.</p> </dd>
+</dl> <dl class="function"> <dt id="typing.no_type_check_decorator">
+<code>@typing.no_type_check_decorator</code> </dt> <dd>
+<p>Decorator to give another decorator the <a class="reference internal" href="#typing.no_type_check" title="typing.no_type_check"><code>no_type_check()</code></a> effect.</p> <p>This wraps the decorator with something that wraps the decorated function in <a class="reference internal" href="#typing.no_type_check" title="typing.no_type_check"><code>no_type_check()</code></a>.</p> </dd>
+</dl> <dl class="function"> <dt id="typing.type_check_only">
+<code>@typing.type_check_only</code> </dt> <dd>
+<p>Decorator to mark a class or function to be unavailable at runtime.</p> <p>This decorator is itself not available at runtime. It is mainly intended to mark classes that are defined in type stub files if an implementation returns an instance of a private class:</p> <pre data-language="python">@type_check_only
+class Response:  # private or not available at runtime
+    code: int
+    def get_header(self, name: str) -&gt; str: ...
+
+def fetch_response() -&gt; Response: ...
+</pre> <p>Note that returning instances of private classes is not recommended. It is usually preferable to make such classes public.</p> </dd>
+</dl>   <h3 id="introspection-helpers">Introspection helpers</h3> <dl class="function"> <dt id="typing.get_type_hints">
+<code>typing.get_type_hints(obj, globalns=None, localns=None, include_extras=False)</code> </dt> <dd>
+<p>Return a dictionary containing type hints for a function, method, module or class object.</p> <p>This is often the same as <code>obj.__annotations__</code>. In addition, forward references encoded as string literals are handled by evaluating them in <code>globals</code> and <code>locals</code> namespaces. If necessary, <code>Optional[t]</code> is added for function and method annotations if a default value equal to <code>None</code> is set. For a class <code>C</code>, return a dictionary constructed by merging all the <code>__annotations__</code> along <code>C.__mro__</code> in reverse order.</p> <p>The function recursively replaces all <code>Annotated[T, ...]</code> with <code>T</code>, unless <code>include_extras</code> is set to <code>True</code> (see <a class="reference internal" href="#typing.Annotated" title="typing.Annotated"><code>Annotated</code></a> for more information). For example:</p> <pre data-language="python">class Student(NamedTuple):
+    name: Annotated[str, 'some marker']
+
+get_type_hints(Student) == {'name': str}
+get_type_hints(Student, include_extras=False) == {'name': str}
+get_type_hints(Student, include_extras=True) == {
+    'name': Annotated[str, 'some marker']
+}
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.9: </span>Added <code>include_extras</code> parameter as part of <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0593" id="index-63"><strong>PEP 593</strong></a>.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="typing.get_args">
+<code>typing.get_args(tp)</code> </dt> 
+</dl> <dl class="function"> <dt id="typing.get_origin">
+<code>typing.get_origin(tp)</code> </dt> <dd>
+<p>Provide basic introspection for generic types and special typing forms.</p> <p>For a typing object of the form <code>X[Y, Z, ...]</code> these functions return <code>X</code> and <code>(Y, Z, ...)</code>. If <code>X</code> is a generic alias for a builtin or <a class="reference internal" href="collections#module-collections" title="collections: Container datatypes"><code>collections</code></a> class, it gets normalized to the original class. If <code>X</code> is a <a class="reference internal" href="#typing.Union" title="typing.Union"><code>Union</code></a> or <a class="reference internal" href="#typing.Literal" title="typing.Literal"><code>Literal</code></a> contained in another generic type, the order of <code>(Y, Z, ...)</code> may be different from the order of the original arguments <code>[Y, Z, ...]</code> due to type caching. For unsupported objects return <code>None</code> and <code>()</code> correspondingly. Examples:</p> <pre data-language="python">assert get_origin(Dict[str, int]) is dict
+assert get_args(Dict[int, str]) == (int, str)
+
+assert get_origin(Union[int, str]) is Union
+assert get_args(Union[int, str]) == (int, str)
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.8.</span></p> </div> </dd>
+</dl> <dl class="class"> <dt id="typing.ForwardRef">
+<code>class typing.ForwardRef</code> </dt> <dd>
+<p>A class used for internal typing representation of string forward references. For example, <code>List["SomeClass"]</code> is implicitly transformed into <code>List[ForwardRef("SomeClass")]</code>. This class should not be instantiated by a user, but may be used by introspection tools.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p><a class="pep reference external" href="https://www.python.org/dev/peps/pep-0585" id="index-64"><strong>PEP 585</strong></a> generic types such as <code>list["SomeClass"]</code> will not be implicitly transformed into <code>list[ForwardRef("SomeClass")]</code> and thus will not automatically resolve to <code>list[SomeClass]</code>.</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.7.4.</span></p> </div> </dd>
+</dl>   <h3 id="constant">Constant</h3> <dl class="data"> <dt id="typing.TYPE_CHECKING">
+<code>typing.TYPE_CHECKING</code> </dt> <dd>
+<p>A special constant that is assumed to be <code>True</code> by 3rd party static type checkers. It is <code>False</code> at runtime. Usage:</p> <pre data-language="python">if TYPE_CHECKING:
+    import expensive_mod
+
+def fun(arg: 'expensive_mod.SomeType') -&gt; None:
+    local_var: expensive_mod.AnotherType = other_fun()
+</pre> <p>The first type annotation must be enclosed in quotes, making it a “forward reference”, to hide the <code>expensive_mod</code> reference from the interpreter runtime. Type annotations for local variables are not evaluated, so the second annotation does not need to be enclosed in quotes.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>If <code>from __future__ import annotations</code> is used in Python 3.7 or later, annotations are not evaluated at function definition time. Instead, they are stored as strings in <code>__annotations__</code>, This makes it unnecessary to use quotes around the annotation. (see <a class="pep reference external" href="https://www.python.org/dev/peps/pep-0563" id="index-65"><strong>PEP 563</strong></a>).</p> </div> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.5.2.</span></p> </div> </dd>
+</dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/typing.html" class="_attribution-link">https://docs.python.org/3.9/library/typing.html</a>
+  </p>
+</div>

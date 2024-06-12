@@ -1,0 +1,97 @@
+<h1 id="managing-files">Managing files</h1> <p id="s-managing-files">This document describes Django’s file access APIs for files such as those uploaded by a user. The lower level APIs are general enough that you could use them for other purposes. If you want to handle “static files” (JS, CSS, etc.), see <a class="reference internal" href="../howto/static-files/index"><span class="doc">How to manage static files (e.g. images, JavaScript, CSS)</span></a>.</p> <p>By default, Django stores files locally, using the <a class="reference internal" href="../ref/settings#std:setting-MEDIA_ROOT"><code>MEDIA_ROOT</code></a> and <a class="reference internal" href="../ref/settings#std:setting-MEDIA_URL"><code>MEDIA_URL</code></a> settings. The examples below assume that you’re using these defaults.</p> <p>However, Django provides ways to write custom <a class="reference internal" href="#file-storage">file storage systems</a> that allow you to completely customize where and how Django stores files. The second half of this document describes how these storage systems work.</p>  <h2 id="using-files-in-models">Using files in models</h2> <p id="s-using-files-in-models">When you use a <a class="reference internal" href="../ref/models/fields#django.db.models.FileField" title="django.db.models.FileField"><code>FileField</code></a> or <a class="reference internal" href="../ref/models/fields#django.db.models.ImageField" title="django.db.models.ImageField"><code>ImageField</code></a>, Django provides a set of APIs you can use to deal with that file.</p> <p>Consider the following model, using an <a class="reference internal" href="../ref/models/fields#django.db.models.ImageField" title="django.db.models.ImageField"><code>ImageField</code></a> to store a photo:</p> <pre data-language="python">from django.db import models
+
+class Car(models.Model):
+    name = models.CharField(max_length=255)
+    price = models.DecimalField(max_digits=5, decimal_places=2)
+    photo = models.ImageField(upload_to='cars')
+</pre> <p>Any <code>Car</code> instance will have a <code>photo</code> attribute that you can use to get at the details of the attached photo:</p> <pre data-language="python">&gt;&gt;&gt; car = Car.objects.get(name="57 Chevy")
+&gt;&gt;&gt; car.photo
+&lt;ImageFieldFile: cars/chevy.jpg&gt;
+&gt;&gt;&gt; car.photo.name
+'cars/chevy.jpg'
+&gt;&gt;&gt; car.photo.path
+'/media/cars/chevy.jpg'
+&gt;&gt;&gt; car.photo.url
+'http://media.example.com/cars/chevy.jpg'
+</pre> <p>This object – <code>car.photo</code> in the example – is a <code>File</code> object, which means it has all the methods and attributes described below.</p> <div class="admonition note"> <p class="first admonition-title">Note</p> <p class="last">The file is saved as part of saving the model in the database, so the actual file name used on disk cannot be relied on until after the model has been saved.</p> </div> <p>For example, you can change the file name by setting the file’s <a class="reference internal" href="../ref/files/file#django.core.files.File.name" title="django.core.files.File.name"><code>name</code></a> to a path relative to the file storage’s location (<a class="reference internal" href="../ref/settings#std:setting-MEDIA_ROOT"><code>MEDIA_ROOT</code></a> if you are using the default <a class="reference internal" href="../ref/files/storage#django.core.files.storage.FileSystemStorage" title="django.core.files.storage.FileSystemStorage"><code>FileSystemStorage</code></a>):</p> <pre data-language="python">&gt;&gt;&gt; import os
+&gt;&gt;&gt; from django.conf import settings
+&gt;&gt;&gt; initial_path = car.photo.path
+&gt;&gt;&gt; car.photo.name = 'cars/chevy_ii.jpg'
+&gt;&gt;&gt; new_path = settings.MEDIA_ROOT + car.photo.name
+&gt;&gt;&gt; # Move the file on the filesystem
+&gt;&gt;&gt; os.rename(initial_path, new_path)
+&gt;&gt;&gt; car.save()
+&gt;&gt;&gt; car.photo.path
+'/media/cars/chevy_ii.jpg'
+&gt;&gt;&gt; car.photo.path == new_path
+True
+</pre> <div class="admonition note"> <p class="first admonition-title">Note</p> <p>While <a class="reference internal" href="../ref/models/fields#django.db.models.ImageField" title="django.db.models.ImageField"><code>ImageField</code></a> non-image data attributes, such as <code>height</code>, <code>width</code>, and <code>size</code> are available on the instance, the underlying image data cannot be used without reopening the image. For example:</p> <pre data-language="python">&gt;&gt;&gt; from PIL import Image
+&gt;&gt;&gt; car = Car.objects.get(name='57 Chevy')
+&gt;&gt;&gt; car.photo.width
+191
+&gt;&gt;&gt; car.photo.height
+287
+&gt;&gt;&gt; image = Image.open(car.photo)
+# Raises ValueError: seek of closed file.
+&gt;&gt;&gt; car.photo.open()
+&lt;ImageFieldFile: cars/chevy.jpg&gt;
+&gt;&gt;&gt; image = Image.open(car.photo)
+&gt;&gt;&gt; image
+&lt;PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=191x287 at 0x7F99A94E9048&gt;
+</pre> </div>   <h2 id="the-file-object">The <code>File</code> object</h2> <p id="s-the-file-object">Internally, Django uses a <a class="reference internal" href="../ref/files/file#django.core.files.File" title="django.core.files.File"><code>django.core.files.File</code></a> instance any time it needs to represent a file.</p> <p>Most of the time you’ll use a <code>File</code> that Django’s given you (i.e. a file attached to a model as above, or perhaps an uploaded file).</p> <p>If you need to construct a <code>File</code> yourself, the easiest way is to create one using a Python built-in <code>file</code> object:</p> <pre data-language="python">&gt;&gt;&gt; from django.core.files import File
+
+# Create a Python file object using open()
+&gt;&gt;&gt; f = open('/path/to/hello.world', 'w')
+&gt;&gt;&gt; myfile = File(f)
+</pre> <p>Now you can use any of the documented attributes and methods of the <a class="reference internal" href="../ref/files/file#django.core.files.File" title="django.core.files.File"><code>File</code></a> class.</p> <p>Be aware that files created in this way are not automatically closed. The following approach may be used to close files automatically:</p> <pre data-language="python">&gt;&gt;&gt; from django.core.files import File
+
+# Create a Python file object using open() and the with statement
+&gt;&gt;&gt; with open('/path/to/hello.world', 'w') as f:
+...     myfile = File(f)
+...     myfile.write('Hello World')
+...
+&gt;&gt;&gt; myfile.closed
+True
+&gt;&gt;&gt; f.closed
+True
+</pre> <p>Closing files is especially important when accessing file fields in a loop over a large number of objects. If files are not manually closed after accessing them, the risk of running out of file descriptors may arise. This may lead to the following error:</p> <pre data-language="python">OSError: [Errno 24] Too many open files
+</pre>   <h2 id="file-storage">File storage</h2> <p id="s-file-storage">Behind the scenes, Django delegates decisions about how and where to store files to a file storage system. This is the object that actually understands things like file systems, opening and reading files, etc.</p> <p>Django’s default file storage is given by the <a class="reference internal" href="../ref/settings#std:setting-DEFAULT_FILE_STORAGE"><code>DEFAULT_FILE_STORAGE</code></a> setting; if you don’t explicitly provide a storage system, this is the one that will be used.</p> <p>See below for details of the built-in default file storage system, and see <a class="reference internal" href="../howto/custom-file-storage"><span class="doc">How to write a custom storage class</span></a> for information on writing your own file storage system.</p>  <h3 id="storage-objects">Storage objects</h3> <p id="s-storage-objects">Though most of the time you’ll want to use a <code>File</code> object (which delegates to the proper storage for that file), you can use file storage systems directly. You can create an instance of some custom file storage class, or – often more useful – you can use the global default storage system:</p> <pre data-language="python">&gt;&gt;&gt; from django.core.files.base import ContentFile
+&gt;&gt;&gt; from django.core.files.storage import default_storage
+
+&gt;&gt;&gt; path = default_storage.save('path/to/file', ContentFile(b'new content'))
+&gt;&gt;&gt; path
+'path/to/file'
+
+&gt;&gt;&gt; default_storage.size(path)
+11
+&gt;&gt;&gt; default_storage.open(path).read()
+b'new content'
+
+&gt;&gt;&gt; default_storage.delete(path)
+&gt;&gt;&gt; default_storage.exists(path)
+False
+</pre> <p>See <a class="reference internal" href="../ref/files/storage"><span class="doc">File storage API</span></a> for the file storage API.</p>   <h3 id="builtin-fs-storage">The built-in filesystem storage class</h3> <p id="s-the-built-in-filesystem-storage-class">Django ships with a <a class="reference internal" href="../ref/files/storage#django.core.files.storage.FileSystemStorage" title="django.core.files.storage.FileSystemStorage"><code>django.core.files.storage.FileSystemStorage</code></a> class which implements basic local filesystem file storage.</p> <p>For example, the following code will store uploaded files under <code>/media/photos</code> regardless of what your <a class="reference internal" href="../ref/settings#std:setting-MEDIA_ROOT"><code>MEDIA_ROOT</code></a> setting is:</p> <pre data-language="python">from django.core.files.storage import FileSystemStorage
+from django.db import models
+
+fs = FileSystemStorage(location='/media/photos')
+
+class Car(models.Model):
+    ...
+    photo = models.ImageField(storage=fs)
+</pre> <p><a class="reference internal" href="../howto/custom-file-storage"><span class="doc">Custom storage systems</span></a> work the same way: you can pass them in as the <code>storage</code> argument to a <a class="reference internal" href="../ref/models/fields#django.db.models.FileField" title="django.db.models.FileField"><code>FileField</code></a>.</p>   <h3 id="using-a-callable">Using a callable</h3> <p id="s-using-a-callable">You can use a callable as the <a class="reference internal" href="../ref/models/fields#django.db.models.FileField.storage" title="django.db.models.FileField.storage"><code>storage</code></a> parameter for <a class="reference internal" href="../ref/models/fields#django.db.models.FileField" title="django.db.models.FileField"><code>FileField</code></a> or <a class="reference internal" href="../ref/models/fields#django.db.models.ImageField" title="django.db.models.ImageField"><code>ImageField</code></a>. This allows you to modify the used storage at runtime, selecting different storages for different environments, for example.</p> <p>Your callable will be evaluated when your models classes are loaded, and must return an instance of <a class="reference internal" href="../ref/files/storage#django.core.files.storage.Storage" title="django.core.files.storage.Storage"><code>Storage</code></a>.</p> <p>For example:</p> <pre data-language="python">from django.conf import settings
+from django.db import models
+from .storages import MyLocalStorage, MyRemoteStorage
+
+
+def select_storage():
+    return MyLocalStorage() if settings.DEBUG else MyRemoteStorage()
+
+
+class MyModel(models.Model):
+    my_file = models.FileField(storage=select_storage)
+</pre><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; Django Software Foundation and individual contributors<br>Licensed under the BSD License.<br>
+    <a href="https://docs.djangoproject.com/en/4.0/topics/files/" class="_attribution-link">https://docs.djangoproject.com/en/4.0/topics/files/</a>
+  </p>
+</div>

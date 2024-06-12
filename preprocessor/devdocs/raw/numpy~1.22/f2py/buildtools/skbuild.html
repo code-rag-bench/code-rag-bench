@@ -1,0 +1,143 @@
+<h1 id="f2py-skbuild">Using via scikit-build</h1> <p><code>scikit-build</code> provides two separate concepts geared towards the users of Python extension modules.</p> <ol class="arabic simple"> <li>A <code>setuptools</code> replacement (legacy behaviour)</li> <li>A series of <code>cmake</code> modules with definitions which help building Python extensions</li> </ol> <div class="admonition note"> <p class="admonition-title">Note</p> <p>It is possible to use <code>scikit-build</code>’s <code>cmake</code> modules to <a class="reference external" href="https://scikit-build.readthedocs.io/en/latest/cmake-modules/F2PY.html">bypass the cmake setup mechanism</a> completely, and to write targets which call <code>f2py
+-c</code>. This usage is <strong>not recommended</strong> since the point of these build system documents are to move away from the internal <code>numpy.distutils</code> methods.</p> </div> <p>For situations where no <code>setuptools</code> replacements are required or wanted (i.e. if <code>wheels</code> are not needed), it is recommended to instead use the vanilla <code>cmake</code> setup described in <a class="reference internal" href="cmake#f2py-cmake"><span class="std std-ref">Using via cmake</span></a>.</p> <section id="fibonacci-walkthrough-f77"> <h2>Fibonacci Walkthrough (F77)</h2> <p>We will consider the <code>fib</code> example from <a class="reference internal" href="../f2py.getting-started#f2py-getting-started"><span class="std std-ref">Three ways to wrap - getting started</span></a> section.</p> <pre data-language="fortran">C FILE: FIB1.F
+      SUBROUTINE FIB(A,N)
+C
+C     CALCULATE FIRST N FIBONACCI NUMBERS
+C
+      INTEGER N
+      REAL*8 A(N)
+      DO I=1,N
+         IF (I.EQ.1) THEN
+            A(I) = 0.0D0
+         ELSEIF (I.EQ.2) THEN
+            A(I) = 1.0D0
+         ELSE 
+            A(I) = A(I-1) + A(I-2)
+         ENDIF
+      ENDDO
+      END
+C END FILE FIB1.F
+</pre> <section id="cmake-modules-only"> <h3>
+<code>CMake</code> modules only</h3> <p>Consider using the following <code>CMakeLists.txt</code>.</p> <pre data-language="cmake">### setup project ###
+cmake_minimum_required(VERSION 3.17.3)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+project(fibby
+  VERSION 1.0
+  DESCRIPTION "FIB module"
+  LANGUAGES C Fortran
+  )
+
+# Safety net
+if(PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
+  message(
+    FATAL_ERROR
+      "In-source builds not allowed. Please make a new directory (called a build directory) and run CMake from there.\n"
+  )
+endif()
+
+# Grab Python
+find_package(Python3 3.9 REQUIRED
+  COMPONENTS Interpreter Development)
+
+# Ensure scikit-build modules
+if (NOT SKBUILD)
+  # Kanged --&gt;https://github.com/Kitware/torch_liberator/blob/master/CMakeLists.txt
+  # If skbuild is not the driver; include its utilities in CMAKE_MODULE_PATH
+  execute_process(
+  COMMAND "${Python3_EXECUTABLE}"
+  -c "import os, skbuild; print(os.path.dirname(skbuild.__file__))"
+  OUTPUT_VARIABLE SKBLD_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  set(SKBLD_CMAKE_DIR "${SKBLD_DIR}/resources/cmake")
+  list(APPEND CMAKE_MODULE_PATH ${SKBLD_CMAKE_DIR})
+endif()
+
+# scikit-build style includes
+find_package(PythonExtensions REQUIRED) # for ${PYTHON_EXTENSION_MODULE_SUFFIX}
+find_package(NumPy REQUIRED) # for ${NumPy_INCLUDE_DIRS}
+find_package(F2PY REQUIRED) # for ${F2PY_INCLUDE_DIR}
+
+# Prepping the module
+set(f2py_module_name "fibby")
+set(fortran_src_file "${CMAKE_SOURCE_DIR}/fib1.f")
+set(generated_module_file ${f2py_module_name}${PYTHON_EXTENSION_MODULE_SUFFIX})
+
+# Target for enforcing dependencies
+add_custom_target(${f2py_module_name} ALL
+  DEPENDS "${fortran_src_file}"
+  )
+
+# Custom command for generating .c
+add_custom_command(
+  OUTPUT "${f2py_module_name}module.c"
+  COMMAND ${F2PY_EXECUTABLE}
+    -m ${f2py_module_name}
+    ${fortran_src_file}
+    --lower
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  DEPENDS ${fortran_src_file}
+  )
+
+add_library(${generated_module_file} MODULE
+            "${f2py_module_name}module.c"
+            "${F2PY_INCLUDE_DIR}/fortranobject.c"
+            "${fortran_src_file}")
+
+target_include_directories(${generated_module_file} PUBLIC
+                           ${F2PY_INCLUDE_DIRS}
+                           ${PYTHON_INCLUDE_DIRS})
+set_target_properties(${generated_module_file} PROPERTIES SUFFIX "")
+set_target_properties(${generated_module_file} PROPERTIES PREFIX "")
+
+# Linker fixes
+if (UNIX)
+  if (APPLE)
+    set_target_properties(${generated_module_file} PROPERTIES
+    LINK_FLAGS  '-Wl,-dylib,-undefined,dynamic_lookup')
+  else()
+    set_target_properties(${generated_module_file} PROPERTIES
+  LINK_FLAGS  '-Wl,--allow-shlib-undefined')
+  endif()
+endif()
+
+if (SKBUILD)
+  install(TARGETS ${generated_module_file} DESTINATION fibby)
+else()
+  install(TARGETS ${generated_module_file} DESTINATION ${CMAKE_SOURCE_DIR}/fibby)
+endif()
+</pre> <p>Much of the logic is the same as in <a class="reference internal" href="cmake#f2py-cmake"><span class="std std-ref">Using via cmake</span></a>, however notably here the appropriate module suffix is generated via <code>sysconfig.get_config_var("SO")</code>. The resulting extension can be built and loaded in the standard workflow.</p> <pre data-language="bash">ls .
+# CMakeLists.txt fib1.f
+mkdir build &amp;&amp; cd build
+cmake ..
+make
+python -c "import numpy as np; import fibby; a = np.zeros(9); fibby.fib(a); print (a)"
+# [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+</pre> </section> <section id="setuptools-replacement"> <h3>
+<code>setuptools</code> replacement</h3> <div class="admonition note"> <p class="admonition-title">Note</p> <p><strong>As of November 2021</strong></p> <p>The behavior described here of driving the <code>cmake</code> build of a module is considered to be legacy behaviour and should not be depended on.</p> </div> <p>The utility of <code>scikit-build</code> lies in being able to drive the generation of more than extension modules, in particular a common usage pattern is the generation of Python distributables (for example for PyPI).</p> <p>The workflow with <code>scikit-build</code> straightforwardly supports such packaging requirements. Consider augmenting the project with a <code>setup.py</code> as defined:</p> <pre data-language="python">from skbuild import setup
+
+setup(
+    name="fibby",
+    version="0.0.1",
+    description="a minimal example package (fortran version)",
+    license="MIT",
+    packages=['fibby'],
+    cmake_args=['-DSKBUILD=ON']
+)
+</pre> <p>Along with a commensurate <code>pyproject.toml</code></p> <pre data-language="toml">[project]
+requires-python = "&gt;=3.7"
+
+[build-system]
+requires = ["setuptools&gt;=42", "wheel", "scikit-build", "cmake&gt;=3.18", "numpy&gt;=1.21"]
+</pre> <p>Together these can build the extension using <code>cmake</code> in tandem with other standard <code>setuptools</code> outputs. Running <code>cmake</code> through <code>setup.py</code> is mostly used when it is necessary to integrate with extension modules not built with <code>cmake</code>.</p> <pre data-language="bash">ls .
+# CMakeLists.txt fib1.f pyproject.toml setup.py
+python setup.py build_ext --inplace
+python -c "import numpy as np; import fibby.fibby; a = np.zeros(9); fibby.fibby.fib(a); print (a)"
+# [ 0.  1.  1.  2.  3.  5.  8. 13. 21.]
+</pre> <p>Where we have modified the path to the module as <code>--inplace</code> places the extension module in a subfolder.</p> </section> </section><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2005&ndash;2021 NumPy Developers<br>Licensed under the 3-clause BSD License.<br>
+    <a href="https://numpy.org/doc/1.22/f2py/buildtools/skbuild.html" class="_attribution-link">https://numpy.org/doc/1.22/f2py/buildtools/skbuild.html</a>
+  </p>
+</div>

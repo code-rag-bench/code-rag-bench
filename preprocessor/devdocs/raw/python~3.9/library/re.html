@@ -1,0 +1,584 @@
+<h1 id="re-regular-expression-operations">re — Regular expression operations</h1> <p id="module-re"><strong>Source code:</strong> <a class="reference external" href="https://github.com/python/cpython/tree/3.9/Lib/re.py">Lib/re.py</a></p>  <p>This module provides regular expression matching operations similar to those found in Perl.</p> <p>Both patterns and strings to be searched can be Unicode strings (<a class="reference internal" href="stdtypes#str" title="str"><code>str</code></a>) as well as 8-bit strings (<a class="reference internal" href="stdtypes#bytes" title="bytes"><code>bytes</code></a>). However, Unicode strings and 8-bit strings cannot be mixed: that is, you cannot match a Unicode string with a byte pattern or vice-versa; similarly, when asking for a substitution, the replacement string must be of the same type as both the pattern and the search string.</p> <p>Regular expressions use the backslash character (<code>'\'</code>) to indicate special forms or to allow special characters to be used without invoking their special meaning. This collides with Python’s usage of the same character for the same purpose in string literals; for example, to match a literal backslash, one might have to write <code>'\\\\'</code> as the pattern string, because the regular expression must be <code>\\</code>, and each backslash must be expressed as <code>\\</code> inside a regular Python string literal. Also, please note that any invalid escape sequences in Python’s usage of the backslash in string literals now generate a <a class="reference internal" href="exceptions#DeprecationWarning" title="DeprecationWarning"><code>DeprecationWarning</code></a> and in the future this will become a <a class="reference internal" href="exceptions#SyntaxError" title="SyntaxError"><code>SyntaxError</code></a>. This behaviour will happen even if it is a valid escape sequence for a regular expression.</p> <p>The solution is to use Python’s raw string notation for regular expression patterns; backslashes are not handled in any special way in a string literal prefixed with <code>'r'</code>. So <code>r"\n"</code> is a two-character string containing <code>'\'</code> and <code>'n'</code>, while <code>"\n"</code> is a one-character string containing a newline. Usually patterns will be expressed in Python code using this raw string notation.</p> <p>It is important to note that most regular expression operations are available as module-level functions and methods on <a class="reference internal" href="#re-objects"><span class="std std-ref">compiled regular expressions</span></a>. The functions are shortcuts that don’t require you to compile a regex object first, but miss some fine-tuning parameters.</p> <div class="admonition seealso"> <p class="admonition-title">See also</p> <p>The third-party <a class="reference external" href="https://pypi.org/project/regex/">regex</a> module, which has an API compatible with the standard library <a class="reference internal" href="#module-re" title="re: Regular expression operations."><code>re</code></a> module, but offers additional functionality and a more thorough Unicode support.</p> </div>  <h2 id="re-syntax">Regular Expression Syntax</h2> <p id="regular-expression-syntax">A regular expression (or RE) specifies a set of strings that matches it; the functions in this module let you check if a particular string matches a given regular expression (or if a given regular expression matches a particular string, which comes down to the same thing).</p> <p>Regular expressions can be concatenated to form new regular expressions; if <em>A</em> and <em>B</em> are both regular expressions, then <em>AB</em> is also a regular expression. In general, if a string <em>p</em> matches <em>A</em> and another string <em>q</em> matches <em>B</em>, the string <em>pq</em> will match AB. This holds unless <em>A</em> or <em>B</em> contain low precedence operations; boundary conditions between <em>A</em> and <em>B</em>; or have numbered group references. Thus, complex expressions can easily be constructed from simpler primitive expressions like the ones described here. For details of the theory and implementation of regular expressions, consult the Friedl book <a class="reference internal" href="#frie09" id="id1"><span>[Frie09]</span></a>, or almost any textbook about compiler construction.</p> <p>A brief explanation of the format of regular expressions follows. For further information and a gentler presentation, consult the <a class="reference internal" href="https://docs.python.org/3.9/howto/regex.html#regex-howto"><span class="std std-ref">Regular Expression HOWTO</span></a>.</p> <p>Regular expressions can contain both special and ordinary characters. Most ordinary characters, like <code>'A'</code>, <code>'a'</code>, or <code>'0'</code>, are the simplest regular expressions; they simply match themselves. You can concatenate ordinary characters, so <code>last</code> matches the string <code>'last'</code>. (In the rest of this section, we’ll write RE’s in <code>this special style</code>, usually without quotes, and strings to be matched <code>'in single quotes'</code>.)</p> <p>Some characters, like <code>'|'</code> or <code>'('</code>, are special. Special characters either stand for classes of ordinary characters, or affect how the regular expressions around them are interpreted.</p> <p>Repetition qualifiers (<code>*</code>, <code>+</code>, <code>?</code>, <code>{m,n}</code>, etc) cannot be directly nested. This avoids ambiguity with the non-greedy modifier suffix <code>?</code>, and with other modifiers in other implementations. To apply a second repetition to an inner repetition, parentheses may be used. For example, the expression <code>(?:a{6})*</code> matches any multiple of six <code>'a'</code> characters.</p> <p>The special characters are:</p> <dl class="simple" id="index-0"> <dt>
+<code>.</code> </dt>
+<dd>
+<p>(Dot.) In the default mode, this matches any character except a newline. If the <a class="reference internal" href="#re.DOTALL" title="re.DOTALL"><code>DOTALL</code></a> flag has been specified, this matches any character including a newline.</p> </dd> </dl> <dl class="simple" id="index-1"> <dt>
+<code>^</code> </dt>
+<dd>
+<p>(Caret.) Matches the start of the string, and in <a class="reference internal" href="#re.MULTILINE" title="re.MULTILINE"><code>MULTILINE</code></a> mode also matches immediately after each newline.</p> </dd> </dl> <dl class="simple" id="index-2"> <dt>
+<code>$</code> </dt>
+<dd>
+<p>Matches the end of the string or just before the newline at the end of the string, and in <a class="reference internal" href="#re.MULTILINE" title="re.MULTILINE"><code>MULTILINE</code></a> mode also matches before a newline. <code>foo</code> matches both ‘foo’ and ‘foobar’, while the regular expression <code>foo$</code> matches only ‘foo’. More interestingly, searching for <code>foo.$</code> in <code>'foo1\nfoo2\n'</code> matches ‘foo2’ normally, but ‘foo1’ in <a class="reference internal" href="#re.MULTILINE" title="re.MULTILINE"><code>MULTILINE</code></a> mode; searching for a single <code>$</code> in <code>'foo\n'</code> will find two (empty) matches: one just before the newline, and one at the end of the string.</p> </dd> </dl> <dl class="simple" id="index-3"> <dt>
+<code>*</code> </dt>
+<dd>
+<p>Causes the resulting RE to match 0 or more repetitions of the preceding RE, as many repetitions as are possible. <code>ab*</code> will match ‘a’, ‘ab’, or ‘a’ followed by any number of ‘b’s.</p> </dd> </dl> <dl class="simple" id="index-4"> <dt>
+<code>+</code> </dt>
+<dd>
+<p>Causes the resulting RE to match 1 or more repetitions of the preceding RE. <code>ab+</code> will match ‘a’ followed by any non-zero number of ‘b’s; it will not match just ‘a’.</p> </dd> </dl> <dl class="simple" id="index-5"> <dt>
+<code>?</code> </dt>
+<dd>
+<p>Causes the resulting RE to match 0 or 1 repetitions of the preceding RE. <code>ab?</code> will match either ‘a’ or ‘ab’.</p> </dd> </dl> <dl class="simple" id="index-6"> <dt>
+<code>*?, +?, ??</code> </dt>
+<dd>
+<p>The <code>'*'</code>, <code>'+'</code>, and <code>'?'</code> qualifiers are all <em class="dfn">greedy</em>; they match as much text as possible. Sometimes this behaviour isn’t desired; if the RE <code>&lt;.*&gt;</code> is matched against <code>'&lt;a&gt; b &lt;c&gt;'</code>, it will match the entire string, and not just <code>'&lt;a&gt;'</code>. Adding <code>?</code> after the qualifier makes it perform the match in <em class="dfn">non-greedy</em> or <em class="dfn">minimal</em> fashion; as <em>few</em> characters as possible will be matched. Using the RE <code>&lt;.*?&gt;</code> will match only <code>'&lt;a&gt;'</code>.</p> </dd> </dl> <dl class="simple" id="index-7"> <dt>
+<code>{m}</code> </dt>
+<dd>
+<p>Specifies that exactly <em>m</em> copies of the previous RE should be matched; fewer matches cause the entire RE not to match. For example, <code>a{6}</code> will match exactly six <code>'a'</code> characters, but not five.</p> </dd> <dt>
+<code>{m,n}</code> </dt>
+<dd>
+<p>Causes the resulting RE to match from <em>m</em> to <em>n</em> repetitions of the preceding RE, attempting to match as many repetitions as possible. For example, <code>a{3,5}</code> will match from 3 to 5 <code>'a'</code> characters. Omitting <em>m</em> specifies a lower bound of zero, and omitting <em>n</em> specifies an infinite upper bound. As an example, <code>a{4,}b</code> will match <code>'aaaab'</code> or a thousand <code>'a'</code> characters followed by a <code>'b'</code>, but not <code>'aaab'</code>. The comma may not be omitted or the modifier would be confused with the previously described form.</p> </dd> <dt>
+<code>{m,n}?</code> </dt>
+<dd>
+<p>Causes the resulting RE to match from <em>m</em> to <em>n</em> repetitions of the preceding RE, attempting to match as <em>few</em> repetitions as possible. This is the non-greedy version of the previous qualifier. For example, on the 6-character string <code>'aaaaaa'</code>, <code>a{3,5}</code> will match 5 <code>'a'</code> characters, while <code>a{3,5}?</code> will only match 3 characters.</p> </dd> </dl> <dl id="index-8"> <dt>
+<code>\</code> </dt>
+<dd>
+<p>Either escapes special characters (permitting you to match characters like <code>'*'</code>, <code>'?'</code>, and so forth), or signals a special sequence; special sequences are discussed below.</p> <p>If you’re not using a raw string to express the pattern, remember that Python also uses the backslash as an escape sequence in string literals; if the escape sequence isn’t recognized by Python’s parser, the backslash and subsequent character are included in the resulting string. However, if Python would recognize the resulting sequence, the backslash should be repeated twice. This is complicated and hard to understand, so it’s highly recommended that you use raw strings for all but the simplest expressions.</p> </dd> </dl> <dl id="index-9"> <dt>
+<code>[]</code> </dt>
+<dd>
+<p>Used to indicate a set of characters. In a set:</p> <ul class="simple"> <li>Characters can be listed individually, e.g. <code>[amk]</code> will match <code>'a'</code>, <code>'m'</code>, or <code>'k'</code>.</li> </ul> <ul class="simple" id="index-10"> <li>Ranges of characters can be indicated by giving two characters and separating them by a <code>'-'</code>, for example <code>[a-z]</code> will match any lowercase ASCII letter, <code>[0-5][0-9]</code> will match all the two-digits numbers from <code>00</code> to <code>59</code>, and <code>[0-9A-Fa-f]</code> will match any hexadecimal digit. If <code>-</code> is escaped (e.g. <code>[a\-z]</code>) or if it’s placed as the first or last character (e.g. <code>[-a]</code> or <code>[a-]</code>), it will match a literal <code>'-'</code>.</li> <li>Special characters lose their special meaning inside sets. For example, <code>[(+*)]</code> will match any of the literal characters <code>'('</code>, <code>'+'</code>, <code>'*'</code>, or <code>')'</code>.</li> </ul> <ul class="simple" id="index-11"> <li>Character classes such as <code>\w</code> or <code>\S</code> (defined below) are also accepted inside a set, although the characters they match depends on whether <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> or <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>LOCALE</code></a> mode is in force.</li> </ul> <ul class="simple" id="index-12"> <li>Characters that are not within a range can be matched by <em class="dfn">complementing</em> the set. If the first character of the set is <code>'^'</code>, all the characters that are <em>not</em> in the set will be matched. For example, <code>[^5]</code> will match any character except <code>'5'</code>, and <code>[^^]</code> will match any character except <code>'^'</code>. <code>^</code> has no special meaning if it’s not the first character in the set.</li> <li>To match a literal <code>']'</code> inside a set, precede it with a backslash, or place it at the beginning of the set. For example, both <code>[()[\]{}]</code> and <code>[]()[{}]</code> will both match a parenthesis.</li> </ul> <ul class="simple"> <li>Support of nested sets and set operations as in <a class="reference external" href="https://unicode.org/reports/tr18/">Unicode Technical Standard #18</a> might be added in the future. This would change the syntax, so to facilitate this change a <a class="reference internal" href="exceptions#FutureWarning" title="FutureWarning"><code>FutureWarning</code></a> will be raised in ambiguous cases for the time being. That includes sets starting with a literal <code>'['</code> or containing literal character sequences <code>'--'</code>, <code>'&amp;&amp;'</code>, <code>'~~'</code>, and <code>'||'</code>. To avoid a warning escape them with a backslash.</li> </ul> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span><a class="reference internal" href="exceptions#FutureWarning" title="FutureWarning"><code>FutureWarning</code></a> is raised if a character set contains constructs that will change semantically in the future.</p> </div> </dd> </dl> <dl class="simple" id="index-13"> <dt>
+<code>|</code> </dt>
+<dd>
+<p><code>A|B</code>, where <em>A</em> and <em>B</em> can be arbitrary REs, creates a regular expression that will match either <em>A</em> or <em>B</em>. An arbitrary number of REs can be separated by the <code>'|'</code> in this way. This can be used inside groups (see below) as well. As the target string is scanned, REs separated by <code>'|'</code> are tried from left to right. When one pattern completely matches, that branch is accepted. This means that once <em>A</em> matches, <em>B</em> will not be tested further, even if it would produce a longer overall match. In other words, the <code>'|'</code> operator is never greedy. To match a literal <code>'|'</code>, use <code>\|</code>, or enclose it inside a character class, as in <code>[|]</code>.</p> </dd> </dl> <dl class="simple" id="index-14"> <dt>
+<code>(...)</code> </dt>
+<dd>
+<p>Matches whatever regular expression is inside the parentheses, and indicates the start and end of a group; the contents of a group can be retrieved after a match has been performed, and can be matched later in the string with the <code>\number</code> special sequence, described below. To match the literals <code>'('</code> or <code>')'</code>, use <code>\(</code> or <code>\)</code>, or enclose them inside a character class: <code>[(]</code>, <code>[)]</code>.</p> </dd> </dl> <dl class="simple" id="index-15"> <dt>
+<code>(?...)</code> </dt>
+<dd>
+<p>This is an extension notation (a <code>'?'</code> following a <code>'('</code> is not meaningful otherwise). The first character after the <code>'?'</code> determines what the meaning and further syntax of the construct is. Extensions usually do not create a new group; <code>(?P&lt;name&gt;...)</code> is the only exception to this rule. Following are the currently supported extensions.</p> </dd> <dt>
+<code>(?aiLmsux)</code> </dt>
+<dd>
+<p>(One or more letters from the set <code>'a'</code>, <code>'i'</code>, <code>'L'</code>, <code>'m'</code>, <code>'s'</code>, <code>'u'</code>, <code>'x'</code>.) The group matches the empty string; the letters set the corresponding flags: <a class="reference internal" href="#re.A" title="re.A"><code>re.A</code></a> (ASCII-only matching), <a class="reference internal" href="#re.I" title="re.I"><code>re.I</code></a> (ignore case), <a class="reference internal" href="#re.L" title="re.L"><code>re.L</code></a> (locale dependent), <a class="reference internal" href="#re.M" title="re.M"><code>re.M</code></a> (multi-line), <a class="reference internal" href="#re.S" title="re.S"><code>re.S</code></a> (dot matches all), <code>re.U</code> (Unicode matching), and <a class="reference internal" href="#re.X" title="re.X"><code>re.X</code></a> (verbose), for the entire regular expression. (The flags are described in <a class="reference internal" href="#contents-of-module-re"><span class="std std-ref">Module Contents</span></a>.) This is useful if you wish to include the flags as part of the regular expression, instead of passing a <em>flag</em> argument to the <a class="reference internal" href="#re.compile" title="re.compile"><code>re.compile()</code></a> function. Flags should be used first in the expression string.</p> </dd> </dl> <dl id="index-16"> <dt>
+<code>(?:...)</code> </dt>
+<dd>
+<p>A non-capturing version of regular parentheses. Matches whatever regular expression is inside the parentheses, but the substring matched by the group <em>cannot</em> be retrieved after performing a match or referenced later in the pattern.</p> </dd> <dt>
+<code>(?aiLmsux-imsx:...)</code> </dt>
+<dd>
+<p>(Zero or more letters from the set <code>'a'</code>, <code>'i'</code>, <code>'L'</code>, <code>'m'</code>, <code>'s'</code>, <code>'u'</code>, <code>'x'</code>, optionally followed by <code>'-'</code> followed by one or more letters from the <code>'i'</code>, <code>'m'</code>, <code>'s'</code>, <code>'x'</code>.) The letters set or remove the corresponding flags: <a class="reference internal" href="#re.A" title="re.A"><code>re.A</code></a> (ASCII-only matching), <a class="reference internal" href="#re.I" title="re.I"><code>re.I</code></a> (ignore case), <a class="reference internal" href="#re.L" title="re.L"><code>re.L</code></a> (locale dependent), <a class="reference internal" href="#re.M" title="re.M"><code>re.M</code></a> (multi-line), <a class="reference internal" href="#re.S" title="re.S"><code>re.S</code></a> (dot matches all), <code>re.U</code> (Unicode matching), and <a class="reference internal" href="#re.X" title="re.X"><code>re.X</code></a> (verbose), for the part of the expression. (The flags are described in <a class="reference internal" href="#contents-of-module-re"><span class="std std-ref">Module Contents</span></a>.)</p> <p>The letters <code>'a'</code>, <code>'L'</code> and <code>'u'</code> are mutually exclusive when used as inline flags, so they can’t be combined or follow <code>'-'</code>. Instead, when one of them appears in an inline group, it overrides the matching mode in the enclosing group. In Unicode patterns <code>(?a:...)</code> switches to ASCII-only matching, and <code>(?u:...)</code> switches to Unicode matching (default). In byte pattern <code>(?L:...)</code> switches to locale depending matching, and <code>(?a:...)</code> switches to ASCII-only matching (default). This override is only in effect for the narrow inline group, and the original matching mode is restored outside of the group.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.</span></p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>The letters <code>'a'</code>, <code>'L'</code> and <code>'u'</code> also can be used in a group.</p> </div> </dd> </dl> <dl id="index-17"> <dt>
+<code>(?P&lt;name&gt;...)</code> </dt>
+<dd>
+<p>Similar to regular parentheses, but the substring matched by the group is accessible via the symbolic group name <em>name</em>. Group names must be valid Python identifiers, and each group name must be defined only once within a regular expression. A symbolic group is also a numbered group, just as if the group were not named.</p> <p>Named groups can be referenced in three contexts. If the pattern is <code>(?P&lt;quote&gt;['"]).*?(?P=quote)</code> (i.e. matching a string quoted with either single or double quotes):</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p>Context of reference to group “quote”</p></th> <th class="head"><p>Ways to reference it</p></th> </tr> </thead>  <tr>
+<td><p>in the same pattern itself</p></td> <td>
+<ul class="simple"> <li>
+<code>(?P=quote)</code> (as shown)</li> <li><code>\1</code></li> </ul> </td> </tr> <tr>
+<td><p>when processing match object <em>m</em></p></td> <td>
+<ul class="simple"> <li><code>m.group('quote')</code></li> <li>
+<code>m.end('quote')</code> (etc.)</li> </ul> </td> </tr> <tr>
+<td><p>in a string passed to the <em>repl</em> argument of <code>re.sub()</code></p></td> <td>
+<ul class="simple"> <li><code>\g&lt;quote&gt;</code></li> <li><code>\g&lt;1&gt;</code></li> <li><code>\1</code></li> </ul> </td> </tr>  </table> </dd> </dl> <dl class="simple" id="index-18"> <dt>
+<code>(?P=name)</code> </dt>
+<dd>
+<p>A backreference to a named group; it matches whatever text was matched by the earlier group named <em>name</em>.</p> </dd> </dl> <dl class="simple" id="index-19"> <dt>
+<code>(?#...)</code> </dt>
+<dd>
+<p>A comment; the contents of the parentheses are simply ignored.</p> </dd> </dl> <dl class="simple" id="index-20"> <dt>
+<code>(?=...)</code> </dt>
+<dd>
+<p>Matches if <code>...</code> matches next, but doesn’t consume any of the string. This is called a <em class="dfn">lookahead assertion</em>. For example, <code>Isaac (?=Asimov)</code> will match <code>'Isaac '</code> only if it’s followed by <code>'Asimov'</code>.</p> </dd> </dl> <dl class="simple" id="index-21"> <dt>
+<code>(?!...)</code> </dt>
+<dd>
+<p>Matches if <code>...</code> doesn’t match next. This is a <em class="dfn">negative lookahead assertion</em>. For example, <code>Isaac (?!Asimov)</code> will match <code>'Isaac '</code> only if it’s <em>not</em> followed by <code>'Asimov'</code>.</p> </dd> </dl> <dl id="index-22"> <dt>
+<code>(?&lt;=...)</code> </dt>
+<dd>
+<p>Matches if the current position in the string is preceded by a match for <code>...</code> that ends at the current position. This is called a <em class="dfn">positive lookbehind assertion</em>. <code>(?&lt;=abc)def</code> will find a match in <code>'abcdef'</code>, since the lookbehind will back up 3 characters and check if the contained pattern matches. The contained pattern must only match strings of some fixed length, meaning that <code>abc</code> or <code>a|b</code> are allowed, but <code>a*</code> and <code>a{3,4}</code> are not. Note that patterns which start with positive lookbehind assertions will not match at the beginning of the string being searched; you will most likely want to use the <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a> function rather than the <a class="reference internal" href="#re.match" title="re.match"><code>match()</code></a> function:</p> <pre data-language="python">&gt;&gt;&gt; import re
+&gt;&gt;&gt; m = re.search('(?&lt;=abc)def', 'abcdef')
+&gt;&gt;&gt; m.group(0)
+'def'
+</pre> <p>This example looks for a word following a hyphen:</p> <pre data-language="python">&gt;&gt;&gt; m = re.search(r'(?&lt;=-)\w+', 'spam-egg')
+&gt;&gt;&gt; m.group(0)
+'egg'
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>Added support for group references of fixed length.</p> </div> </dd> </dl> <dl class="simple" id="index-23"> <dt>
+<code>(?&lt;!...)</code> </dt>
+<dd>
+<p>Matches if the current position in the string is not preceded by a match for <code>...</code>. This is called a <em class="dfn">negative lookbehind assertion</em>. Similar to positive lookbehind assertions, the contained pattern must only match strings of some fixed length. Patterns which start with negative lookbehind assertions may match at the beginning of the string being searched.</p> </dd> <dt>
+<code>(?(id/name)yes-pattern|no-pattern)</code> </dt>
+<dd>
+<p>Will try to match with <code>yes-pattern</code> if the group with given <em>id</em> or <em>name</em> exists, and with <code>no-pattern</code> if it doesn’t. <code>no-pattern</code> is optional and can be omitted. For example, <code>(&lt;)?(\w+@\w+(?:\.\w+)+)(?(1)&gt;|$)</code> is a poor email matching pattern, which will match with <code>'&lt;user@host.com&gt;'</code> as well as <code>'user@host.com'</code>, but not with <code>'&lt;user@host.com'</code> nor <code>'user@host.com&gt;'</code>.</p> </dd> </dl> <p>The special sequences consist of <code>'\'</code> and a character from the list below. If the ordinary character is not an ASCII digit or an ASCII letter, then the resulting RE will match the second character. For example, <code>\$</code> matches the character <code>'$'</code>.</p> <dl class="simple" id="index-24"> <dt>
+<code>\number</code> </dt>
+<dd>
+<p>Matches the contents of the group of the same number. Groups are numbered starting from 1. For example, <code>(.+) \1</code> matches <code>'the the'</code> or <code>'55 55'</code>, but not <code>'thethe'</code> (note the space after the group). This special sequence can only be used to match one of the first 99 groups. If the first digit of <em>number</em> is 0, or <em>number</em> is 3 octal digits long, it will not be interpreted as a group match, but as the character with octal value <em>number</em>. Inside the <code>'['</code> and <code>']'</code> of a character class, all numeric escapes are treated as characters.</p> </dd> </dl> <dl class="simple" id="index-25"> <dt>
+<code>\A</code> </dt>
+<dd>
+<p>Matches only at the start of the string.</p> </dd> </dl> <dl id="index-26"> <dt>
+<code>\b</code> </dt>
+<dd>
+<p>Matches the empty string, but only at the beginning or end of a word. A word is defined as a sequence of word characters. Note that formally, <code>\b</code> is defined as the boundary between a <code>\w</code> and a <code>\W</code> character (or vice versa), or between <code>\w</code> and the beginning/end of the string. This means that <code>r'\bfoo\b'</code> matches <code>'foo'</code>, <code>'foo.'</code>, <code>'(foo)'</code>, <code>'bar foo baz'</code> but not <code>'foobar'</code> or <code>'foo3'</code>.</p> <p>By default Unicode alphanumerics are the ones used in Unicode patterns, but this can be changed by using the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag. Word boundaries are determined by the current locale if the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>LOCALE</code></a> flag is used. Inside a character range, <code>\b</code> represents the backspace character, for compatibility with Python’s string literals.</p> </dd> </dl> <dl class="simple" id="index-27"> <dt>
+<code>\B</code> </dt>
+<dd>
+<p>Matches the empty string, but only when it is <em>not</em> at the beginning or end of a word. This means that <code>r'py\B'</code> matches <code>'python'</code>, <code>'py3'</code>, <code>'py2'</code>, but not <code>'py'</code>, <code>'py.'</code>, or <code>'py!'</code>. <code>\B</code> is just the opposite of <code>\b</code>, so word characters in Unicode patterns are Unicode alphanumerics or the underscore, although this can be changed by using the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag. Word boundaries are determined by the current locale if the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>LOCALE</code></a> flag is used.</p> </dd> </dl> <dl class="simple" id="index-28"> <dt>
+<code>\d</code> </dt>
+<dd>
+<dl class="simple"> <dt>For Unicode (str) patterns:</dt>
+<dd>
+<p>Matches any Unicode decimal digit (that is, any character in Unicode character category [Nd]). This includes <code>[0-9]</code>, and also many other digit characters. If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used only <code>[0-9]</code> is matched.</p> </dd> <dt>For 8-bit (bytes) patterns:</dt>
+<dd>
+<p>Matches any decimal digit; this is equivalent to <code>[0-9]</code>.</p> </dd> </dl> </dd> </dl> <dl class="simple" id="index-29"> <dt>
+<code>\D</code> </dt>
+<dd>
+<p>Matches any character which is not a decimal digit. This is the opposite of <code>\d</code>. If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used this becomes the equivalent of <code>[^0-9]</code>.</p> </dd> </dl> <dl class="simple" id="index-30"> <dt>
+<code>\s</code> </dt>
+<dd>
+<dl class="simple"> <dt>For Unicode (str) patterns:</dt>
+<dd>
+<p>Matches Unicode whitespace characters (which includes <code>[ \t\n\r\f\v]</code>, and also many other characters, for example the non-breaking spaces mandated by typography rules in many languages). If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used, only <code>[ \t\n\r\f\v]</code> is matched.</p> </dd> <dt>For 8-bit (bytes) patterns:</dt>
+<dd>
+<p>Matches characters considered whitespace in the ASCII character set; this is equivalent to <code>[ \t\n\r\f\v]</code>.</p> </dd> </dl> </dd> </dl> <dl class="simple" id="index-31"> <dt>
+<code>\S</code> </dt>
+<dd>
+<p>Matches any character which is not a whitespace character. This is the opposite of <code>\s</code>. If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used this becomes the equivalent of <code>[^ \t\n\r\f\v]</code>.</p> </dd> </dl> <dl class="simple" id="index-32"> <dt>
+<code>\w</code> </dt>
+<dd>
+<dl class="simple"> <dt>For Unicode (str) patterns:</dt>
+<dd>
+<p>Matches Unicode word characters; this includes most characters that can be part of a word in any language, as well as numbers and the underscore. If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used, only <code>[a-zA-Z0-9_]</code> is matched.</p> </dd> <dt>For 8-bit (bytes) patterns:</dt>
+<dd>
+<p>Matches characters considered alphanumeric in the ASCII character set; this is equivalent to <code>[a-zA-Z0-9_]</code>. If the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>LOCALE</code></a> flag is used, matches characters considered alphanumeric in the current locale and the underscore.</p> </dd> </dl> </dd> </dl> <dl class="simple" id="index-33"> <dt>
+<code>\W</code> </dt>
+<dd>
+<p>Matches any character which is not a word character. This is the opposite of <code>\w</code>. If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used this becomes the equivalent of <code>[^a-zA-Z0-9_]</code>. If the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>LOCALE</code></a> flag is used, matches characters which are neither alphanumeric in the current locale nor the underscore.</p> </dd> </dl> <dl class="simple" id="index-34"> <dt>
+<code>\Z</code> </dt>
+<dd>
+<p>Matches only at the end of the string.</p> </dd> </dl> <p id="index-35">Most of the standard escapes supported by Python string literals are also accepted by the regular expression parser:</p> <pre data-language="python">\a      \b      \f      \n
+\N      \r      \t      \u
+\U      \v      \x      \\
+</pre> <p>(Note that <code>\b</code> is used to represent word boundaries, and means “backspace” only inside character classes.)</p> <p><code>'\u'</code>, <code>'\U'</code>, and <code>'\N'</code> escape sequences are only recognized in Unicode patterns. In bytes patterns they are errors. Unknown escapes of ASCII letters are reserved for future use and treated as errors.</p> <p>Octal escapes are included in a limited form. If the first digit is a 0, or if there are three octal digits, it is considered an octal escape. Otherwise, it is a group reference. As for string literals, octal escapes are always at most three digits in length.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.3: </span>The <code>'\u'</code> and <code>'\U'</code> escape sequences have been added.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>Unknown escapes consisting of <code>'\'</code> and an ASCII letter now are errors.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.8: </span>The <code>'\N{name}'</code> escape sequence has been added. As in string literals, it expands to the named Unicode character (e.g. <code>'\N{EM DASH}'</code>).</p> </div>   <h2 id="contents-of-module-re">Module Contents</h2> <p id="module-contents">The module defines several functions, constants, and an exception. Some of the functions are simplified versions of the full featured methods for compiled regular expressions. Most non-trivial applications always use the compiled form.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>Flag constants are now instances of <code>RegexFlag</code>, which is a subclass of <a class="reference internal" href="enum#enum.IntFlag" title="enum.IntFlag"><code>enum.IntFlag</code></a>.</p> </div> <dl class="function"> <dt id="re.compile">
+<code>re.compile(pattern, flags=0)</code> </dt> <dd>
+<p>Compile a regular expression pattern into a <a class="reference internal" href="#re-objects"><span class="std std-ref">regular expression object</span></a>, which can be used for matching using its <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a>, <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> and other methods, described below.</p> <p>The expression’s behaviour can be modified by specifying a <em>flags</em> value. Values can be any of the following variables, combined using bitwise OR (the <code>|</code> operator).</p> <p>The sequence</p> <pre data-language="python">prog = re.compile(pattern)
+result = prog.match(string)
+</pre> <p>is equivalent to</p> <pre data-language="python">result = re.match(pattern, string)
+</pre> <p>but using <a class="reference internal" href="#re.compile" title="re.compile"><code>re.compile()</code></a> and saving the resulting regular expression object for reuse is more efficient when the expression will be used several times in a single program.</p> <div class="admonition note"> <p class="admonition-title">Note</p> <p>The compiled versions of the most recent patterns passed to <a class="reference internal" href="#re.compile" title="re.compile"><code>re.compile()</code></a> and the module-level matching functions are cached, so programs that use only a few regular expressions at a time needn’t worry about compiling regular expressions.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="re.A">
+<code>re.A</code> </dt> <dt id="re.ASCII">
+<code>re.ASCII</code> </dt> <dd>
+<p>Make <code>\w</code>, <code>\W</code>, <code>\b</code>, <code>\B</code>, <code>\d</code>, <code>\D</code>, <code>\s</code> and <code>\S</code> perform ASCII-only matching instead of full Unicode matching. This is only meaningful for Unicode patterns, and is ignored for byte patterns. Corresponds to the inline flag <code>(?a)</code>.</p> <p>Note that for backward compatibility, the <code>re.U</code> flag still exists (as well as its synonym <code>re.UNICODE</code> and its embedded counterpart <code>(?u)</code>), but these are redundant in Python 3 since matches are Unicode by default for strings (and Unicode matching isn’t allowed for bytes).</p> </dd>
+</dl> <dl class="data"> <dt id="re.DEBUG">
+<code>re.DEBUG</code> </dt> <dd>
+<p>Display debug information about compiled expression. No corresponding inline flag.</p> </dd>
+</dl> <dl class="data"> <dt id="re.I">
+<code>re.I</code> </dt> <dt id="re.IGNORECASE">
+<code>re.IGNORECASE</code> </dt> <dd>
+<p>Perform case-insensitive matching; expressions like <code>[A-Z]</code> will also match lowercase letters. Full Unicode matching (such as <code>Ü</code> matching <code>ü</code>) also works unless the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>re.ASCII</code></a> flag is used to disable non-ASCII matches. The current locale does not change the effect of this flag unless the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>re.LOCALE</code></a> flag is also used. Corresponds to the inline flag <code>(?i)</code>.</p> <p>Note that when the Unicode patterns <code>[a-z]</code> or <code>[A-Z]</code> are used in combination with the <a class="reference internal" href="#re.IGNORECASE" title="re.IGNORECASE"><code>IGNORECASE</code></a> flag, they will match the 52 ASCII letters and 4 additional non-ASCII letters: ‘İ’ (U+0130, Latin capital letter I with dot above), ‘ı’ (U+0131, Latin small letter dotless i), ‘ſ’ (U+017F, Latin small letter long s) and ‘K’ (U+212A, Kelvin sign). If the <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>ASCII</code></a> flag is used, only letters ‘a’ to ‘z’ and ‘A’ to ‘Z’ are matched.</p> </dd>
+</dl> <dl class="data"> <dt id="re.L">
+<code>re.L</code> </dt> <dt id="re.LOCALE">
+<code>re.LOCALE</code> </dt> <dd>
+<p>Make <code>\w</code>, <code>\W</code>, <code>\b</code>, <code>\B</code> and case-insensitive matching dependent on the current locale. This flag can be used only with bytes patterns. The use of this flag is discouraged as the locale mechanism is very unreliable, it only handles one “culture” at a time, and it only works with 8-bit locales. Unicode matching is already enabled by default in Python 3 for Unicode (str) patterns, and it is able to handle different locales/languages. Corresponds to the inline flag <code>(?L)</code>.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span><a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>re.LOCALE</code></a> can be used only with bytes patterns and is not compatible with <a class="reference internal" href="#re.ASCII" title="re.ASCII"><code>re.ASCII</code></a>.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Compiled regular expression objects with the <a class="reference internal" href="#re.LOCALE" title="re.LOCALE"><code>re.LOCALE</code></a> flag no longer depend on the locale at compile time. Only the locale at matching time affects the result of matching.</p> </div> </dd>
+</dl> <dl class="data"> <dt id="re.M">
+<code>re.M</code> </dt> <dt id="re.MULTILINE">
+<code>re.MULTILINE</code> </dt> <dd>
+<p>When specified, the pattern character <code>'^'</code> matches at the beginning of the string and at the beginning of each line (immediately following each newline); and the pattern character <code>'$'</code> matches at the end of the string and at the end of each line (immediately preceding each newline). By default, <code>'^'</code> matches only at the beginning of the string, and <code>'$'</code> only at the end of the string and immediately before the newline (if any) at the end of the string. Corresponds to the inline flag <code>(?m)</code>.</p> </dd>
+</dl> <dl class="data"> <dt id="re.S">
+<code>re.S</code> </dt> <dt id="re.DOTALL">
+<code>re.DOTALL</code> </dt> <dd>
+<p>Make the <code>'.'</code> special character match any character at all, including a newline; without this flag, <code>'.'</code> will match anything <em>except</em> a newline. Corresponds to the inline flag <code>(?s)</code>.</p> </dd>
+</dl> <dl class="data"> <dt id="re.X">
+<code>re.X</code> </dt> <dt id="re.VERBOSE">
+<code>re.VERBOSE</code> </dt> <dd>
+<p id="index-36">This flag allows you to write regular expressions that look nicer and are more readable by allowing you to visually separate logical sections of the pattern and add comments. Whitespace within the pattern is ignored, except when in a character class, or when preceded by an unescaped backslash, or within tokens like <code>*?</code>, <code>(?:</code> or <code>(?P&lt;...&gt;</code>. When a line contains a <code>#</code> that is not in a character class and is not preceded by an unescaped backslash, all characters from the leftmost such <code>#</code> through the end of the line are ignored.</p> <p>This means that the two following regular expression objects that match a decimal number are functionally equal:</p> <pre data-language="python">a = re.compile(r"""\d +  # the integral part
+                   \.    # the decimal point
+                   \d *  # some fractional digits""", re.X)
+b = re.compile(r"\d+\.\d*")
+</pre> <p>Corresponds to the inline flag <code>(?x)</code>.</p> </dd>
+</dl> <dl class="function"> <dt id="re.search">
+<code>re.search(pattern, string, flags=0)</code> </dt> <dd>
+<p>Scan through <em>string</em> looking for the first location where the regular expression <em>pattern</em> produces a match, and return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if no position in the string matches the pattern; note that this is different from finding a zero-length match at some point in the string.</p> </dd>
+</dl> <dl class="function"> <dt id="re.match">
+<code>re.match(pattern, string, flags=0)</code> </dt> <dd>
+<p>If zero or more characters at the beginning of <em>string</em> match the regular expression <em>pattern</em>, return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if the string does not match the pattern; note that this is different from a zero-length match.</p> <p>Note that even in <a class="reference internal" href="#re.MULTILINE" title="re.MULTILINE"><code>MULTILINE</code></a> mode, <a class="reference internal" href="#re.match" title="re.match"><code>re.match()</code></a> will only match at the beginning of the string and not at the beginning of each line.</p> <p>If you want to locate a match anywhere in <em>string</em>, use <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a> instead (see also <a class="reference internal" href="#search-vs-match"><span class="std std-ref">search() vs. match()</span></a>).</p> </dd>
+</dl> <dl class="function"> <dt id="re.fullmatch">
+<code>re.fullmatch(pattern, string, flags=0)</code> </dt> <dd>
+<p>If the whole <em>string</em> matches the regular expression <em>pattern</em>, return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if the string does not match the pattern; note that this is different from a zero-length match.</p> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.4.</span></p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.split">
+<code>re.split(pattern, string, maxsplit=0, flags=0)</code> </dt> <dd>
+<p>Split <em>string</em> by the occurrences of <em>pattern</em>. If capturing parentheses are used in <em>pattern</em>, then the text of all groups in the pattern are also returned as part of the resulting list. If <em>maxsplit</em> is nonzero, at most <em>maxsplit</em> splits occur, and the remainder of the string is returned as the final element of the list.</p> <pre data-language="python">&gt;&gt;&gt; re.split(r'\W+', 'Words, words, words.')
+['Words', 'words', 'words', '']
+&gt;&gt;&gt; re.split(r'(\W+)', 'Words, words, words.')
+['Words', ', ', 'words', ', ', 'words', '.', '']
+&gt;&gt;&gt; re.split(r'\W+', 'Words, words, words.', 1)
+['Words', 'words, words.']
+&gt;&gt;&gt; re.split('[a-f]+', '0a3B9', flags=re.IGNORECASE)
+['0', '3', '9']
+</pre> <p>If there are capturing groups in the separator and it matches at the start of the string, the result will start with an empty string. The same holds for the end of the string:</p> <pre data-language="python">&gt;&gt;&gt; re.split(r'(\W+)', '...words, words...')
+['', '...', 'words', ', ', 'words', '...', '']
+</pre> <p>That way, separator components are always found at the same relative indices within the result list.</p> <p>Empty matches for the pattern split the string only when not adjacent to a previous empty match.</p> <pre data-language="python">&gt;&gt;&gt; re.split(r'\b', 'Words, words, words.')
+['', 'Words', ', ', 'words', ', ', 'words', '.']
+&gt;&gt;&gt; re.split(r'\W*', '...words...')
+['', '', 'w', 'o', 'r', 'd', 's', '', '']
+&gt;&gt;&gt; re.split(r'(\W*)', '...words...')
+['', '...', '', '', 'w', '', 'o', '', 'r', '', 'd', '', 's', '...', '', '', '']
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.1: </span>Added the optional flags argument.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Added support of splitting on a pattern that could match an empty string.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.findall">
+<code>re.findall(pattern, string, flags=0)</code> </dt> <dd>
+<p>Return all non-overlapping matches of <em>pattern</em> in <em>string</em>, as a list of strings. The <em>string</em> is scanned left-to-right, and matches are returned in the order found. If one or more groups are present in the pattern, return a list of groups; this will be a list of tuples if the pattern has more than one group. Empty matches are included in the result.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Non-empty matches can now start just after a previous empty match.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.finditer">
+<code>re.finditer(pattern, string, flags=0)</code> </dt> <dd>
+<p>Return an <a class="reference internal" href="https://docs.python.org/3.9/glossary.html#term-iterator"><span class="xref std std-term">iterator</span></a> yielding <a class="reference internal" href="#match-objects"><span class="std std-ref">match objects</span></a> over all non-overlapping matches for the RE <em>pattern</em> in <em>string</em>. The <em>string</em> is scanned left-to-right, and matches are returned in the order found. Empty matches are included in the result.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Non-empty matches can now start just after a previous empty match.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.sub">
+<code>re.sub(pattern, repl, string, count=0, flags=0)</code> </dt> <dd>
+<p>Return the string obtained by replacing the leftmost non-overlapping occurrences of <em>pattern</em> in <em>string</em> by the replacement <em>repl</em>. If the pattern isn’t found, <em>string</em> is returned unchanged. <em>repl</em> can be a string or a function; if it is a string, any backslash escapes in it are processed. That is, <code>\n</code> is converted to a single newline character, <code>\r</code> is converted to a carriage return, and so forth. Unknown escapes of ASCII letters are reserved for future use and treated as errors. Other unknown escapes such as <code>\&amp;</code> are left alone. Backreferences, such as <code>\6</code>, are replaced with the substring matched by group 6 in the pattern. For example:</p> <pre data-language="python">&gt;&gt;&gt; re.sub(r'def\s+([a-zA-Z_][a-zA-Z_0-9]*)\s*\(\s*\):',
+...        r'static PyObject*\npy_\1(void)\n{',
+...        'def myfunc():')
+'static PyObject*\npy_myfunc(void)\n{'
+</pre> <p>If <em>repl</em> is a function, it is called for every non-overlapping occurrence of <em>pattern</em>. The function takes a single <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a> argument, and returns the replacement string. For example:</p> <pre data-language="python">&gt;&gt;&gt; def dashrepl(matchobj):
+...     if matchobj.group(0) == '-': return ' '
+...     else: return '-'
+&gt;&gt;&gt; re.sub('-{1,2}', dashrepl, 'pro----gram-files')
+'pro--gram files'
+&gt;&gt;&gt; re.sub(r'\sAND\s', ' &amp; ', 'Baked Beans And Spam', flags=re.IGNORECASE)
+'Baked Beans &amp; Spam'
+</pre> <p>The pattern may be a string or a <a class="reference internal" href="#re-objects"><span class="std std-ref">pattern object</span></a>.</p> <p>The optional argument <em>count</em> is the maximum number of pattern occurrences to be replaced; <em>count</em> must be a non-negative integer. If omitted or zero, all occurrences will be replaced. Empty matches for the pattern are replaced only when not adjacent to a previous empty match, so <code>sub('x*', '-', 'abxd')</code> returns <code>'-a-b--d-'</code>.</p> <p id="index-37">In string-type <em>repl</em> arguments, in addition to the character escapes and backreferences described above, <code>\g&lt;name&gt;</code> will use the substring matched by the group named <code>name</code>, as defined by the <code>(?P&lt;name&gt;...)</code> syntax. <code>\g&lt;number&gt;</code> uses the corresponding group number; <code>\g&lt;2&gt;</code> is therefore equivalent to <code>\2</code>, but isn’t ambiguous in a replacement such as <code>\g&lt;2&gt;0</code>. <code>\20</code> would be interpreted as a reference to group 20, not a reference to group 2 followed by the literal character <code>'0'</code>. The backreference <code>\g&lt;0&gt;</code> substitutes in the entire substring matched by the RE.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.1: </span>Added the optional flags argument.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>Unmatched groups are replaced with an empty string.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.6: </span>Unknown escapes in <em>pattern</em> consisting of <code>'\'</code> and an ASCII letter now are errors.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Unknown escapes in <em>repl</em> consisting of <code>'\'</code> and an ASCII letter now are errors.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Empty matches for the pattern are replaced when adjacent to a previous non-empty match.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.subn">
+<code>re.subn(pattern, repl, string, count=0, flags=0)</code> </dt> <dd>
+<p>Perform the same operation as <a class="reference internal" href="#re.sub" title="re.sub"><code>sub()</code></a>, but return a tuple <code>(new_string,
+number_of_subs_made)</code>.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.1: </span>Added the optional flags argument.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>Unmatched groups are replaced with an empty string.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.escape">
+<code>re.escape(pattern)</code> </dt> <dd>
+<p>Escape special characters in <em>pattern</em>. This is useful if you want to match an arbitrary literal string that may have regular expression metacharacters in it. For example:</p> <pre data-language="python">&gt;&gt;&gt; print(re.escape('http://www.python.org'))
+http://www\.python\.org
+
+&gt;&gt;&gt; legal_chars = string.ascii_lowercase + string.digits + "!#$%&amp;'*+-.^_`|~:"
+&gt;&gt;&gt; print('[%s]+' % re.escape(legal_chars))
+[abcdefghijklmnopqrstuvwxyz0123456789!\#\$%\&amp;'\*\+\-\.\^_`\|\~:]+
+
+&gt;&gt;&gt; operators = ['+', '-', '*', '/', '**']
+&gt;&gt;&gt; print('|'.join(map(re.escape, sorted(operators, reverse=True))))
+/|\-|\+|\*\*|\*
+</pre> <p>This function must not be used for the replacement string in <a class="reference internal" href="#re.sub" title="re.sub"><code>sub()</code></a> and <a class="reference internal" href="#re.subn" title="re.subn"><code>subn()</code></a>, only backslashes should be escaped. For example:</p> <pre data-language="python">&gt;&gt;&gt; digits_re = r'\d+'
+&gt;&gt;&gt; sample = '/usr/sbin/sendmail - 0 errors, 12 warnings'
+&gt;&gt;&gt; print(re.sub(digits_re, digits_re.replace('\\', r'\\'), sample))
+/usr/sbin/sendmail - \d+ errors, \d+ warnings
+</pre> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.3: </span>The <code>'_'</code> character is no longer escaped.</p> </div> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Only characters that can have special meaning in a regular expression are escaped. As a result, <code>'!'</code>, <code>'"'</code>, <code>'%'</code>, <code>"'"</code>, <code>','</code>, <code>'/'</code>, <code>':'</code>, <code>';'</code>, <code>'&lt;'</code>, <code>'='</code>, <code>'&gt;'</code>, <code>'@'</code>, and <code>"`"</code> are no longer escaped.</p> </div> </dd>
+</dl> <dl class="function"> <dt id="re.purge">
+<code>re.purge()</code> </dt> <dd>
+<p>Clear the regular expression cache.</p> </dd>
+</dl> <dl class="exception"> <dt id="re.error">
+<code>exception re.error(msg, pattern=None, pos=None)</code> </dt> <dd>
+<p>Exception raised when a string passed to one of the functions here is not a valid regular expression (for example, it might contain unmatched parentheses) or when some other error occurs during compilation or matching. It is never an error if a string contains no match for a pattern. The error instance has the following additional attributes:</p> <dl class="attribute"> <dt id="re.error.msg">
+<code>msg</code> </dt> <dd>
+<p>The unformatted error message.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.error.pattern">
+<code>pattern</code> </dt> <dd>
+<p>The regular expression pattern.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.error.pos">
+<code>pos</code> </dt> <dd>
+<p>The index in <em>pattern</em> where compilation failed (may be <code>None</code>).</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.error.lineno">
+<code>lineno</code> </dt> <dd>
+<p>The line corresponding to <em>pos</em> (may be <code>None</code>).</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.error.colno">
+<code>colno</code> </dt> <dd>
+<p>The column corresponding to <em>pos</em> (may be <code>None</code>).</p> </dd>
+</dl> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>Added additional attributes.</p> </div> </dd>
+</dl>   <h2 id="re-objects">Regular Expression Objects</h2> <p id="regular-expression-objects">Compiled regular expression objects support the following methods and attributes:</p> <dl class="method"> <dt id="re.Pattern.search">
+<code>Pattern.search(string[, pos[, endpos]])</code> </dt> <dd>
+<p>Scan through <em>string</em> looking for the first location where this regular expression produces a match, and return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if no position in the string matches the pattern; note that this is different from finding a zero-length match at some point in the string.</p> <p>The optional second parameter <em>pos</em> gives an index in the string where the search is to start; it defaults to <code>0</code>. This is not completely equivalent to slicing the string; the <code>'^'</code> pattern character matches at the real beginning of the string and at positions just after a newline, but not necessarily at the index where the search is to start.</p> <p>The optional parameter <em>endpos</em> limits how far the string will be searched; it will be as if the string is <em>endpos</em> characters long, so only the characters from <em>pos</em> to <code>endpos - 1</code> will be searched for a match. If <em>endpos</em> is less than <em>pos</em>, no match will be found; otherwise, if <em>rx</em> is a compiled regular expression object, <code>rx.search(string, 0, 50)</code> is equivalent to <code>rx.search(string[:50], 0)</code>.</p> <pre data-language="python">&gt;&gt;&gt; pattern = re.compile("d")
+&gt;&gt;&gt; pattern.search("dog")     # Match at index 0
+&lt;re.Match object; span=(0, 1), match='d'&gt;
+&gt;&gt;&gt; pattern.search("dog", 1)  # No match; search doesn't include the "d"
+</pre> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.match">
+<code>Pattern.match(string[, pos[, endpos]])</code> </dt> <dd>
+<p>If zero or more characters at the <em>beginning</em> of <em>string</em> match this regular expression, return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if the string does not match the pattern; note that this is different from a zero-length match.</p> <p>The optional <em>pos</em> and <em>endpos</em> parameters have the same meaning as for the <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> method.</p> <pre data-language="python">&gt;&gt;&gt; pattern = re.compile("o")
+&gt;&gt;&gt; pattern.match("dog")      # No match as "o" is not at the start of "dog".
+&gt;&gt;&gt; pattern.match("dog", 1)   # Match as "o" is the 2nd character of "dog".
+&lt;re.Match object; span=(1, 2), match='o'&gt;
+</pre> <p>If you want to locate a match anywhere in <em>string</em>, use <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> instead (see also <a class="reference internal" href="#search-vs-match"><span class="std std-ref">search() vs. match()</span></a>).</p> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.fullmatch">
+<code>Pattern.fullmatch(string[, pos[, endpos]])</code> </dt> <dd>
+<p>If the whole <em>string</em> matches this regular expression, return a corresponding <a class="reference internal" href="#match-objects"><span class="std std-ref">match object</span></a>. Return <code>None</code> if the string does not match the pattern; note that this is different from a zero-length match.</p> <p>The optional <em>pos</em> and <em>endpos</em> parameters have the same meaning as for the <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> method.</p> <pre data-language="python">&gt;&gt;&gt; pattern = re.compile("o[gh]")
+&gt;&gt;&gt; pattern.fullmatch("dog")      # No match as "o" is not at the start of "dog".
+&gt;&gt;&gt; pattern.fullmatch("ogre")     # No match as not the full string matches.
+&gt;&gt;&gt; pattern.fullmatch("doggie", 1, 3)   # Matches within given limits.
+&lt;re.Match object; span=(1, 3), match='og'&gt;
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.4.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.split">
+<code>Pattern.split(string, maxsplit=0)</code> </dt> <dd>
+<p>Identical to the <a class="reference internal" href="#re.split" title="re.split"><code>split()</code></a> function, using the compiled pattern.</p> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.findall">
+<code>Pattern.findall(string[, pos[, endpos]])</code> </dt> <dd>
+<p>Similar to the <a class="reference internal" href="#re.findall" title="re.findall"><code>findall()</code></a> function, using the compiled pattern, but also accepts optional <em>pos</em> and <em>endpos</em> parameters that limit the search region like for <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.finditer">
+<code>Pattern.finditer(string[, pos[, endpos]])</code> </dt> <dd>
+<p>Similar to the <a class="reference internal" href="#re.finditer" title="re.finditer"><code>finditer()</code></a> function, using the compiled pattern, but also accepts optional <em>pos</em> and <em>endpos</em> parameters that limit the search region like for <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a>.</p> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.sub">
+<code>Pattern.sub(repl, string, count=0)</code> </dt> <dd>
+<p>Identical to the <a class="reference internal" href="#re.sub" title="re.sub"><code>sub()</code></a> function, using the compiled pattern.</p> </dd>
+</dl> <dl class="method"> <dt id="re.Pattern.subn">
+<code>Pattern.subn(repl, string, count=0)</code> </dt> <dd>
+<p>Identical to the <a class="reference internal" href="#re.subn" title="re.subn"><code>subn()</code></a> function, using the compiled pattern.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Pattern.flags">
+<code>Pattern.flags</code> </dt> <dd>
+<p>The regex matching flags. This is a combination of the flags given to <a class="reference internal" href="#re.compile" title="re.compile"><code>compile()</code></a>, any <code>(?...)</code> inline flags in the pattern, and implicit flags such as <code>UNICODE</code> if the pattern is a Unicode string.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Pattern.groups">
+<code>Pattern.groups</code> </dt> <dd>
+<p>The number of capturing groups in the pattern.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Pattern.groupindex">
+<code>Pattern.groupindex</code> </dt> <dd>
+<p>A dictionary mapping any symbolic group names defined by <code>(?P&lt;id&gt;)</code> to group numbers. The dictionary is empty if no symbolic groups were used in the pattern.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Pattern.pattern">
+<code>Pattern.pattern</code> </dt> <dd>
+<p>The pattern string from which the pattern object was compiled.</p> </dd>
+</dl> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Added support of <a class="reference internal" href="copy#copy.copy" title="copy.copy"><code>copy.copy()</code></a> and <a class="reference internal" href="copy#copy.deepcopy" title="copy.deepcopy"><code>copy.deepcopy()</code></a>. Compiled regular expression objects are considered atomic.</p> </div>   <h2 id="id2">Match Objects</h2> <p id="match-objects">Match objects always have a boolean value of <code>True</code>. Since <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a> and <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> return <code>None</code> when there is no match, you can test whether there was a match with a simple <code>if</code> statement:</p> <pre data-language="python">match = re.search(pattern, string)
+if match:
+    process(match)
+</pre> <p>Match objects support the following methods and attributes:</p> <dl class="method"> <dt id="re.Match.expand">
+<code>Match.expand(template)</code> </dt> <dd>
+<p>Return the string obtained by doing backslash substitution on the template string <em>template</em>, as done by the <a class="reference internal" href="#re.Pattern.sub" title="re.Pattern.sub"><code>sub()</code></a> method. Escapes such as <code>\n</code> are converted to the appropriate characters, and numeric backreferences (<code>\1</code>, <code>\2</code>) and named backreferences (<code>\g&lt;1&gt;</code>, <code>\g&lt;name&gt;</code>) are replaced by the contents of the corresponding group.</p> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.5: </span>Unmatched groups are replaced with an empty string.</p> </div> </dd>
+</dl> <dl class="method"> <dt id="re.Match.group">
+<code>Match.group([group1, ...])</code> </dt> <dd>
+<p>Returns one or more subgroups of the match. If there is a single argument, the result is a single string; if there are multiple arguments, the result is a tuple with one item per argument. Without arguments, <em>group1</em> defaults to zero (the whole match is returned). If a <em>groupN</em> argument is zero, the corresponding return value is the entire matching string; if it is in the inclusive range [1..99], it is the string matching the corresponding parenthesized group. If a group number is negative or larger than the number of groups defined in the pattern, an <a class="reference internal" href="exceptions#IndexError" title="IndexError"><code>IndexError</code></a> exception is raised. If a group is contained in a part of the pattern that did not match, the corresponding result is <code>None</code>. If a group is contained in a part of the pattern that matched multiple times, the last match is returned.</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(\w+) (\w+)", "Isaac Newton, physicist")
+&gt;&gt;&gt; m.group(0)       # The entire match
+'Isaac Newton'
+&gt;&gt;&gt; m.group(1)       # The first parenthesized subgroup.
+'Isaac'
+&gt;&gt;&gt; m.group(2)       # The second parenthesized subgroup.
+'Newton'
+&gt;&gt;&gt; m.group(1, 2)    # Multiple arguments give us a tuple.
+('Isaac', 'Newton')
+</pre> <p>If the regular expression uses the <code>(?P&lt;name&gt;...)</code> syntax, the <em>groupN</em> arguments may also be strings identifying groups by their group name. If a string argument is not used as a group name in the pattern, an <a class="reference internal" href="exceptions#IndexError" title="IndexError"><code>IndexError</code></a> exception is raised.</p> <p>A moderately complicated example:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(?P&lt;first_name&gt;\w+) (?P&lt;last_name&gt;\w+)", "Malcolm Reynolds")
+&gt;&gt;&gt; m.group('first_name')
+'Malcolm'
+&gt;&gt;&gt; m.group('last_name')
+'Reynolds'
+</pre> <p>Named groups can also be referred to by their index:</p> <pre data-language="python">&gt;&gt;&gt; m.group(1)
+'Malcolm'
+&gt;&gt;&gt; m.group(2)
+'Reynolds'
+</pre> <p>If a group matches multiple times, only the last match is accessible:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(..)+", "a1b2c3")  # Matches 3 times.
+&gt;&gt;&gt; m.group(1)                        # Returns only the last match.
+'c3'
+</pre> </dd>
+</dl> <dl class="method"> <dt id="re.Match.__getitem__">
+<code>Match.__getitem__(g)</code> </dt> <dd>
+<p>This is identical to <code>m.group(g)</code>. This allows easier access to an individual group from a match:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(\w+) (\w+)", "Isaac Newton, physicist")
+&gt;&gt;&gt; m[0]       # The entire match
+'Isaac Newton'
+&gt;&gt;&gt; m[1]       # The first parenthesized subgroup.
+'Isaac'
+&gt;&gt;&gt; m[2]       # The second parenthesized subgroup.
+'Newton'
+</pre> <div class="versionadded"> <p><span class="versionmodified added">New in version 3.6.</span></p> </div> </dd>
+</dl> <dl class="method"> <dt id="re.Match.groups">
+<code>Match.groups(default=None)</code> </dt> <dd>
+<p>Return a tuple containing all the subgroups of the match, from 1 up to however many groups are in the pattern. The <em>default</em> argument is used for groups that did not participate in the match; it defaults to <code>None</code>.</p> <p>For example:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(\d+)\.(\d+)", "24.1632")
+&gt;&gt;&gt; m.groups()
+('24', '1632')
+</pre> <p>If we make the decimal place and everything after it optional, not all groups might participate in the match. These groups will default to <code>None</code> unless the <em>default</em> argument is given:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(\d+)\.?(\d+)?", "24")
+&gt;&gt;&gt; m.groups()      # Second group defaults to None.
+('24', None)
+&gt;&gt;&gt; m.groups('0')   # Now, the second group defaults to '0'.
+('24', '0')
+</pre> </dd>
+</dl> <dl class="method"> <dt id="re.Match.groupdict">
+<code>Match.groupdict(default=None)</code> </dt> <dd>
+<p>Return a dictionary containing all the <em>named</em> subgroups of the match, keyed by the subgroup name. The <em>default</em> argument is used for groups that did not participate in the match; it defaults to <code>None</code>. For example:</p> <pre data-language="python">&gt;&gt;&gt; m = re.match(r"(?P&lt;first_name&gt;\w+) (?P&lt;last_name&gt;\w+)", "Malcolm Reynolds")
+&gt;&gt;&gt; m.groupdict()
+{'first_name': 'Malcolm', 'last_name': 'Reynolds'}
+</pre> </dd>
+</dl> <dl class="method"> <dt id="re.Match.start">
+<code>Match.start([group])</code> </dt> <dt id="re.Match.end">
+<code>Match.end([group])</code> </dt> <dd>
+<p>Return the indices of the start and end of the substring matched by <em>group</em>; <em>group</em> defaults to zero (meaning the whole matched substring). Return <code>-1</code> if <em>group</em> exists but did not contribute to the match. For a match object <em>m</em>, and a group <em>g</em> that did contribute to the match, the substring matched by group <em>g</em> (equivalent to <code>m.group(g)</code>) is</p> <pre data-language="python">m.string[m.start(g):m.end(g)]
+</pre> <p>Note that <code>m.start(group)</code> will equal <code>m.end(group)</code> if <em>group</em> matched a null string. For example, after <code>m = re.search('b(c?)', 'cba')</code>, <code>m.start(0)</code> is 1, <code>m.end(0)</code> is 2, <code>m.start(1)</code> and <code>m.end(1)</code> are both 2, and <code>m.start(2)</code> raises an <a class="reference internal" href="exceptions#IndexError" title="IndexError"><code>IndexError</code></a> exception.</p> <p>An example that will remove <em>remove_this</em> from email addresses:</p> <pre data-language="python">&gt;&gt;&gt; email = "tony@tiremove_thisger.net"
+&gt;&gt;&gt; m = re.search("remove_this", email)
+&gt;&gt;&gt; email[:m.start()] + email[m.end():]
+'tony@tiger.net'
+</pre> </dd>
+</dl> <dl class="method"> <dt id="re.Match.span">
+<code>Match.span([group])</code> </dt> <dd>
+<p>For a match <em>m</em>, return the 2-tuple <code>(m.start(group), m.end(group))</code>. Note that if <em>group</em> did not contribute to the match, this is <code>(-1, -1)</code>. <em>group</em> defaults to zero, the entire match.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.pos">
+<code>Match.pos</code> </dt> <dd>
+<p>The value of <em>pos</em> which was passed to the <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> or <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a> method of a <a class="reference internal" href="#re-objects"><span class="std std-ref">regex object</span></a>. This is the index into the string at which the RE engine started looking for a match.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.endpos">
+<code>Match.endpos</code> </dt> <dd>
+<p>The value of <em>endpos</em> which was passed to the <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> or <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a> method of a <a class="reference internal" href="#re-objects"><span class="std std-ref">regex object</span></a>. This is the index into the string beyond which the RE engine will not go.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.lastindex">
+<code>Match.lastindex</code> </dt> <dd>
+<p>The integer index of the last matched capturing group, or <code>None</code> if no group was matched at all. For example, the expressions <code>(a)b</code>, <code>((a)(b))</code>, and <code>((ab))</code> will have <code>lastindex == 1</code> if applied to the string <code>'ab'</code>, while the expression <code>(a)(b)</code> will have <code>lastindex == 2</code>, if applied to the same string.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.lastgroup">
+<code>Match.lastgroup</code> </dt> <dd>
+<p>The name of the last matched capturing group, or <code>None</code> if the group didn’t have a name, or if no group was matched at all.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.re">
+<code>Match.re</code> </dt> <dd>
+<p>The <a class="reference internal" href="#re-objects"><span class="std std-ref">regular expression object</span></a> whose <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a> or <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a> method produced this match instance.</p> </dd>
+</dl> <dl class="attribute"> <dt id="re.Match.string">
+<code>Match.string</code> </dt> <dd>
+<p>The string passed to <a class="reference internal" href="#re.Pattern.match" title="re.Pattern.match"><code>match()</code></a> or <a class="reference internal" href="#re.Pattern.search" title="re.Pattern.search"><code>search()</code></a>.</p> </dd>
+</dl> <div class="versionchanged"> <p><span class="versionmodified changed">Changed in version 3.7: </span>Added support of <a class="reference internal" href="copy#copy.copy" title="copy.copy"><code>copy.copy()</code></a> and <a class="reference internal" href="copy#copy.deepcopy" title="copy.deepcopy"><code>copy.deepcopy()</code></a>. Match objects are considered atomic.</p> </div>   <h2 id="re-examples">Regular Expression Examples</h2>  <h3 id="regular-expression-examples">Checking for a Pair</h3> <p>In this example, we’ll use the following helper function to display match objects a little more gracefully:</p> <pre data-language="python">def displaymatch(match):
+    if match is None:
+        return None
+    return '&lt;Match: %r, groups=%r&gt;' % (match.group(), match.groups())
+</pre> <p>Suppose you are writing a poker program where a player’s hand is represented as a 5-character string with each character representing a card, “a” for ace, “k” for king, “q” for queen, “j” for jack, “t” for 10, and “2” through “9” representing the card with that value.</p> <p>To see if a given string is a valid hand, one could do the following:</p> <pre data-language="python">&gt;&gt;&gt; valid = re.compile(r"^[a2-9tjqk]{5}$")
+&gt;&gt;&gt; displaymatch(valid.match("akt5q"))  # Valid.
+"&lt;Match: 'akt5q', groups=()&gt;"
+&gt;&gt;&gt; displaymatch(valid.match("akt5e"))  # Invalid.
+&gt;&gt;&gt; displaymatch(valid.match("akt"))    # Invalid.
+&gt;&gt;&gt; displaymatch(valid.match("727ak"))  # Valid.
+"&lt;Match: '727ak', groups=()&gt;"
+</pre> <p>That last hand, <code>"727ak"</code>, contained a pair, or two of the same valued cards. To match this with a regular expression, one could use backreferences as such:</p> <pre data-language="python">&gt;&gt;&gt; pair = re.compile(r".*(.).*\1")
+&gt;&gt;&gt; displaymatch(pair.match("717ak"))     # Pair of 7s.
+"&lt;Match: '717', groups=('7',)&gt;"
+&gt;&gt;&gt; displaymatch(pair.match("718ak"))     # No pairs.
+&gt;&gt;&gt; displaymatch(pair.match("354aa"))     # Pair of aces.
+"&lt;Match: '354aa', groups=('a',)&gt;"
+</pre> <p>To find out what card the pair consists of, one could use the <a class="reference internal" href="#re.Match.group" title="re.Match.group"><code>group()</code></a> method of the match object in the following manner:</p> <pre data-language="python">&gt;&gt;&gt; pair = re.compile(r".*(.).*\1")
+&gt;&gt;&gt; pair.match("717ak").group(1)
+'7'
+
+# Error because re.match() returns None, which doesn't have a group() method:
+&gt;&gt;&gt; pair.match("718ak").group(1)
+Traceback (most recent call last):
+  File "&lt;pyshell#23&gt;", line 1, in &lt;module&gt;
+    re.match(r".*(.).*\1", "718ak").group(1)
+AttributeError: 'NoneType' object has no attribute 'group'
+
+&gt;&gt;&gt; pair.match("354aa").group(1)
+'a'
+</pre>   <h3 id="simulating-scanf">Simulating scanf()</h3> <p id="index-38">Python does not currently have an equivalent to <code>scanf()</code>. Regular expressions are generally more powerful, though also more verbose, than <code>scanf()</code> format strings. The table below offers some more-or-less equivalent mappings between <code>scanf()</code> format tokens and regular expressions.</p> <table class="docutils align-default">  <thead> <tr>
+<th class="head"><p><code>scanf()</code> Token</p></th> <th class="head"><p>Regular Expression</p></th> </tr> </thead>  <tr>
+<td><p><code>%c</code></p></td> <td><p><code>.</code></p></td> </tr> <tr>
+<td><p><code>%5c</code></p></td> <td><p><code>.{5}</code></p></td> </tr> <tr>
+<td><p><code>%d</code></p></td> <td><p><code>[-+]?\d+</code></p></td> </tr> <tr>
+<td><p><code>%e</code>, <code>%E</code>, <code>%f</code>, <code>%g</code></p></td> <td><p><code>[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?</code></p></td> </tr> <tr>
+<td><p><code>%i</code></p></td> <td><p><code>[-+]?(0[xX][\dA-Fa-f]+|0[0-7]*|\d+)</code></p></td> </tr> <tr>
+<td><p><code>%o</code></p></td> <td><p><code>[-+]?[0-7]+</code></p></td> </tr> <tr>
+<td><p><code>%s</code></p></td> <td><p><code>\S+</code></p></td> </tr> <tr>
+<td><p><code>%u</code></p></td> <td><p><code>\d+</code></p></td> </tr> <tr>
+<td><p><code>%x</code>, <code>%X</code></p></td> <td><p><code>[-+]?(0[xX])?[\dA-Fa-f]+</code></p></td> </tr>  </table> <p>To extract the filename and numbers from a string like</p> <pre data-language="python">/usr/sbin/sendmail - 0 errors, 4 warnings
+</pre> <p>you would use a <code>scanf()</code> format like</p> <pre data-language="python">%s - %d errors, %d warnings
+</pre> <p>The equivalent regular expression would be</p> <pre data-language="python">(\S+) - (\d+) errors, (\d+) warnings
+</pre>   <h3 id="id3">search() vs. match()</h3> <p id="search-vs-match">Python offers two different primitive operations based on regular expressions: <a class="reference internal" href="#re.match" title="re.match"><code>re.match()</code></a> checks for a match only at the beginning of the string, while <a class="reference internal" href="#re.search" title="re.search"><code>re.search()</code></a> checks for a match anywhere in the string (this is what Perl does by default).</p> <p>For example:</p> <pre data-language="python">&gt;&gt;&gt; re.match("c", "abcdef")    # No match
+&gt;&gt;&gt; re.search("c", "abcdef")   # Match
+&lt;re.Match object; span=(2, 3), match='c'&gt;
+</pre> <p>Regular expressions beginning with <code>'^'</code> can be used with <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a> to restrict the match at the beginning of the string:</p> <pre data-language="python">&gt;&gt;&gt; re.match("c", "abcdef")    # No match
+&gt;&gt;&gt; re.search("^c", "abcdef")  # No match
+&gt;&gt;&gt; re.search("^a", "abcdef")  # Match
+&lt;re.Match object; span=(0, 1), match='a'&gt;
+</pre> <p>Note however that in <a class="reference internal" href="#re.MULTILINE" title="re.MULTILINE"><code>MULTILINE</code></a> mode <a class="reference internal" href="#re.match" title="re.match"><code>match()</code></a> only matches at the beginning of the string, whereas using <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a> with a regular expression beginning with <code>'^'</code> will match at the beginning of each line.</p> <pre data-language="python">&gt;&gt;&gt; re.match('X', 'A\nB\nX', re.MULTILINE)  # No match
+&gt;&gt;&gt; re.search('^X', 'A\nB\nX', re.MULTILINE)  # Match
+&lt;re.Match object; span=(4, 5), match='X'&gt;
+</pre>   <h3 id="making-a-phonebook">Making a Phonebook</h3> <p><a class="reference internal" href="#re.split" title="re.split"><code>split()</code></a> splits a string into a list delimited by the passed pattern. The method is invaluable for converting textual data into data structures that can be easily read and modified by Python as demonstrated in the following example that creates a phonebook.</p> <p>First, here is the input. Normally it may come from a file, here we are using triple-quoted string syntax</p> <pre data-language="pycon3">&gt;&gt;&gt; text = """Ross McFluff: 834.345.1254 155 Elm Street
+...
+... Ronald Heathmore: 892.345.3428 436 Finley Avenue
+... Frank Burger: 925.541.7625 662 South Dogwood Way
+...
+...
+... Heather Albrecht: 548.326.4584 919 Park Place"""
+</pre> <p>The entries are separated by one or more newlines. Now we convert the string into a list with each nonempty line having its own entry:</p> <pre data-language="pycon3">&gt;&gt;&gt; entries = re.split("\n+", text)
+&gt;&gt;&gt; entries
+['Ross McFluff: 834.345.1254 155 Elm Street',
+'Ronald Heathmore: 892.345.3428 436 Finley Avenue',
+'Frank Burger: 925.541.7625 662 South Dogwood Way',
+'Heather Albrecht: 548.326.4584 919 Park Place']
+</pre> <p>Finally, split each entry into a list with first name, last name, telephone number, and address. We use the <code>maxsplit</code> parameter of <a class="reference internal" href="#re.split" title="re.split"><code>split()</code></a> because the address has spaces, our splitting pattern, in it:</p> <pre data-language="pycon3">&gt;&gt;&gt; [re.split(":? ", entry, 3) for entry in entries]
+[['Ross', 'McFluff', '834.345.1254', '155 Elm Street'],
+['Ronald', 'Heathmore', '892.345.3428', '436 Finley Avenue'],
+['Frank', 'Burger', '925.541.7625', '662 South Dogwood Way'],
+['Heather', 'Albrecht', '548.326.4584', '919 Park Place']]
+</pre> <p>The <code>:?</code> pattern matches the colon after the last name, so that it does not occur in the result list. With a <code>maxsplit</code> of <code>4</code>, we could separate the house number from the street name:</p> <pre data-language="pycon3">&gt;&gt;&gt; [re.split(":? ", entry, 4) for entry in entries]
+[['Ross', 'McFluff', '834.345.1254', '155', 'Elm Street'],
+['Ronald', 'Heathmore', '892.345.3428', '436', 'Finley Avenue'],
+['Frank', 'Burger', '925.541.7625', '662', 'South Dogwood Way'],
+['Heather', 'Albrecht', '548.326.4584', '919', 'Park Place']]
+</pre>   <h3 id="text-munging">Text Munging</h3> <p><a class="reference internal" href="#re.sub" title="re.sub"><code>sub()</code></a> replaces every occurrence of a pattern with a string or the result of a function. This example demonstrates using <a class="reference internal" href="#re.sub" title="re.sub"><code>sub()</code></a> with a function to “munge” text, or randomize the order of all the characters in each word of a sentence except for the first and last characters:</p> <pre data-language="python">&gt;&gt;&gt; def repl(m):
+...     inner_word = list(m.group(2))
+...     random.shuffle(inner_word)
+...     return m.group(1) + "".join(inner_word) + m.group(3)
+&gt;&gt;&gt; text = "Professor Abdolmalek, please report your absences promptly."
+&gt;&gt;&gt; re.sub(r"(\w)(\w+)(\w)", repl, text)
+'Poefsrosr Aealmlobdk, pslaee reorpt your abnseces plmrptoy.'
+&gt;&gt;&gt; re.sub(r"(\w)(\w+)(\w)", repl, text)
+'Pofsroser Aodlambelk, plasee reoprt yuor asnebces potlmrpy.'
+</pre>   <h3 id="finding-all-adverbs">Finding all Adverbs</h3> <p><a class="reference internal" href="#re.findall" title="re.findall"><code>findall()</code></a> matches <em>all</em> occurrences of a pattern, not just the first one as <a class="reference internal" href="#re.search" title="re.search"><code>search()</code></a> does. For example, if a writer wanted to find all of the adverbs in some text, they might use <a class="reference internal" href="#re.findall" title="re.findall"><code>findall()</code></a> in the following manner:</p> <pre data-language="python">&gt;&gt;&gt; text = "He was carefully disguised but captured quickly by police."
+&gt;&gt;&gt; re.findall(r"\w+ly", text)
+['carefully', 'quickly']
+</pre>   <h3 id="finding-all-adverbs-and-their-positions">Finding all Adverbs and their Positions</h3> <p>If one wants more information about all matches of a pattern than the matched text, <a class="reference internal" href="#re.finditer" title="re.finditer"><code>finditer()</code></a> is useful as it provides <a class="reference internal" href="#match-objects"><span class="std std-ref">match objects</span></a> instead of strings. Continuing with the previous example, if a writer wanted to find all of the adverbs <em>and their positions</em> in some text, they would use <a class="reference internal" href="#re.finditer" title="re.finditer"><code>finditer()</code></a> in the following manner:</p> <pre data-language="python">&gt;&gt;&gt; text = "He was carefully disguised but captured quickly by police."
+&gt;&gt;&gt; for m in re.finditer(r"\w+ly", text):
+...     print('%02d-%02d: %s' % (m.start(), m.end(), m.group(0)))
+07-16: carefully
+40-47: quickly
+</pre>   <h3 id="raw-string-notation">Raw String Notation</h3> <p>Raw string notation (<code>r"text"</code>) keeps regular expressions sane. Without it, every backslash (<code>'\'</code>) in a regular expression would have to be prefixed with another one to escape it. For example, the two following lines of code are functionally identical:</p> <pre data-language="python">&gt;&gt;&gt; re.match(r"\W(.)\1\W", " ff ")
+&lt;re.Match object; span=(0, 4), match=' ff '&gt;
+&gt;&gt;&gt; re.match("\\W(.)\\1\\W", " ff ")
+&lt;re.Match object; span=(0, 4), match=' ff '&gt;
+</pre> <p>When one wants to match a literal backslash, it must be escaped in the regular expression. With raw string notation, this means <code>r"\\"</code>. Without raw string notation, one must use <code>"\\\\"</code>, making the following lines of code functionally identical:</p> <pre data-language="python">&gt;&gt;&gt; re.match(r"\\", r"\\")
+&lt;re.Match object; span=(0, 1), match='\\'&gt;
+&gt;&gt;&gt; re.match("\\\\", r"\\")
+&lt;re.Match object; span=(0, 1), match='\\'&gt;
+</pre>   <h3 id="writing-a-tokenizer">Writing a Tokenizer</h3> <p>A <a class="reference external" href="https://en.wikipedia.org/wiki/Lexical_analysis">tokenizer or scanner</a> analyzes a string to categorize groups of characters. This is a useful first step in writing a compiler or interpreter.</p> <p>The text categories are specified with regular expressions. The technique is to combine those into a single master regular expression and to loop over successive matches:</p> <pre data-language="python">from typing import NamedTuple
+import re
+
+class Token(NamedTuple):
+    type: str
+    value: str
+    line: int
+    column: int
+
+def tokenize(code):
+    keywords = {'IF', 'THEN', 'ENDIF', 'FOR', 'NEXT', 'GOSUB', 'RETURN'}
+    token_specification = [
+        ('NUMBER',   r'\d+(\.\d*)?'),  # Integer or decimal number
+        ('ASSIGN',   r':='),           # Assignment operator
+        ('END',      r';'),            # Statement terminator
+        ('ID',       r'[A-Za-z]+'),    # Identifiers
+        ('OP',       r'[+\-*/]'),      # Arithmetic operators
+        ('NEWLINE',  r'\n'),           # Line endings
+        ('SKIP',     r'[ \t]+'),       # Skip over spaces and tabs
+        ('MISMATCH', r'.'),            # Any other character
+    ]
+    tok_regex = '|'.join('(?P&lt;%s&gt;%s)' % pair for pair in token_specification)
+    line_num = 1
+    line_start = 0
+    for mo in re.finditer(tok_regex, code):
+        kind = mo.lastgroup
+        value = mo.group()
+        column = mo.start() - line_start
+        if kind == 'NUMBER':
+            value = float(value) if '.' in value else int(value)
+        elif kind == 'ID' and value in keywords:
+            kind = value
+        elif kind == 'NEWLINE':
+            line_start = mo.end()
+            line_num += 1
+            continue
+        elif kind == 'SKIP':
+            continue
+        elif kind == 'MISMATCH':
+            raise RuntimeError(f'{value!r} unexpected on line {line_num}')
+        yield Token(kind, value, line_num, column)
+
+statements = '''
+    IF quantity THEN
+        total := total + price * quantity;
+        tax := price * 0.05;
+    ENDIF;
+'''
+
+for token in tokenize(statements):
+    print(token)
+</pre> <p>The tokenizer produces the following output:</p> <pre data-language="python">Token(type='IF', value='IF', line=2, column=4)
+Token(type='ID', value='quantity', line=2, column=7)
+Token(type='THEN', value='THEN', line=2, column=16)
+Token(type='ID', value='total', line=3, column=8)
+Token(type='ASSIGN', value=':=', line=3, column=14)
+Token(type='ID', value='total', line=3, column=17)
+Token(type='OP', value='+', line=3, column=23)
+Token(type='ID', value='price', line=3, column=25)
+Token(type='OP', value='*', line=3, column=31)
+Token(type='ID', value='quantity', line=3, column=33)
+Token(type='END', value=';', line=3, column=41)
+Token(type='ID', value='tax', line=4, column=8)
+Token(type='ASSIGN', value=':=', line=4, column=12)
+Token(type='ID', value='price', line=4, column=15)
+Token(type='OP', value='*', line=4, column=21)
+Token(type='NUMBER', value=0.05, line=4, column=23)
+Token(type='END', value=';', line=4, column=27)
+Token(type='ENDIF', value='ENDIF', line=5, column=4)
+Token(type='END', value=';', line=5, column=9)
+</pre> <dl class="citation"> <dt class="label" id="frie09">
+<code>Frie09</code> </dt> <dd>
+<p>Friedl, Jeffrey. Mastering Regular Expressions. 3rd ed., O’Reilly Media, 2009. The third edition of the book no longer covers Python at all, but the first edition covered writing good regular expression patterns in great detail.</p> </dd> </dl><div class="_attribution">
+  <p class="_attribution-p">
+    &copy; 2001&ndash;2021 Python Software Foundation<br>Licensed under the PSF License.<br>
+    <a href="https://docs.python.org/3.9/library/re.html" class="_attribution-link">https://docs.python.org/3.9/library/re.html</a>
+  </p>
+</div>

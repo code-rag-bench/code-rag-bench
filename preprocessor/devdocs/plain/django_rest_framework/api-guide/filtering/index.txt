@@ -1,0 +1,468 @@
+# Filtering
+
+> The root QuerySet provided by the Manager describes all objects in the
+> database table. Usually, though, you'll need to select only a subset of the
+> complete set of objects.
+> — Django documentation
+The default behavior of REST framework's generic list views is to return the
+entire queryset for a model manager. Often you will want your API to restrict
+the items that are returned by the queryset.
+
+The simplest way to filter the queryset of any view that subclasses
+`GenericAPIView` is to override the `.get_queryset()` method.
+
+Overriding this method allows you to customize the queryset returned by the
+view in a number of different ways.
+
+## Filtering against the current user
+
+You might want to filter the queryset to ensure that only results relevant to
+the currently authenticated user making the request are returned.
+
+You can do so by filtering based on the value of `request.user`.
+
+For example:
+
+    
+    from myapp.models import Purchase
+    from myapp.serializers import PurchaseSerializer
+    from rest_framework import generics
+    
+    class PurchaseList(generics.ListAPIView):
+        serializer_class = PurchaseSerializer
+    
+        def get_queryset(self):
+            """
+            This view should return a list of all the purchases
+            for the currently authenticated user.
+            """
+            user = self.request.user
+            return Purchase.objects.filter(purchaser=user)
+    
+## Filtering against the URL
+
+Another style of filtering might involve restricting the queryset based on
+some part of the URL.
+
+For example if your URL config contained an entry like this:
+
+    
+    re_path('^purchases/(?P<username>.+)/$', PurchaseList.as_view()),
+    
+You could then write a view that returned a purchase queryset filtered by the
+username portion of the URL:
+
+    
+    class PurchaseList(generics.ListAPIView):
+        serializer_class = PurchaseSerializer
+    
+        def get_queryset(self):
+            """
+            This view should return a list of all the purchases for
+            the user as determined by the username portion of the URL.
+            """
+            username = self.kwargs['username']
+            return Purchase.objects.filter(purchaser__username=username)
+    
+## Filtering against query parameters
+
+A final example of filtering the initial queryset would be to determine the
+initial queryset based on query parameters in the url.
+
+We can override `.get_queryset()` to deal with URLs such as
+`http://example.com/api/purchases?username=denvercoder9`, and filter the
+queryset only if the `username` parameter is included in the URL:
+
+    
+    class PurchaseList(generics.ListAPIView):
+        serializer_class = PurchaseSerializer
+    
+        def get_queryset(self):
+            """
+            Optionally restricts the returned purchases to a given user,
+            by filtering against a `username` query parameter in the URL.
+            """
+            queryset = Purchase.objects.all()
+            username = self.request.query_params.get('username')
+            if username is not None:
+                queryset = queryset.filter(purchaser__username=username)
+            return queryset
+    
+# Generic Filtering
+
+As well as being able to override the default queryset, REST framework also
+includes support for generic filtering backends that allow you to easily
+construct complex searches and filters.
+
+Generic filters can also present themselves as HTML controls in the browsable
+API and admin API.
+
+![Filter
+Example](data:image/png;base64,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)
+
+## Setting filter backends
+
+The default filter backends may be set globally, using the
+`DEFAULT_FILTER_BACKENDS` setting. For example.
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend']
+    }
+    
+You can also set the filter backends on a per-view, or per-viewset basis,
+using the `GenericAPIView` class-based views.
+
+    
+    import django_filters.rest_framework
+    from django.contrib.auth.models import User
+    from myapp.serializers import UserSerializer
+    from rest_framework import generics
+    
+    class UserListView(generics.ListAPIView):
+        queryset = User.objects.all()
+        serializer_class = UserSerializer
+        filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
+    
+## Filtering and object lookups
+
+Note that if a filter backend is configured for a view, then as well as being
+used to filter list views, it will also be used to filter the querysets used
+for returning a single object.
+
+For instance, given the previous example, and a product with an id of `4675`,
+the following URL would either return the corresponding object, or return a
+404 response, depending on if the filtering conditions were met by the given
+product instance:
+
+    
+    http://example.com/api/products/4675/?category=clothing&max_price=10.00
+    
+## Overriding the initial queryset
+
+Note that you can use both an overridden `.get_queryset()` and generic
+filtering together, and everything will work as expected. For example, if
+`Product` had a many-to-many relationship with `User`, named `purchase`, you
+might want to write a view like this:
+
+    
+    class PurchasedProductsList(generics.ListAPIView):
+        """
+        Return a list of all the products that the authenticated
+        user has ever purchased, with optional filtering.
+        """
+        model = Product
+        serializer_class = ProductSerializer
+        filterset_class = ProductFilter
+    
+        def get_queryset(self):
+            user = self.request.user
+            return user.purchase_set.all()
+    
+# API Guide
+
+## DjangoFilterBackend
+
+The `django-filter` library includes a `DjangoFilterBackend` class which
+supports highly customizable field filtering for REST framework.
+
+To use `DjangoFilterBackend`, first install `django-filter`.
+
+    
+    pip install django-filter
+    
+Then add `'django_filters'` to Django's `INSTALLED_APPS`:
+
+    
+    INSTALLED_APPS = [
+        ...
+        'django_filters',
+        ...
+    ]
+    
+You should now either add the filter backend to your settings:
+
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend']
+    }
+    
+Or add the filter backend to an individual View or ViewSet.
+
+    
+    from django_filters.rest_framework import DjangoFilterBackend
+    
+    class UserListView(generics.ListAPIView):
+        ...
+        filter_backends = [DjangoFilterBackend]
+    
+If all you need is simple equality-based filtering, you can set a
+`filterset_fields` attribute on the view, or viewset, listing the set of
+fields you wish to filter against.
+
+    
+    class ProductList(generics.ListAPIView):
+        queryset = Product.objects.all()
+        serializer_class = ProductSerializer
+        filter_backends = [DjangoFilterBackend]
+        filterset_fields = ['category', 'in_stock']
+    
+This will automatically create a `FilterSet` class for the given fields, and
+will allow you to make requests such as:
+
+    
+    http://example.com/api/products?category=clothing&in_stock=True
+    
+For more advanced filtering requirements you can specify a `FilterSet` class
+that should be used by the view. You can read more about `FilterSet`s in the
+django-filter documentation. It's also recommended that you read the section
+on DRF integration.
+
+## SearchFilter
+
+The `SearchFilter` class supports simple single query parameter based
+searching, and is based on the Django admin's search functionality.
+
+When in use, the browsable API will include a `SearchFilter` control:
+
+![Search
+Filter](data:image/png;base64,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)
+
+The `SearchFilter` class will only be applied if the view has a
+`search_fields` attribute set. The `search_fields` attribute should be a list
+of names of text type fields on the model, such as `CharField` or `TextField`.
+
+    
+    from rest_framework import filters
+    
+    class UserListView(generics.ListAPIView):
+        queryset = User.objects.all()
+        serializer_class = UserSerializer
+        filter_backends = [filters.SearchFilter]
+        search_fields = ['username', 'email']
+    
+This will allow the client to filter the items in the list by making queries
+such as:
+
+    
+    http://example.com/api/users?search=russell
+    
+You can also perform a related lookup on a ForeignKey or ManyToManyField with
+the lookup API double-underscore notation:
+
+    
+    search_fields = ['username', 'email', 'profile__profession']
+    
+For JSONField and HStoreField fields you can filter based on nested values
+within the data structure using the same double-underscore notation:
+
+    
+    search_fields = ['data__breed', 'data__owner__other_pets__0__name']
+    
+By default, searches will use case-insensitive partial matches. The search
+parameter may contain multiple search terms, which should be whitespace and/or
+comma separated. If multiple search terms are used then objects will be
+returned in the list only if all the provided terms are matched.
+
+The search behavior may be restricted by prepending various characters to the
+`search_fields`.
+
+  * '^' Starts-with search.
+  * '=' Exact matches.
+  * '@' Full-text search. (Currently only supported Django's PostgreSQL backend.)
+  * '$' Regex search.
+
+For example:
+
+    
+    search_fields = ['=username', '=email']
+    
+By default, the search parameter is named `'search'`, but this may be
+overridden with the `SEARCH_PARAM` setting.
+
+To dynamically change search fields based on request content, it's possible to
+subclass the `SearchFilter` and override the `get_search_fields()` function.
+For example, the following subclass will only search on `title` if the query
+parameter `title_only` is in the request:
+
+    
+    from rest_framework import filters
+    
+    class CustomSearchFilter(filters.SearchFilter):
+        def get_search_fields(self, view, request):
+            if request.query_params.get('title_only'):
+                return ['title']
+            return super(CustomSearchFilter, self).get_search_fields(view, request)
+    
+For more details, see the Django documentation.
+
+## OrderingFilter
+
+The `OrderingFilter` class supports simple query parameter controlled ordering
+of results.
+
+![Ordering
+Filter](data:image/png;base64,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)
+
+By default, the query parameter is named `'ordering'`, but this may by
+overridden with the `ORDERING_PARAM` setting.
+
+For example, to order users by username:
+
+    
+    http://example.com/api/users?ordering=username
+    
+The client may also specify reverse orderings by prefixing the field name with
+'-', like so:
+
+    
+    http://example.com/api/users?ordering=-username
+    
+Multiple orderings may also be specified:
+
+    
+    http://example.com/api/users?ordering=account,username
+    
+### Specifying which fields may be ordered against
+
+It's recommended that you explicitly specify which fields the API should
+allowing in the ordering filter. You can do this by setting an
+`ordering_fields` attribute on the view, like so:
+
+    
+    class UserListView(generics.ListAPIView):
+        queryset = User.objects.all()
+        serializer_class = UserSerializer
+        filter_backends = [filters.OrderingFilter]
+        ordering_fields = ['username', 'email']
+    
+This helps prevent unexpected data leakage, such as allowing users to order
+against a password hash field or other sensitive data.
+
+If you don't specify an `ordering_fields` attribute on the view, the filter
+class will default to allowing the user to filter on any readable fields on
+the serializer specified by the `serializer_class` attribute.
+
+If you are confident that the queryset being used by the view doesn't contain
+any sensitive data, you can also explicitly specify that a view should allow
+ordering on any model field or queryset aggregate, by using the special value
+`'__all__'`.
+
+    
+    class BookingsListView(generics.ListAPIView):
+        queryset = Booking.objects.all()
+        serializer_class = BookingSerializer
+        filter_backends = [filters.OrderingFilter]
+        ordering_fields = '__all__'
+    
+### Specifying a default ordering
+
+If an `ordering` attribute is set on the view, this will be used as the
+default ordering.
+
+Typically you'd instead control this by setting `order_by` on the initial
+queryset, but using the `ordering` parameter on the view allows you to specify
+the ordering in a way that it can then be passed automatically as context to a
+rendered template. This makes it possible to automatically render column
+headers differently if they are being used to order the results.
+
+    
+    class UserListView(generics.ListAPIView):
+        queryset = User.objects.all()
+        serializer_class = UserSerializer
+        filter_backends = [filters.OrderingFilter]
+        ordering_fields = ['username', 'email']
+        ordering = ['username']
+    
+The `ordering` attribute may be either a string or a list/tuple of strings.
+
+# Custom generic filtering
+
+You can also provide your own generic filtering backend, or write an
+installable app for other developers to use.
+
+To do so override `BaseFilterBackend`, and override the
+`.filter_queryset(self, request, queryset, view)` method. The method should
+return a new, filtered queryset.
+
+As well as allowing clients to perform searches and filtering, generic filter
+backends can be useful for restricting which objects should be visible to any
+given request or user.
+
+## Example
+
+For example, you might need to restrict users to only being able to see
+objects they created.
+
+    
+    class IsOwnerFilterBackend(filters.BaseFilterBackend):
+        """
+        Filter that only allows users to see their own objects.
+        """
+        def filter_queryset(self, request, queryset, view):
+            return queryset.filter(owner=request.user)
+    
+We could achieve the same behavior by overriding `get_queryset()` on the
+views, but using a filter backend allows you to more easily add this
+restriction to multiple views, or to apply it across the entire API.
+
+## Customizing the interface
+
+Generic filters may also present an interface in the browsable API. To do so
+you should implement a `to_html()` method which returns a rendered HTML
+representation of the filter. This method should have the following signature:
+
+`to_html(self, request, queryset, view)`
+
+The method should return a rendered HTML string.
+
+## Filtering & schemas
+
+You can also make the filter controls available to the schema autogeneration
+that REST framework provides, by implementing a `get_schema_fields()` method.
+This method should have the following signature:
+
+`get_schema_fields(self, view)`
+
+The method should return a list of `coreapi.Field` instances.
+
+# Third party packages
+
+The following third party packages provide additional filter implementations.
+
+## Django REST framework filters package
+
+The django-rest-framework-filters package works together with the
+`DjangoFilterBackend` class, and allows you to easily create filters across
+relationships, or create multiple filter lookup types for a given field.
+
+## Django REST framework full word search filter
+
+The djangorestframework-word-filter developed as alternative to
+`filters.SearchFilter` which will search full word in text, or exact match.
+
+## Django URL Filter
+
+django-url-filter provides a safe way to filter data via human-friendly URLs.
+It works very similar to DRF serializers and fields in a sense that they can
+be nested except they are called filtersets and filters. That provides easy
+way to filter related data. Also this library is generic-purpose so it can be
+used to filter other sources of data and not only Django `QuerySet`s.
+
+## drf-url-filters
+
+drf-url-filter is a simple Django app to apply filters on drf `ModelViewSet`'s
+`Queryset` in a clean, simple and configurable way. It also supports
+validations on incoming query params and their values. A beautiful python
+package `Voluptuous` is being used for validations on the incoming query
+parameters. The best part about voluptuous is you can define your own
+validations as per your query params requirements.
+
+filters.py
+
+Copyright © 2011–present Encode OSS Ltd.  
+Licensed under the BSD License.  
+https://www.django-rest-framework.org/api-guide/filtering/
+
+  *[ISP]: Internet Service Provider
+
