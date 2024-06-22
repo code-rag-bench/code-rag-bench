@@ -286,8 +286,8 @@ if __name__ == "__main__":
     parser.add_argument("--split", type=str, default="function", choices=["function"])
     parser.add_argument("--context_length", type=str, default="2k", choices=["1k", "2k", "4k"])
     parser.add_argument("--data_cache_dir", type=str, default="output/repoeval")
-    parser.add_argument("--window_size", type=int, default=20)
-    parser.add_argument("--slice_size", type=int, default=2)
+    parser.add_argument("--window_size", type=int, default=50)
+    parser.add_argument("--slice_size", type=int, default=5)
     args = parser.parse_args()
 
     main()
