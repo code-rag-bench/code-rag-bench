@@ -34,6 +34,8 @@ python -m create/${data_name}.py
 # repository-level: 'repoeval_repo', 'swebench_repo'
 ```
 
+If you come across the `ModuleNotFoundError`, try running the command with `PYTHONPATH=./ python create/${data_name}.py`.
+
 #### Adding new datasets
 To run a new dataset, you can simply reformat your data into the BEIR official format, which creates a dataset directory containing the three following files, `corpus.jsonl`, `queries.jsonl` and `qrel/test.tsv`.
 See [code_search_net.py](benchmarks/code_search_net.py) for some example script to combert code search net to document-to-code retrieval tasks.
