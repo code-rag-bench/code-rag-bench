@@ -267,7 +267,7 @@ def main():
             id_key = "problem_id"
         all_top_docs = []
         for task_id in ds["test"][id_key]:
-            all_top_docs.append(get_top_docs(f"{task_id}_doc"))
+            all_top_docs.append(get_top_docs(results, corpus, f"{task_id}_doc"))
         ds["test"] = ds["test"].add_column("docs", all_top_docs)
         ds["test"].to_json(args.results_file)  # this outputs to arrow format and read as .jsonl
     elif "odex" in args.dataset:
@@ -275,14 +275,14 @@ def main():
         ds = load_dataset("neulab/odex", lang)
         all_top_docs = []
         for idx, task_id in enumerate(ds["test"]["task_id"]):
-            all_top_docs.append(get_top_docs(f"{idx}_{task_id}"))
+            all_top_docs.append(get_top_docs(results, corpus, f"{idx}_{task_id}"))
         ds["test"] = ds["test"].add_column("docs", all_top_docs)
         ds["test"].to_json(args.results_file)  # this outputs to arrow format and read as .jsonl
     elif args.dataset == "docprompting_conala":
         ds = load_dataset("neulab/docprompting-conala")
         all_top_docs = []
         for idx, task_id in enumerate(ds["test"]["question_id"]):
-            all_top_docs.append(get_top_docs(task_id))
+            all_top_docs.append(get_top_docs(results, corpus, task_id))
         ds["test"] = ds["test"].add_column("docs", all_top_docs)
         ds["test"].to_json(args.results_file)  # this outputs to arrow format and read as .jsonl
     elif args.dataset.startswith("ds1000"):
@@ -297,7 +297,7 @@ def main():
         for item in data:
             example = item.data
             example_id = f"{example['lib']}_{example['perturbation_origin_id']}"
-            all_docs.append(get_top_docs(example_id))
+            all_docs.append(get_top_docs(results, corpus, example_id))
             example_ids.append(example_id)
         assert len(all_docs) == len(example_ids), f"length of all_docs should be {len(example_ids)}, now is {len(all_docs)}"
         with open(args.results_file, "w+") as fout:
@@ -312,7 +312,7 @@ def main():
                 continue
             prompts.append('\n'.join(task["prompt"].split('\n')[-5:]))
             references.append(task["metadata"]["ground_truth"])
-            docs.append(get_top_docs(task["metadata"]["task_id"]))
+            docs.append(get_top_docs(results, corpus, task["metadata"]["task_id"]))
         assert len(prompts) == len(references) == len(docs)
         dataset = [
             {"prompt": p, "reference": r, "docs": d}
@@ -328,7 +328,7 @@ def main():
             ds = load_dataset("princeton-nlp/SWE-bench_oracle")
         all_top_docs = []
         for instance_id in ds["test"]["instance_id"]:
-            all_top_docs.append(get_top_docs(instance_id))
+            all_top_docs.append(get_top_docs(results, corpus, instance_id))
         ds["test"] = ds["test"].add_column("docs", all_top_docs)
         ds["test"].to_json(args.results_file)  # this outputs to arrow format and read as .jsonl
     else:
